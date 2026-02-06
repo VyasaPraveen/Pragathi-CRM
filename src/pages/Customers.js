@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
-import { formatCurrency, safeStr, toNumber } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const PAGE_SIZE = 20;
@@ -30,7 +30,7 @@ export default function Customers() {
   const handleSave = async (data, id) => {
     try {
       // D1 fix: convert all numeric fields before saving to Firestore
-      const numericFields = ['agreedPrice', 'bosAmount', 'totalPrice', 'advanceAmount', 'secondPayment', 'thirdPayment', 'finalPayment'];
+      const numericFields = ['agreedPrice', 'bosAmount', 'totalPrice', 'advanceAmount', 'secondPayment', 'thirdPayment', 'finalPayment', 'quotationProjectValue', 'advanceReceivedAmount', 'finalAmount'];
       const cleaned = { ...data };
       numericFields.forEach(f => { cleaned[f] = toNumber(cleaned[f]); });
 
@@ -46,9 +46,11 @@ export default function Customers() {
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} /></div>
         <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>
       </div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(c => {
-          const paid = toNumber(c.advanceAmount) + toNumber(c.secondPayment) + toNumber(c.thirdPayment) + toNumber(c.finalPayment);
+          const paid = c.paymentType === 'Finance'
+            ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
+            : toNumber(c.advanceAmount) + toNumber(c.secondPayment) + toNumber(c.thirdPayment) + toNumber(c.finalPayment);
           const bal = toNumber(c.totalPrice) - paid;
           return (
             <tr key={c.id}>
@@ -59,11 +61,19 @@ export default function Customers() {
               <td style={{ color: 'var(--ok)', fontWeight: 600 }}>{formatCurrency(paid)}</td>
               <td style={{ color: bal > 0 ? 'var(--err)' : 'var(--ok)', fontWeight: 600 }}>{formatCurrency(bal)}</td>
               <td><StatusBadge status={c.status} /></td>
-              <td><button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button></td>
+              <td><StatusBadge status={c.installationStatus || 'Pending'} /></td>
+              <td><div style={{ display: 'flex', gap: 4 }}>
+                {c.nextServiceDate && c.phone && (
+                  <button className="btn bsm bo" title="Send Service Reminder" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>send</span>
+                  </button>
+                )}
+                <button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+              </div></td>
             </tr>
           );
         })}
-        {!filtered.length && <tr><td colSpan="8"><EmptyState icon="people" title="No customers yet" message="Convert leads or add customers directly." /></td></tr>}
+        {!filtered.length && <tr><td colSpan="9"><EmptyState icon="people" title="No customers yet" message="Convert leads or add customers directly." /></td></tr>}
       </tbody></table></div>
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
       </div></div>
@@ -78,23 +88,86 @@ function CustomerModal({ data, id, onSave, onClose }) {
     kwRequired: data.kwRequired || '', paymentType: data.paymentType || 'Cash',
     agreedPrice: data.agreedPrice || 0, bosAmount: data.bosAmount || 0, totalPrice: data.totalPrice || 0,
     advanceAmount: data.advanceAmount || 0, secondPayment: data.secondPayment || 0,
-    thirdPayment: data.thirdPayment || 0, finalPayment: data.finalPayment || 0, bankName: data.bankName || ''
+    thirdPayment: data.thirdPayment || 0, finalPayment: data.finalPayment || 0, bankName: data.bankName || '',
+    // Phase 2: Finance-specific fields
+    quotationProjectValue: data.quotationProjectValue || 0,
+    advanceReceivedDate: data.advanceReceivedDate || '',
+    advanceReceivedAmount: data.advanceReceivedAmount || 0,
+    finalAmountDate: data.finalAmountDate || '',
+    finalAmount: data.finalAmount || 0,
+    bosAmountStatus: data.bosAmountStatus || 'Pending',
+    // Phase 2: Service & Date fields
+    advancePaidDate: data.advancePaidDate || '',
+    firstServiceDate: data.firstServiceDate || '',
+    nextServiceDate: data.nextServiceDate || '',
+    // Phase 2: Installation status
+    installationStatus: data.installationStatus || 'Pending',
+    // Phase 2: Installation picture
+    installationPicUrl: data.installationPicUrl || '',
+    // Phase 2: Customer reference
+    customerReference: data.customerReference || 'No',
+    referenceLeadName: data.referenceLeadName || '',
+    referencePhoneNumber: data.referencePhoneNumber || ''
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   return (
-    <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose}>
+    <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
         <div className="mb">
           <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
           <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
           <div className="fr"><div className="fg"><label>Required kW</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} /></div><div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div></div>
-          <div className="fr3"><div className="fg"><label>Agreed Price</label><input type="number" className="fi" value={f.agreedPrice} onChange={e => set('agreedPrice', e.target.value)} /></div><div className="fg"><label>BOS Amount</label><input type="number" className="fi" value={f.bosAmount} onChange={e => set('bosAmount', e.target.value)} /></div><div className="fg"><label>Total Price</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
-          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}><label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Payment Tracking</label>
-            <div className="fr"><div className="fg"><label>Advance</label><input type="number" className="fi" value={f.advanceAmount} onChange={e => set('advanceAmount', e.target.value)} /></div><div className="fg"><label>2nd Payment</label><input type="number" className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} /></div></div>
-            <div className="fr"><div className="fg"><label>3rd Payment</label><input type="number" className="fi" value={f.thirdPayment} onChange={e => set('thirdPayment', e.target.value)} /></div><div className="fg"><label>Final Payment</label><input type="number" className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} /></div></div>
+
+          {/* Cash Mode: Pricing & Payment Tracking */}
+          {f.paymentType === 'Cash' && (
+            <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
+              <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Cash Payment Details</label>
+              <div className="fr3"><div className="fg"><label>Agreed Price</label><input type="number" className="fi" value={f.agreedPrice} onChange={e => set('agreedPrice', e.target.value)} /></div><div className="fg"><label>BOS Amount</label><input type="number" className="fi" value={f.bosAmount} onChange={e => set('bosAmount', e.target.value)} /></div><div className="fg"><label>Total Price</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
+              <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block', marginTop: 14 }}>Payment Tracking</label>
+              <div className="fr"><div className="fg"><label>Advance</label><input type="number" className="fi" value={f.advanceAmount} onChange={e => set('advanceAmount', e.target.value)} /></div><div className="fg"><label>2nd Payment</label><input type="number" className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>3rd Payment</label><input type="number" className="fi" value={f.thirdPayment} onChange={e => set('thirdPayment', e.target.value)} /></div><div className="fg"><label>Final Payment</label><input type="number" className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} /></div></div>
+            </div>
+          )}
+
+          {/* Finance Mode: Bank & Finance Details */}
+          {f.paymentType === 'Finance' && (
+            <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
+              <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Finance Details</label>
+              <div className="fg"><label>Bank Name</label><input className="fi" value={f.bankName} onChange={e => set('bankName', e.target.value)} /></div>
+              <div className="fr"><div className="fg"><label>Quotation Project Value</label><input type="number" className="fi" value={f.quotationProjectValue} onChange={e => set('quotationProjectValue', e.target.value)} /></div><div className="fg"><label>Total Price</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>Advance Received Date</label><input type="date" className="fi" value={f.advanceReceivedDate} onChange={e => set('advanceReceivedDate', e.target.value)} /></div><div className="fg"><label>Advance Received Amount</label><input type="number" className="fi" value={f.advanceReceivedAmount} onChange={e => set('advanceReceivedAmount', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>Final Amount Date</label><input type="date" className="fi" value={f.finalAmountDate} onChange={e => set('finalAmountDate', e.target.value)} /></div><div className="fg"><label>Final Amount</label><input type="number" className="fi" value={f.finalAmount} onChange={e => set('finalAmount', e.target.value)} /></div></div>
+              <div className="fg"><label>BOS Amount Status</label><select className="fi" value={f.bosAmountStatus} onChange={e => set('bosAmountStatus', e.target.value)}><option>Included</option><option>Pending</option><option>Paid</option></select></div>
+            </div>
+          )}
+
+          {/* Service & Dates */}
+          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
+            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Service & Dates</label>
+            <div className="fr3"><div className="fg"><label>Advance Paid Date</label><input type="date" className="fi" value={f.advancePaidDate} onChange={e => set('advancePaidDate', e.target.value)} /></div><div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={f.firstServiceDate} onChange={e => set('firstServiceDate', e.target.value)} /></div><div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={f.nextServiceDate} onChange={e => set('nextServiceDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Installation Status</label><select className="fi" value={f.installationStatus} onChange={e => set('installationStatus', e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option><option>On Hold</option></select></div>
           </div>
-          <div className="fg"><label>Bank Name (if Finance)</label><input className="fi" value={f.bankName} onChange={e => set('bankName', e.target.value)} /></div>
+
+          {/* Installation Picture */}
+          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
+            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>System Installation Picture</label>
+            <div className="fg"><label>Image URL</label><input className="fi" type="url" value={f.installationPicUrl} onChange={e => set('installationPicUrl', e.target.value)} placeholder="https://..." /></div>
+            {f.installationPicUrl && (
+              <div style={{ marginTop: 10, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--bor)' }}>
+                <img src={f.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }} onError={e => { e.target.style.display = 'none'; }} />
+              </div>
+            )}
+          </div>
+
+          {/* Customer Reference */}
+          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
+            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Customer Reference</label>
+            <div className="fg"><label>Reference Given?</label><select className="fi" value={f.customerReference} onChange={e => set('customerReference', e.target.value)}><option>No</option><option>Yes</option></select></div>
+            {f.customerReference === 'Yes' && (
+              <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone Number</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>
+            )}
+          </div>
         </div>
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
       </form>

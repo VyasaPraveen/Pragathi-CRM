@@ -18,7 +18,9 @@ export default function Dashboard() {
   const tE = expenses.reduce((s, i) => s + toNumber(i.amount), 0);
   const pI = installations.filter(i => i.progress < 100).length;
   const pP = customers.filter(c => {
-    const p = toNumber(c.advanceAmount) + toNumber(c.secondPayment) + toNumber(c.thirdPayment) + toNumber(c.finalPayment);
+    const p = c.paymentType === 'Finance'
+      ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
+      : toNumber(c.advanceAmount) + toNumber(c.secondPayment) + toNumber(c.thirdPayment) + toNumber(c.finalPayment);
     return (toNumber(c.totalPrice) - p) > 0;
   }).length;
 

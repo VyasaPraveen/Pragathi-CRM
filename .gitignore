@@ -3,3 +3,8 @@ build/
 .firebase/
 files.zip
 .env
+auto-backup.bat
+backup-firestore.js
+backups/
+*-adminsdk-*.json
+serviceAccountKey.json

@@ -24,7 +24,8 @@ export const statusClass = (s) => {
     'Active': 'st-g', 'Pending': 'st-o', 'Completed': 'st-g', 'In Progress': 'st-o', 'Delayed': 'st-r',
     'Approved': 'st-g', 'Sent': 'st-g', 'On Leave': 'st-o', 'Not Applied': 'st-x', 'Done': 'st-g',
     'Rejected': 'st-r', 'Released': 'st-g', 'New Lead': 'st-b', 'Follow-up': 'st-o',
-    'Negotiating': 'st-p', 'No Response': 'st-r'
+    'Negotiating': 'st-p', 'No Response': 'st-r',
+    'On Hold': 'st-x', 'Included': 'st-g', 'Paid': 'st-g'
   };
   return m[s] || 'st-x';
 };
