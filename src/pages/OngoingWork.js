@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatDate, toNumber } from '../services/helpers';
+import { formatDate, toNumber, safeStr } from '../services/helpers';
 import { StatusBadge, ProgressBar, Modal, EmptyState } from '../components/SharedUI';
 
 const statuses = ['In Progress', 'Pending', 'Completed', 'Delayed'];
@@ -14,6 +14,16 @@ export default function OngoingWork() {
   const { role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const canEdit = role === 'admin' || role === 'manager';
+
+  let filtered = ongoingWork;
+  if (filter !== 'all') filtered = filtered.filter(w => w.status === filter);
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(w => safeStr(w.projectName).toLowerCase().includes(q));
+  }
 
   const handleSave = async (data, id) => {
     try {
@@ -34,17 +44,22 @@ export default function OngoingWork() {
   return (
     <>
       <div className="tl">
-        <h3>Ongoing Work</h3>
-        <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Project</button>
+        <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search projects..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {['all', ...statuses].map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
+          </div>
+          {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Project</button>}
+        </div>
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 16 }}>
-        {ongoingWork.map(w => (
+        {filtered.map(w => (
           <div className="card" key={w.id}>
             <div className="ch">
               <h3 style={{ fontSize: '.95rem' }}>{w.projectName}</h3>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <StatusBadge status={w.status} />
-                <button className="btn bsm bo" onClick={() => setModal({ data: w, id: w.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+                {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: w, id: w.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
                 {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(w.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div>
             </div>
@@ -61,7 +76,7 @@ export default function OngoingWork() {
           </div>
         ))}
       </div>
-      {!ongoingWork.length && <div className="card"><div className="cb"><EmptyState icon="construction" title="No ongoing projects" message="Add a new project to get started." /></div></div>}
+      {!filtered.length && <div className="card"><div className="cb"><EmptyState icon="construction" title="No ongoing projects" message={search || filter !== 'all' ? 'No projects match your filters.' : 'Add a new project to get started.'} /></div></div>}
       {modal && <WorkModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
     </>
   );

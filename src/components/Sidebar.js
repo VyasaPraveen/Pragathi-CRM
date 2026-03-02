@@ -9,11 +9,13 @@ const sections = [
     { to: '/', icon: 'dashboard', label: 'Dashboard' },
     { to: '/leads', icon: 'leaderboard', label: 'Leads', badgeKey: 'leads' },
     { to: '/customers', icon: 'people', label: 'Customers' },
+    { to: '/tasks', icon: 'task_alt', label: 'Tasks' },
   ]},
   { title: 'Operations', items: [
     { to: '/installations', icon: 'solar_power', label: 'Installations' },
     { to: '/ongoing', icon: 'construction', label: 'Ongoing Work' },
     { to: '/materials', icon: 'inventory_2', label: 'Materials' },
+    { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders' },
   ]},
   { title: 'Finance', items: [
     { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue' },
@@ -22,16 +24,20 @@ const sections = [
   { title: 'People', items: [
     { to: '/team', icon: 'groups', label: 'Team' },
     { to: '/reminders', icon: 'notifications_active', label: 'Reminders', badgeKey: 'reminders' },
+    { to: '/retailers', icon: 'storefront', label: 'Retailers' },
+    { to: '/influencers', icon: 'campaign', label: 'Influencers' },
   ]},
   { title: 'Company', items: [
     { to: '/about', icon: 'info', label: 'About' },
     { to: '/gallery', icon: 'photo_library', label: 'Gallery' },
+    { to: '/user-management', icon: 'admin_panel_settings', label: 'User Management', adminOnly: true },
+    { to: '/activity-log', icon: 'history', label: 'Activity Log', adminOnly: true },
     { to: '/settings', icon: 'settings', label: 'Settings', hideFor: 'assistant' },
   ]},
 ];
 
 export default function Sidebar({ open, onClose }) {
-  const { user, role, logout } = useAuth();
+  const { user, role, designation, logout } = useAuth();
   const { leads, reminders } = useData();
   // Q3 fix: use React state instead of outerHTML for logo fallback
   const [logoError, setLogoError] = useState(false);
@@ -49,7 +55,7 @@ export default function Sidebar({ open, onClose }) {
           {logoError ? (
             <div style={{ width: 36, height: 36, background: 'var(--sec)', borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '.8rem', color: '#fff', flexShrink: 0 }}>PPS</div>
           ) : (
-            <img src="/logo.jpg" alt="PPS" onError={() => setLogoError(true)} />
+            <img src="/logo.png" alt="PPS" onError={() => setLogoError(true)} style={{ height: 36, width: 'auto', objectFit: 'contain' }} />
           )}
           <div className="sb-brand">Pragathi Power<br /><small>Solar CRM</small></div>
         </div>
@@ -59,6 +65,7 @@ export default function Sidebar({ open, onClose }) {
               <div className="ns-t">{sec.title}</div>
               {sec.items.map(item => {
                 if (item.hideFor === role) return null;
+                if (item.adminOnly && role !== 'admin') return null;
                 const badge = item.badgeKey ? getBadge(item.badgeKey) : 0;
                 return (
                   <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `ni ${isActive ? 'act' : ''}`} onClick={onClose}>
@@ -76,7 +83,7 @@ export default function Sidebar({ open, onClose }) {
             <div className="ua">{getInitials(user?.displayName || user?.email || 'U')}</div>
             <div className="ud">
               <div className="un">{user?.displayName || user?.email || 'User'}</div>
-              <div className="ur">{role}</div>
+              <div className="ur">{designation || role}</div>
             </div>
             <button className="tbtn" onClick={logout} title="Logout" style={{ color: 'rgba(255,255,255,.6)' }}>
               <span className="material-icons-round" style={{ fontSize: 20 }}>logout</span>

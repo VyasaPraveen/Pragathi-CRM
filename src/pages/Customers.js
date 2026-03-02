@@ -2,25 +2,40 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml } from '../services/helpers';
+import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const PAGE_SIZE = 20;
+const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
+const phases = ['Single Phase', 'Three Phase'];
 
 export default function Customers() {
-  const { customers } = useData();
+  const { customers, leadPOs, installations, leads } = useData();
+  const { role } = useAuth();
   const { toast } = useToast();
+  const canEdit = role === 'admin' || role === 'manager';
   const [search, setSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [areaFilter, setAreaFilter] = useState('all');
   const [modal, setModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
+  // Unique areas for filter dropdown
+  const areas = [...new Set(customers.map(c => c.area).filter(Boolean))].sort();
+
   let filtered = customers;
+  if (typeFilter !== 'all') filtered = filtered.filter(c => c.customerType === typeFilter);
+  if (areaFilter !== 'all') filtered = filtered.filter(c => c.area === areaFilter);
   // B4 fix: null-safe search
   if (search) {
     const q = search.toLowerCase();
     filtered = filtered.filter(c =>
       safeStr(c.name).toLowerCase().includes(q) ||
-      safeStr(c.phone).includes(q)
+      safeStr(c.phone).includes(q) ||
+      safeStr(c.email).toLowerCase().includes(q) ||
+      safeStr(c.area).toLowerCase().includes(q) ||
+      safeStr(c.pincode).includes(q)
     );
   }
 
@@ -44,9 +59,20 @@ export default function Customers() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {['all', ...customerTypes].map(t => <span key={t} className={`fc ${typeFilter === t ? 'act' : ''}`} onClick={() => setTypeFilter(t)}>{t === 'all' ? 'All Types' : t}</span>)}
+          </div>
+          {areas.length > 0 && (
+            <select className="fi" style={{ width: 'auto', padding: '6px 30px 6px 10px', fontSize: '.82rem' }} value={areaFilter} onChange={e => setAreaFilter(e.target.value)}>
+              <option value="all">All Areas</option>
+              {areas.map(a => <option key={a} value={a}>{a}</option>)}
+            </select>
+          )}
+          {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>}
+        </div>
       </div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>Type</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(c => {
           const paid = c.paymentType === 'Finance'
             ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
@@ -54,7 +80,8 @@ export default function Customers() {
           const bal = toNumber(c.totalPrice) - paid;
           return (
             <tr key={c.id}>
-              <td><strong>{c.name}</strong><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{c.phone}</span></td>
+              <td><strong>{c.name}</strong><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{c.phone}</span>{c.email && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{c.email}</span></>}</td>
+              <td style={{ fontSize: '.82rem' }}>{c.customerType || '-'}</td>
               <td>{c.kwRequired || '-'}</td>
               <td><span className={`st ${c.paymentType === 'Finance' ? 'st-b' : 'st-g'}`}>{c.paymentType}</span></td>
               <td style={{ fontWeight: 600 }}>{formatCurrency(c.totalPrice)}</td>
@@ -63,17 +90,23 @@ export default function Customers() {
               <td><StatusBadge status={c.status} /></td>
               <td><StatusBadge status={c.installationStatus || 'Pending'} /></td>
               <td><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title="Completion Report" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>description</span>
+                </button>
+                <button className="btn bsm bo" title="Share Report via WhatsApp" onClick={() => shareCompletionReportWhatsApp(c, leadPOs, installations, leads)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>share</span>
+                </button>
                 {c.nextServiceDate && c.phone && (
                   <button className="btn bsm bo" title="Send Service Reminder" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>send</span>
                   </button>
                 )}
-                <button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+                {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
               </div></td>
             </tr>
           );
         })}
-        {!filtered.length && <tr><td colSpan="9"><EmptyState icon="people" title="No customers yet" message="Convert leads or add customers directly." /></td></tr>}
+        {!filtered.length && <tr><td colSpan="10"><EmptyState icon="people" title="No customers yet" message="Convert leads or add customers directly." /></td></tr>}
       </tbody></table></div>
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
       </div></div>
@@ -85,29 +118,31 @@ export default function Customers() {
 function CustomerModal({ data, id, onSave, onClose }) {
   const [f, setF] = useState({
     name: data.name || '', phone: data.phone || '', address: data.address || '',
+    pincode: data.pincode || '', area: data.area || '',
+    email: data.email || '', alternatePhone: data.alternatePhone || '',
+    gstNumber: data.gstNumber || '', customerType: data.customerType || 'Residential',
+    powerPhase: data.powerPhase || 'Single Phase',
     kwRequired: data.kwRequired || '', paymentType: data.paymentType || 'Cash',
     agreedPrice: data.agreedPrice || 0, bosAmount: data.bosAmount || 0, totalPrice: data.totalPrice || 0,
     advanceAmount: data.advanceAmount || 0, secondPayment: data.secondPayment || 0,
     thirdPayment: data.thirdPayment || 0, finalPayment: data.finalPayment || 0, bankName: data.bankName || '',
-    // Phase 2: Finance-specific fields
     quotationProjectValue: data.quotationProjectValue || 0,
     advanceReceivedDate: data.advanceReceivedDate || '',
     advanceReceivedAmount: data.advanceReceivedAmount || 0,
     finalAmountDate: data.finalAmountDate || '',
     finalAmount: data.finalAmount || 0,
     bosAmountStatus: data.bosAmountStatus || 'Pending',
-    // Phase 2: Service & Date fields
     advancePaidDate: data.advancePaidDate || '',
     firstServiceDate: data.firstServiceDate || '',
     nextServiceDate: data.nextServiceDate || '',
-    // Phase 2: Installation status
     installationStatus: data.installationStatus || 'Pending',
-    // Phase 2: Installation picture
     installationPicUrl: data.installationPicUrl || '',
-    // Phase 2: Customer reference
     customerReference: data.customerReference || 'No',
     referenceLeadName: data.referenceLeadName || '',
-    referencePhoneNumber: data.referencePhoneNumber || ''
+    referencePhoneNumber: data.referencePhoneNumber || '',
+    panelDetails: data.panelDetails || '', inverterDetails: data.inverterDetails || '',
+    warrantyStartDate: data.warrantyStartDate || '', warrantyEndDate: data.warrantyEndDate || '',
+    feedback: data.feedback || '', linkedInstallationId: data.linkedInstallationId || ''
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
@@ -116,8 +151,11 @@ function CustomerModal({ data, id, onSave, onClose }) {
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
         <div className="mb">
           <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
+          <div className="fr"><div className="fg"><label>Email</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Alternate Phone</label><input className="fi" value={f.alternatePhone} onChange={e => set('alternatePhone', e.target.value)} /></div></div>
           <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
-          <div className="fr"><div className="fg"><label>Required kW</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} /></div><div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div></div>
+          <div className="fr"><div className="fg"><label>Pincode</label><input className="fi" value={f.pincode} onChange={e => set('pincode', e.target.value)} placeholder="e.g. 500001" /></div><div className="fg"><label>Area</label><input className="fi" value={f.area} onChange={e => set('area', e.target.value)} placeholder="e.g. Kukatpally" /></div></div>
+          <div className="fr"><div className="fg"><label>GST Number</label><input className="fi" value={f.gstNumber} onChange={e => set('gstNumber', e.target.value)} /></div><div className="fg"><label>Customer Type</label><select className="fi" value={f.customerType} onChange={e => set('customerType', e.target.value)}>{customerTypes.map(t => <option key={t}>{t}</option>)}</select></div></div>
+          <div className="fr3"><div className="fg"><label>Required kW</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} /></div><div className="fg"><label>Power Phase</label><select className="fi" value={f.powerPhase} onChange={e => set('powerPhase', e.target.value)}>{phases.map(p => <option key={p}>{p}</option>)}</select></div><div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div></div>
 
           {/* Cash Mode: Pricing & Payment Tracking */}
           {f.paymentType === 'Cash' && (
@@ -141,6 +179,13 @@ function CustomerModal({ data, id, onSave, onClose }) {
               <div className="fg"><label>BOS Amount Status</label><select className="fi" value={f.bosAmountStatus} onChange={e => set('bosAmountStatus', e.target.value)}><option>Included</option><option>Pending</option><option>Paid</option></select></div>
             </div>
           )}
+
+          {/* System & Warranty Details */}
+          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
+            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>System & Warranty Details</label>
+            <div className="fr"><div className="fg"><label>Panel Details</label><input className="fi" value={f.panelDetails} onChange={e => set('panelDetails', e.target.value)} placeholder="Brand / Model / Wattage" /></div><div className="fg"><label>Inverter Details</label><input className="fi" value={f.inverterDetails} onChange={e => set('inverterDetails', e.target.value)} placeholder="Brand / Model" /></div></div>
+            <div className="fr"><div className="fg"><label>Warranty Start Date</label><input type="date" className="fi" value={f.warrantyStartDate} onChange={e => set('warrantyStartDate', e.target.value)} /></div><div className="fg"><label>Warranty End Date</label><input type="date" className="fi" value={f.warrantyEndDate} onChange={e => set('warrantyEndDate', e.target.value)} /></div></div>
+          </div>
 
           {/* Service & Dates */}
           <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
@@ -168,9 +213,255 @@ function CustomerModal({ data, id, onSave, onClose }) {
               <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone Number</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>
             )}
           </div>
+
+          {/* Customer Feedback */}
+          <div className="fg"><label>Customer Feedback</label><textarea className="fi" value={f.feedback} onChange={e => set('feedback', e.target.value)} rows="3" placeholder="Satisfaction notes..." /></div>
+
+          {f.linkedInstallationId && <div className="fg"><label>Linked Installation ID</label><input className="fi" value={f.linkedInstallationId} disabled /></div>}
         </div>
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
       </form>
     </Modal>
   );
+}
+
+/* ============ COMPLETION REPORT PRINT ============ */
+function printCompletionReport(customer, leadPOs, installations, leads) {
+  /* Find linked lead by phone match */
+  const linkedLead = leads.find(l => l.phone === customer.phone && l.name === customer.name) || leads.find(l => l.phone === customer.phone);
+  /* Find POs for this customer (via lead link or name match) */
+  const customerPOs = leadPOs.filter(po =>
+    (linkedLead && po.leadId === linkedLead.id) ||
+    (po.customerName === customer.name && po.customerPhone === customer.phone)
+  );
+  /* Find linked installation */
+  const inst = installations.find(i => i.customerName === customer.name && i.phone === customer.phone) || installations.find(i => i.customerName === customer.name);
+  /* Use first approved PO, or first PO */
+  const po = customerPOs.find(p => p.status === 'Approved') || customerPOs[0];
+
+  /* Extra charges from PO */
+  const extraItems = po ? [
+    { label: 'Discom Charges', val: Number(po.discomCharges || 0) },
+    { label: 'Civil Work', val: Number(po.civilWork || 0) },
+    { label: 'UPVC Pipes', val: Number(po.upvcPipes || 0) },
+    { label: 'Additional Relay', val: Number(po.additionalRelay || 0) },
+    { label: 'Elevated Structure', val: Number(po.elevatedStructure || 0) },
+    { label: 'Additional BOM', val: Number(po.additionalBom || 0) },
+    { label: 'Others', val: Number(po.otherCharges || 0) }
+  ].filter(e => e.val > 0) : [];
+
+  const fmtCur = (v) => '₹' + Number(v || 0).toLocaleString('en-IN');
+  const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
+  const e = escapeHtml;
+  const w = window.open('', '_blank');
+  if (!w) { alert('Popup blocked — please allow popups to print the report.'); return; }
+  w.document.write(`<html><head><title>Completion Report - ${e(customer.name)}</title>
+<style>
+body{font-family:Arial,sans-serif;padding:30px 40px;line-height:1.6;font-size:13px;color:#333}
+.hd{display:flex;align-items:center;gap:16px;border-bottom:2px solid #1a3a7a;padding-bottom:14px;margin-bottom:20px}
+.hd img{width:60px;height:60px;object-fit:contain;border-radius:4px}
+.hd-text{flex:1}
+.hd-text h1{font-size:20px;margin:0;color:#1a3a7a}
+.hd-text p{margin:1px 0;color:#666;font-size:11px}
+h2{font-size:15px;color:#1a3a7a;border-bottom:1px solid #ddd;padding-bottom:6px;margin:24px 0 10px}
+h3{font-size:13px;color:#444;margin:14px 0 6px}
+table{width:100%;border-collapse:collapse;margin:8px 0}
+th,td{border:1px solid #ddd;padding:6px 8px;text-align:left;font-size:12px}
+th{background:#f5f5f5;font-weight:600}
+.info-tbl{border:none}
+.info-tbl td{border:none;padding:3px 16px 3px 0;vertical-align:top}
+.info-tbl .lbl{font-weight:600;color:#555;width:160px}
+.section{margin:18px 0;page-break-inside:avoid}
+.sketch-img{max-width:100%;max-height:280px;object-fit:contain;border:1px solid #ddd;border-radius:4px;margin:6px 0}
+.do-dont{display:flex;gap:20px;flex-wrap:wrap}
+.do-dont>div{flex:1;min-width:220px}
+.do-dont ul{margin:4px 0;padding-left:18px}
+.do-dont li{font-size:12px;margin:3px 0}
+.warranty-box{border:2px solid #1a3a7a;border-radius:8px;padding:16px;margin:8px 0;background:#f8faff}
+.footer{margin-top:30px;font-size:10px;color:#999;text-align:center;border-top:1px solid #eee;padding-top:8px}
+@media print{body{padding:15px 20px}h2{page-break-before:auto}.section{page-break-inside:avoid}}
+</style>
+</head><body>
+<div class="hd">
+<img src="/logo.png" alt="PPS" onerror="this.style.display='none'" />
+<div class="hd-text">
+<h1>PRAGATHI POWER SOLUTIONS</h1>
+<p>Solar Energy Solutions | Tirupati</p>
+</div>
+</div>
+<h2 style="text-align:center;border:none;font-size:17px">COMPLETION REPORT</h2>
+
+<!-- Customer Details -->
+<div class="section">
+<h2>Customer Details</h2>
+<table class="info-tbl">
+<tr><td class="lbl">Name</td><td>${e(customer.name) || '-'}</td><td class="lbl">Phone</td><td>${e(customer.phone) || '-'}</td></tr>
+<tr><td class="lbl">Email</td><td>${e(customer.email) || '-'}</td><td class="lbl">Address</td><td>${e(customer.address) || '-'}</td></tr>
+<tr><td class="lbl">Area / Pincode</td><td>${e(customer.area) || '-'}${customer.pincode ? ' - ' + e(customer.pincode) : ''}</td><td class="lbl">Customer Type</td><td>${e(customer.customerType) || '-'}</td></tr>
+<tr><td class="lbl">kW Installed</td><td>${e(customer.kwRequired) || '-'}</td><td class="lbl">Power Phase</td><td>${e(customer.powerPhase) || '-'}</td></tr>
+<tr><td class="lbl">Payment Type</td><td>${e(customer.paymentType) || '-'}</td><td class="lbl">Total Price</td><td style="font-weight:700">${fmtCur(customer.totalPrice)}</td></tr>
+</table>
+</div>
+
+${po ? `
+<!-- Quotation / Purchase Order -->
+<div class="section">
+<h2>Quotation / Purchase Order</h2>
+<table class="info-tbl">
+<tr><td class="lbl">PO Number</td><td>${e(po.poNumber) || '-'}</td><td class="lbl">PO Date</td><td>${e(po.poDate) || '-'}</td></tr>
+<tr><td class="lbl">Vendor</td><td>${e(po.vendorName) || '-'}</td><td class="lbl">Status</td><td>${e(po.status) || '-'}</td></tr>
+<tr><td class="lbl">Company Scope</td><td colspan="3">${e(po.companyScope) || '-'}</td></tr>
+<tr><td class="lbl">Customer Scope</td><td colspan="3">${e(po.customerScope) || '-'}</td></tr>
+<tr><td class="lbl">Payment Terms</td><td colspan="3">${e(po.paymentTerms) || '-'}</td></tr>
+<tr><td class="lbl">Warranty Terms</td><td colspan="3">${e(po.warrantyTerms) || '-'}</td></tr>
+</table>
+</div>
+
+<!-- BOM -->
+<div class="section">
+<h2>Bill of Materials (BOM)</h2>
+<table><thead><tr><th>#</th><th>Material</th><th>Specification</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead><tbody>
+${(po.items || []).map((item, i) => `<tr><td>${i + 1}</td><td>${e(item.materialName)}</td><td>${e(item.specification) || '-'}</td><td>${item.quantity}</td><td>${e(item.unit) || '-'}</td><td>${Number(item.rate).toLocaleString('en-IN')}</td><td>${Number(item.amount).toLocaleString('en-IN')}</td></tr>`).join('')}
+<tr style="font-weight:700"><td colspan="5" style="text-align:right">BOM Total</td><td colspan="2">${fmtCur(po.totalValue)}</td></tr>
+</tbody></table>
+${extraItems.length > 0 ? `<h3>Extra Charges</h3><table class="info-tbl">${extraItems.map(ei => `<tr><td class="lbl">${ei.label}</td><td>${fmtCur(ei.val)}</td></tr>`).join('')}<tr style="font-weight:700"><td class="lbl">Extra Charges Total</td><td>${fmtCur(po.extraChargesTotal)}</td></tr></table>` : ''}
+<p style="margin-top:8px"><strong>Price After Subsidy:</strong> ${fmtCur(po.agreedPrice || po.totalValue)}</p>
+</div>
+` : '<div class="section"><h2>Quotation / Purchase Order</h2><p style="color:#999">No purchase order found for this customer.</p></div>'}
+
+<!-- Hand Sketch -->
+<div class="section">
+<h2>Hand Sketch</h2>
+${(po && po.handSketch) || (inst && inst.handSketch) ? `<img class="sketch-img" src="${(po && po.handSketch) || inst.handSketch}" alt="Hand Sketch" onerror="this.style.display='none'" />` : '<p style="color:#999">No hand sketch available.</p>'}
+${(po && po.sketchWithSignature) || (inst && inst.sketchWithSignature) ? `<p style="margin-top:8px"><strong>Sketch with Signature:</strong></p><img class="sketch-img" src="${(po && po.sketchWithSignature) || (inst && inst.sketchWithSignature)}" alt="Signed Sketch" onerror="this.style.display='none'" />` : ''}
+</div>
+
+<!-- Quality Inspection Report -->
+<div class="section">
+<h2>Quality Inspection Report</h2>
+${inst ? `<table class="info-tbl">
+<tr><td class="lbl">Quality Inspection</td><td>${e(inst.qualityInspection) || 'Pending'}</td></tr>
+<tr><td class="lbl">Material Dispatched</td><td>${e(inst.materialDispatched) || 'No'}</td></tr>
+<tr><td class="lbl">Progress</td><td>${inst.progress || 0}%</td></tr>
+<tr><td class="lbl">Team Leader</td><td>${e(inst.teamLeader) || '-'}</td></tr>
+<tr><td class="lbl">Start Date</td><td>${fmtDate(inst.startDate)}</td></tr>
+<tr><td class="lbl">Total Days</td><td>${inst.totalDays || '-'}</td></tr>
+${inst.installationReport ? `<tr><td class="lbl">Installation Report</td><td>${e(inst.installationReport)}</td></tr>` : ''}
+</table>` : '<p style="color:#999">No installation data found.</p>'}
+</div>
+
+<!-- Do's & Don'ts -->
+<div class="section">
+<h2>Do's & Don'ts</h2>
+<div class="do-dont">
+<div>
+<h3 style="color:green">Do's</h3>
+<ul>
+<li>Keep the solar panels clean and free from dust, bird droppings, and debris</li>
+<li>Check the inverter display regularly for error codes or faults</li>
+<li>Ensure vegetation/trees are trimmed to avoid shading on panels</li>
+<li>Get annual maintenance done by authorized personnel</li>
+<li>Monitor daily generation through the monitoring app</li>
+<li>Report any drop in generation immediately to the service team</li>
+<li>Keep the area around the inverter ventilated and dry</li>
+</ul>
+</div>
+<div>
+<h3 style="color:red">Don'ts</h3>
+<ul>
+<li>Do not wash panels with hard water or abrasive materials</li>
+<li>Do not place any objects or weight on the solar panels</li>
+<li>Do not attempt to repair or modify the system yourself</li>
+<li>Do not allow unauthorized persons to access the rooftop system</li>
+<li>Do not ignore inverter error messages or warning lights</li>
+<li>Do not use high-pressure water jets to clean panels</li>
+<li>Do not tamper with wiring, junction boxes, or earthing connections</li>
+</ul>
+</div>
+</div>
+</div>
+
+<!-- Warranty Card Details -->
+<div class="section">
+<h2>Warranty Card Details</h2>
+<div class="warranty-box">
+<table class="info-tbl">
+<tr><td class="lbl">Customer Name</td><td>${e(customer.name) || '-'}</td><td class="lbl">kW System</td><td>${e(customer.kwRequired) || '-'}</td></tr>
+<tr><td class="lbl">Panel Details</td><td>${e(customer.panelDetails) || '-'}</td><td class="lbl">Inverter Details</td><td>${e(customer.inverterDetails) || '-'}</td></tr>
+<tr><td class="lbl">Warranty Start</td><td>${fmtDate(customer.warrantyStartDate)}</td><td class="lbl">Warranty End</td><td>${fmtDate(customer.warrantyEndDate)}</td></tr>
+<tr><td class="lbl">1st Service Date</td><td>${fmtDate(customer.firstServiceDate)}</td><td class="lbl">Next Service</td><td>${fmtDate(customer.nextServiceDate)}</td></tr>
+${inst && inst.guaranteeCard === 'Yes' ? '<tr><td class="lbl">Guarantee Card</td><td colspan="3" style="color:green;font-weight:600">Issued</td></tr>' : ''}
+</table>
+<p style="margin:10px 0 0;font-size:11px;color:#666"><strong>Standard Warranty Coverage:</strong> ${po ? (e(po.warrantyTerms) || 'As per manufacturer terms') : 'As per manufacturer terms'}</p>
+</div>
+</div>
+
+<!-- Notes -->
+<div class="section">
+<h2>Notes</h2>
+${customer.feedback ? `<p><strong>Customer Feedback:</strong> ${e(customer.feedback)}</p>` : ''}
+${po && po.notes ? `<p><strong>PO Notes:</strong> ${e(po.notes)}</p>` : ''}
+${inst && inst.installationReport ? `<p><strong>Installation Notes:</strong> ${e(inst.installationReport)}</p>` : ''}
+${!customer.feedback && !(po && po.notes) && !(inst && inst.installationReport) ? '<p style="color:#999">No additional notes.</p>' : ''}
+</div>
+
+<div class="footer">
+<p>This is a system-generated Completion Report. No manual edits allowed post-generation.</p>
+<p>Pragathi Power Solutions — Generated on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
+</div>
+</body></html>`);
+  w.document.close();
+  w.print();
+}
+
+/* ============ COMPLETION REPORT WHATSAPP ============ */
+function shareCompletionReportWhatsApp(customer, leadPOs, installations, leads) {
+  const linkedLead = leads.find(l => l.phone === customer.phone && l.name === customer.name) || leads.find(l => l.phone === customer.phone);
+  const customerPOs = leadPOs.filter(po =>
+    (linkedLead && po.leadId === linkedLead.id) ||
+    (po.customerName === customer.name && po.customerPhone === customer.phone)
+  );
+  const inst = installations.find(i => i.customerName === customer.name && i.phone === customer.phone) || installations.find(i => i.customerName === customer.name);
+  const po = customerPOs.find(p => p.status === 'Approved') || customerPOs[0];
+
+  const fmtCur = (v) => '₹' + Number(v || 0).toLocaleString('en-IN');
+  const bomText = po && po.items ? po.items.map((it, i) =>
+    (i + 1) + '. ' + it.materialName + (it.specification ? ' (' + it.specification + ')' : '') + ' x' + it.quantity
+  ).join('\n') : 'N/A';
+
+  const msg = '*COMPLETION REPORT*\n' +
+    '*' + (customer.name || '-') + '*\n\n' +
+    '*Customer Details:*\n' +
+    'Phone: ' + (customer.phone || '-') + '\n' +
+    'Address: ' + (customer.address || '-') + '\n' +
+    'kW: ' + (customer.kwRequired || '-') + '\n' +
+    'Type: ' + (customer.customerType || '-') + '\n\n' +
+    (po ? '*Quotation / PO:*\n' +
+      'PO#: ' + (po.poNumber || '-') + '\n' +
+      'Date: ' + (po.poDate || '-') + '\n' +
+      'Vendor: ' + (po.vendorName || '-') + '\n' +
+      'Total: ' + fmtCur(po.totalValue) + '\n' +
+      (po.extraChargesTotal > 0 ? 'Extra Charges: ' + fmtCur(po.extraChargesTotal) + '\n' : '') +
+      'Price After Subsidy: ' + fmtCur(po.agreedPrice || po.totalValue) + '\n\n' +
+      '*BOM:*\n' + bomText + '\n\n' : '') +
+    (inst ? '*Installation:*\n' +
+      'Quality: ' + (inst.qualityInspection || 'Pending') + '\n' +
+      'Progress: ' + (inst.progress || 0) + '%\n' +
+      'Team Leader: ' + (inst.teamLeader || '-') + '\n\n' : '') +
+    '*Warranty:*\n' +
+    'Panels: ' + (customer.panelDetails || '-') + '\n' +
+    'Inverter: ' + (customer.inverterDetails || '-') + '\n' +
+    'Warranty: ' + (customer.warrantyStartDate || '-') + ' to ' + (customer.warrantyEndDate || '-') + '\n' +
+    (customer.feedback ? '\n*Feedback:* ' + customer.feedback + '\n' : '') +
+    '\n_Pragathi Power Solutions_';
+
+  let url;
+  if (customer.phone) {
+    const phone = customer.phone.replace(/\D/g, '');
+    url = 'https://wa.me/' + (phone.length === 10 ? '91' + phone : phone) + '?text=' + encodeURIComponent(msg);
+  } else {
+    url = 'https://wa.me/?text=' + encodeURIComponent(msg);
+  }
+  const win = window.open(url, '_blank');
+  if (!win) alert('Popup blocked — please allow popups for WhatsApp sharing.');
 }

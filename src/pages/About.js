@@ -7,7 +7,7 @@ export default function About() {
     <>
       <div className="card" style={{ marginBottom: 18 }}>
         <div className="cb" style={{ textAlign: 'center', padding: 40 }}>
-          <img src="/logo.jpg" alt="PPS" style={{ height: 64, marginBottom: 14 }} onError={e => e.target.style.display = 'none'} />
+          <img src="/logo.png" alt="PPS" style={{ height: 64, marginBottom: 14 }} onError={e => e.target.style.display = 'none'} />
           <h2 style={{ fontSize: '1.5rem', color: 'var(--pri)', marginBottom: 6 }}>Pragathi Power Solutions</h2>
           <p style={{ color: 'var(--sec)', fontWeight: 600, fontSize: '1rem', marginBottom: 6 }}>Power from the Sun... To Power Every One</p>
           <p style={{ color: 'var(--muted)', fontSize: '.88rem' }}>Since 2012 | Tirupati, Andhra Pradesh</p>

@@ -17,6 +17,13 @@ export function DataProvider({ children }) {
   const [expenses, setExpenses] = useState([]);
   const [reminders, setReminders] = useState([]);
   const [gallery, setGallery] = useState([]);
+  const [purchaseOrders, setPurchaseOrders] = useState([]);
+  const [retailers, setRetailers] = useState([]);
+  const [influencers, setInfluencers] = useState([]);
+  const [employeeTasks, setEmployeeTasks] = useState([]);
+  const [leadPOs, setLeadPOs] = useState([]);
+  const [bomTemplates, setBomTemplates] = useState([]);
+  const [activityLog, setActivityLog] = useState([]);
 
   useEffect(() => {
     if (!user) return;
@@ -33,6 +40,13 @@ export function DataProvider({ children }) {
       listenCollection('expenses', (d) => d && setExpenses(d), 'date', 'desc'),
       listenCollection('reminders', (d) => d && setReminders(d)),
       listenCollection('gallery', (d) => d && setGallery(d)),
+      listenCollection('purchaseOrders', (d) => d && setPurchaseOrders(d)),
+      listenCollection('retailers', (d) => d && setRetailers(d)),
+      listenCollection('influencers', (d) => d && setInfluencers(d)),
+      listenCollection('employeeTasks', (d) => d && setEmployeeTasks(d)),
+      listenCollection('leadPOs', (d) => d && setLeadPOs(d)),
+      listenCollection('bomTemplates', (d) => d && setBomTemplates(d)),
+      listenCollection('activityLog', (d) => d && setActivityLog(d), 'timestamp', 'desc'),
     ];
     return () => unsubs.forEach(u => u());
   }, [user]);
@@ -40,7 +54,8 @@ export function DataProvider({ children }) {
   return (
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
-      ongoingWork, income, expenses, reminders, gallery
+      ongoingWork, income, expenses, reminders, gallery,
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, bomTemplates, activityLog
     }}>
       {children}
     </DataContext.Provider>

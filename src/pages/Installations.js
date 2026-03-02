@@ -1,19 +1,38 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
-import { formatDate, toNumber } from '../services/helpers';
+import { formatDate, toNumber, safeStr } from '../services/helpers';
 import { StatusBadge, DetailItem, ProgressBar, Modal, EmptyState } from '../components/SharedUI';
+
+const PAGE_SIZE = 10;
 
 export default function Installations() {
   const { installations } = useData();
+  const { role } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const canEdit = role === 'admin' || role === 'manager';
+
+  let filtered = installations;
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(i =>
+      safeStr(i.customerName).toLowerCase().includes(q) ||
+      safeStr(i.phone).includes(q) ||
+      safeStr(i.address).toLowerCase().includes(q) ||
+      safeStr(i.teamLeader).toLowerCase().includes(q)
+    );
+  }
+  const displayed = filtered.slice(0, visibleCount);
+  const hasMore = filtered.length > visibleCount;
 
   const handleSave = async (data, id) => {
     try {
-      data.progress = toNumber(data.progress);
+      data.progress = Math.min(100, Math.max(0, toNumber(data.progress)));
       data.floors = toNumber(data.floors);
       if (id) { await updateDocument('installations', id, data); toast('Installation updated'); }
       else { await addDocument('installations', data); toast('Installation added'); }
@@ -24,17 +43,17 @@ export default function Installations() {
   return (
     <>
       <div className="tl">
-        <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Installation</button>
+        <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search installations..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+        {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Installation</button>}
       </div>
-      {installations.map(inst => {
+      {displayed.map(inst => {
         return (
           <div className="card" style={{ marginBottom: 16 }} key={inst.id}>
             <div className="ch">
               <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}><span className="material-icons-round" style={{ color: 'var(--sec)' }}>solar_power</span>{inst.customerName}</h3>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, color: 'var(--pri)' }}>{inst.progress}%</span>
-                <button className="btn bsm bo" onClick={() => setModal({ data: inst, id: inst.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit</button>
+                {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: inst, id: inst.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit</button>}
               </div>
             </div>
             <div className="cb">
@@ -97,7 +116,8 @@ export default function Installations() {
           </div>
         );
       })}
-      {!installations.length && <div className="card"><div className="cb"><EmptyState icon="solar_power" title="No installations" message="Add your first installation." /></div></div>}
+      {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
+      {!filtered.length && <div className="card"><div className="cb"><EmptyState icon="solar_power" title="No installations" message={search ? 'No installations match your search.' : 'Add your first installation.'} /></div></div>}
       {modal && <InstallationModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
     </>
   );

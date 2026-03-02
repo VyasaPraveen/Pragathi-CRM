@@ -3,11 +3,12 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatDate, sendWhatsApp } from '../services/helpers';
+import { formatDate, sendWhatsApp, safeStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const types = ['Payment Reminder', 'Service Due', 'Follow-up', 'Warranty', 'Other'];
 const statusOptions = ['Pending', 'Sent', 'Done'];
+const PAGE_SIZE = 20;
 
 // Q4 fix: added full CRUD (was read-only)
 export default function Reminders() {
@@ -15,6 +16,23 @@ export default function Reminders() {
   const { role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
+  const [search, setSearch] = useState('');
+  const [filterStatus, setFilterStatus] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+
+  let filtered = reminders;
+  if (filterStatus !== 'all') filtered = filtered.filter(r => r.status === filterStatus);
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(r =>
+      safeStr(r.customer).toLowerCase().includes(q) ||
+      safeStr(r.phone).includes(q) ||
+      safeStr(r.message).toLowerCase().includes(q) ||
+      safeStr(r.type).toLowerCase().includes(q)
+    );
+  }
+  const displayed = filtered.slice(0, visibleCount);
+  const hasMore = filtered.length > visibleCount;
 
   const handleSave = async (data, id) => {
     try {
@@ -39,11 +57,16 @@ export default function Reminders() {
   return (
     <>
       <div className="tl">
-        <h3>Reminders</h3>
-        <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Reminder</button>
+        <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search reminders..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {['all', ...statusOptions].map(s => <span key={s} className={`fc ${filterStatus === s ? 'act' : ''}`} onClick={() => setFilterStatus(s)}>{s === 'all' ? 'All' : s}</span>)}
+          </div>
+          <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Reminder</button>
+        </div>
       </div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Type</th><th>Customer</th><th>Phone</th><th>Date</th><th>Message</th><th>Status</th><th>Actions</th></tr></thead><tbody>
-        {reminders.map(r => (
+        {displayed.map(r => (
           <tr key={r.id}>
             <td style={{ fontWeight: 600 }}>{r.type}</td><td>{r.customer}</td>
             <td style={{ fontSize: '.82rem' }}>{r.phone || '-'}</td>
@@ -57,8 +80,10 @@ export default function Reminders() {
             </div></td>
           </tr>
         ))}
-        {!reminders.length && <tr><td colSpan="7"><EmptyState icon="notifications_active" title="No reminders" message="Add reminders to stay on top of tasks." /></td></tr>}
-      </tbody></table></div></div></div>
+        {!filtered.length && <tr><td colSpan="7"><EmptyState icon="notifications_active" title="No reminders" message={search || filterStatus !== 'all' ? 'No reminders match your filters.' : 'Add reminders to stay on top of tasks.'} /></td></tr>}
+      </tbody></table></div>
+      {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
+      </div></div>
       {modal && <ReminderModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
     </>
   );

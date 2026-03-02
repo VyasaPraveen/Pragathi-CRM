@@ -16,6 +16,12 @@ import Reminders from '../pages/Reminders';
 import About from '../pages/About';
 import Gallery from '../pages/Gallery';
 import Settings from '../pages/Settings';
+import PurchaseOrders from '../pages/PurchaseOrders';
+import Retailers from '../pages/Retailers';
+import Influencers from '../pages/Influencers';
+import EmployeeTasks from '../pages/EmployeeTasks';
+import UserManagement from '../pages/UserManagement';
+import ActivityLog from '../pages/ActivityLog';
 
 export default function AppLayout() {
   const [sbOpen, setSbOpen] = useState(false);
@@ -40,6 +46,12 @@ export default function AppLayout() {
             <Route path="/about" element={<About />} />
             <Route path="/gallery" element={<Gallery />} />
             <Route path="/settings" element={<Settings />} />
+            <Route path="/purchase-orders" element={<PurchaseOrders />} />
+            <Route path="/retailers" element={<Retailers />} />
+            <Route path="/influencers" element={<Influencers />} />
+            <Route path="/tasks" element={<EmployeeTasks />} />
+            <Route path="/user-management" element={<UserManagement />} />
+            <Route path="/activity-log" element={<ActivityLog />} />
           </Routes>
         </div>
       </div>

@@ -12,10 +12,18 @@ export function getInitials(name) {
   return name ? name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : '?';
 }
 
+export function escapeHtml(str) {
+  if (!str) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 export function sendWhatsApp(phone, msg) {
-  if (phone) {
-    window.open('https://wa.me/91' + phone + '?text=' + encodeURIComponent(msg), '_blank');
-  }
+  if (!phone) return;
+  const cleaned = String(phone).replace(/\D/g, '');
+  if (cleaned.length < 10) return;
+  const num = cleaned.length === 10 ? '91' + cleaned : cleaned;
+  const w = window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
+  if (!w) alert('Popup blocked — please allow popups for WhatsApp sharing.');
 }
 
 export const statusClass = (s) => {
@@ -25,7 +33,13 @@ export const statusClass = (s) => {
     'Approved': 'st-g', 'Sent': 'st-g', 'On Leave': 'st-o', 'Not Applied': 'st-x', 'Done': 'st-g',
     'Rejected': 'st-r', 'Released': 'st-g', 'New Lead': 'st-b', 'Follow-up': 'st-o',
     'Negotiating': 'st-p', 'No Response': 'st-r',
-    'On Hold': 'st-x', 'Included': 'st-g', 'Paid': 'st-g'
+    'On Hold': 'st-x', 'Included': 'st-g', 'Paid': 'st-g',
+    'Hot': 'st-r', 'Warm': 'st-o', 'Cold': 'st-b',
+    'Draft': 'st-x', 'Partial': 'st-o', 'Received': 'st-g', 'Cancelled': 'st-r',
+    'Dealer': 'st-b', 'Distributor': 'st-p', 'Channel Partner': 'st-o',
+    'Overdue': 'st-r', 'High': 'st-r', 'Medium': 'st-o', 'Low': 'st-g',
+    'Inactive': 'st-x',
+    'Unapproved': 'st-o', 'Recommended': 'st-b'
   };
   return m[s] || 'st-x';
 };
@@ -39,6 +53,39 @@ export function toNumber(val, fallback = 0) {
 // B4 fix: null-safe string for search filters
 export function safeStr(val) {
   return val ? String(val) : '';
+}
+
+export function daysSince(dateVal) {
+  if (!dateVal) return null;
+  const dt = typeof dateVal === 'string' ? new Date(dateVal) : (dateVal.toDate ? dateVal.toDate() : new Date(dateVal));
+  if (isNaN(dt)) return null;
+  const diff = Math.floor((new Date() - dt) / (1000 * 60 * 60 * 24));
+  return diff >= 0 ? diff : 0;
+}
+
+export const priorityClass = (p) => {
+  const m = { 'Hot': 'st-r', 'Warm': 'st-o', 'Cold': 'st-b', 'High': 'st-r', 'Medium': 'st-o', 'Low': 'st-g' };
+  return m[p] || 'st-x';
+};
+
+// Designations config — maps display titles to access levels (role)
+export const DESIGNATIONS = [
+  { label: 'Admin Manager', role: 'manager' },
+  { label: 'Technical Manager', role: 'manager' },
+  { label: 'Sales Manager', role: 'manager' },
+  { label: 'Operational Manager', role: 'manager' },
+  { label: 'Admin Assistant', role: 'assistant' },
+  { label: 'Technical Assistant', role: 'assistant' },
+  { label: 'Sales Assistant', role: 'assistant' },
+  { label: 'Operational Assistant', role: 'assistant' },
+  { label: 'Admin 1 - C', role: 'admin' },
+  { label: 'Admin 2 - V', role: 'admin' },
+  { label: 'Admin 3 - B', role: 'admin' },
+];
+
+export function getRoleFromDesignation(designation) {
+  const found = DESIGNATIONS.find(d => d.label === designation);
+  return found ? found.role : 'assistant';
 }
 
 // Q5 fix: dynamic days-in-month instead of hardcoded 30
