@@ -9,6 +9,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [phone, setPhone] = useState('');
   const [designation, setDesignation] = useState('Admin Assistant');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -55,7 +56,7 @@ export default function Login() {
 
     setLoading(true);
     try {
-      const result = await signup(email, password, name, designation);
+      const result = await signup(email, password, name, designation, phone);
       if (mounted.current) {
         if (result.approved) {
           // Admin auto-approved — will auto-login
@@ -67,6 +68,7 @@ export default function Login() {
           setPassword('');
           setConfirmPassword('');
           setDesignation('Admin Assistant');
+          setPhone('');
         }
         setLoading(false);
       }
@@ -126,6 +128,11 @@ export default function Login() {
             <div className="fg">
               <label>Email Address</label>
               <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@pragathipower.com" required />
+            </div>
+            <div className="fg">
+              <label>Phone Number</label>
+              <input type="tel" className="fi" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Enter your mobile number" required />
+              <small style={{ color: 'var(--muted)', fontSize: '.78rem', marginTop: 4, display: 'block' }}>Used to verify your identity with the team</small>
             </div>
             <div className="fg">
               <label>Password</label>
