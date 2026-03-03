@@ -33,7 +33,7 @@ export function DataProvider({ children }) {
       listenCollection('leads', (d) => d && setLeads(d)),
       listenCollection('customers', (d) => d && setCustomers(d)),
       listenCollection('installations', (d) => d && setInstallations(d)),
-      listenCollection('team', (d) => d && setTeam(d)),
+      listenCollection('team', (d) => d && setTeam(d), 'name', 'asc'),
       listenCollection('materials', (d) => d && setMaterials(d)),
       listenCollection('ongoingWork', (d) => d && setOngoingWork(d)),
       listenCollection('income', (d) => d && setIncome(d), 'date', 'desc'),

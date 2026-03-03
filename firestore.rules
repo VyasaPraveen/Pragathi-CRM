@@ -3,30 +3,31 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function isAuth() { return request.auth != null; }
     function getRole() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role; }
-    function isAdmin() { return isAuth() && getRole() == 'admin'; }
-    function isAdminOrManager() { return isAuth() && (getRole() == 'admin' || getRole() == 'manager'); }
+    function isAdmin() { return isAuth() && (getRole() == 'admin' || getRole() == 'super_admin'); }
+    function isAdminOrManager() { return isAuth() && (getRole() == 'super_admin' || getRole() == 'admin' || getRole() == 'manager'); }
+    function isCoordinatorPlus() { return isAuth() && (getRole() == 'super_admin' || getRole() == 'admin' || getRole() == 'manager' || getRole() == 'coordinator'); }
     match /users/{uid} {
       allow read: if isAuth();
-      // Allow user to create their own doc on signup; only admin can update/delete
       allow create: if isAuth() && request.auth.uid == uid;
       allow update, delete: if isAdmin();
     }
     match /leads/{id} { allow read, create, update: if isAuth(); allow delete: if isAdmin(); }
-    match /customers/{id} { allow read, create: if isAuth(); allow update: if isAdminOrManager(); allow delete: if isAdmin(); }
+    match /customers/{id} { allow read: if isAuth(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
     match /installations/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
     match /team/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
     match /materials/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
     match /ongoingWork/{id} { allow read, create, update: if isAuth(); allow delete: if isAdmin(); }
-    match /income/{id} { allow read, create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /expenses/{id} { allow read, create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
+    match /income/{id} { allow read: if isAuth(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
+    match /expenses/{id} { allow read: if isAuth(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
     match /reminders/{id} { allow read, create, update: if isAuth(); allow delete: if isAdmin(); }
-    match /gallery/{id} { allow read: if isAuth(); allow create, update, delete: if isAdminOrManager(); }
+    match /gallery/{id} { allow read: if isAuth(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
     match /purchaseOrders/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /retailers/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /influencers/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
+    match /retailers/{id} { allow read: if isAuth(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
+    match /influencers/{id} { allow read: if isAuth(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
     match /employeeTasks/{id} { allow read, create, update: if isAuth(); allow delete: if isAdmin(); }
     match /leadPOs/{id} { allow read, create, update: if isAuth(); allow delete: if isAdmin(); }
     match /bomTemplates/{id} { allow read: if isAuth(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
     match /company/{id} { allow read: if isAuth(); allow write: if isAdmin(); }
+    match /activityLog/{id} { allow read: if isAuth(); allow create: if isAuth(); allow delete: if isAdmin(); }
   }
 }
