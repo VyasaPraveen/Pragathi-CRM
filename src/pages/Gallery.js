@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { Modal, EmptyState } from '../components/SharedUI';
+import { hasAccess } from '../services/helpers';
 
 // Q4 fix: added full CRUD via URL input (was read-only with placeholder boxes)
 export default function Gallery() {
@@ -11,7 +12,7 @@ export default function Gallery() {
   const { role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
 
   const handleSave = async (data, id) => {
     try {

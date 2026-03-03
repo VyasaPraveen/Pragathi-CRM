@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
-import { formatDate, toNumber, safeStr } from '../services/helpers';
+import { formatDate, toNumber, safeStr, hasAccess } from '../services/helpers';
 import { StatusBadge, DetailItem, ProgressBar, Modal, EmptyState } from '../components/SharedUI';
 
 const PAGE_SIZE = 10;
@@ -15,7 +15,7 @@ export default function Installations() {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'manager');
 
   let filtered = installations;
   if (search) {

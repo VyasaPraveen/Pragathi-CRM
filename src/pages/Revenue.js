@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, toNumber } from '../services/helpers';
+import { formatCurrency, formatDate, toNumber, hasAccess } from '../services/helpers';
 import { StatCard, Modal } from '../components/SharedUI';
 
 const PAGE_SIZE = 20;
@@ -15,7 +15,7 @@ export default function Revenue() {
   const [modal, setModal] = useState(null);
   const [incomeVisible, setIncomeVisible] = useState(PAGE_SIZE);
   const [expenseVisible, setExpenseVisible] = useState(PAGE_SIZE);
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
 
   const tI = income.reduce((s, i) => s + toNumber(i.amount), 0);
   const tE = expenses.reduce((s, i) => s + toNumber(i.amount), 0);
@@ -45,7 +45,7 @@ export default function Revenue() {
 
   return (
     <>
-      {role === 'admin' && <div className="sg" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
+      {hasAccess(role, 'admin') && <div className="sg" style={{ gridTemplateColumns: 'repeat(3,1fr)' }}>
         <StatCard color="gr" icon="trending_up" value={formatCurrency(tI)} label="Total Income" />
         <StatCard color="re" icon="trending_down" value={formatCurrency(tE)} label="Total Expenses" />
         <StatCard color="pu" icon="savings" value={formatCurrency(tI - tE)} label="Net Profit" />
@@ -60,7 +60,7 @@ export default function Revenue() {
               <td style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
               {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn bsm bo" onClick={() => setModal({ type: 'income', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-                {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
           </tbody></table>
@@ -76,7 +76,7 @@ export default function Revenue() {
               <td style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
               {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn bsm bo" onClick={() => setModal({ type: 'expenses', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-                {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
           </tbody></table>

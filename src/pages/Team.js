@@ -3,10 +3,10 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, getInitials, toNumber, getDaysInMonth } from '../services/helpers';
+import { formatCurrency, getInitials, toNumber, getDaysInMonth, hasAccess, DESIGNATIONS } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
-const roles = ['Admin Manager', 'Technical Manager', 'Sales Manager', 'Operational Manager', 'Admin Assistant', 'Technical Assistant', 'Sales Assistant', 'Operational Assistant', 'Admin 1 - C', 'Admin 2 - V', 'Admin 3 - B'];
+const roles = DESIGNATIONS.map(d => d.label);
 const statusOptions = ['Active', 'On Leave', 'Inactive'];
 
 export default function Team() {
@@ -18,7 +18,7 @@ export default function Team() {
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
   const daysInMonth = getDaysInMonth();
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'manager');
 
   const handleSave = async (data, id) => {
     try {
@@ -131,7 +131,7 @@ export default function Team() {
               {canEdit && (
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }} onClick={e => e.stopPropagation()}>
                   <button className="btn bsm bo" onClick={() => setModal({ data: t, id: t.id })}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span> Edit</button>
-                  {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
+                  {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
                 </div>
               )}
             </div>
@@ -146,7 +146,7 @@ export default function Team() {
       {/* Detail Modal */}
       {detailModal && (
         <Modal title="Team Member Details" onClose={() => setDetailModal(null)}>
-          <TeamDetailView member={detailModal} canEdit={canEdit} isAdmin={role === 'admin'} onEdit={() => { setModal({ data: detailModal, id: detailModal.id }); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} daysInMonth={daysInMonth} />
+          <TeamDetailView member={detailModal} canEdit={canEdit} isAdmin={hasAccess(role, 'admin')} onEdit={() => { setModal({ data: detailModal, id: detailModal.id }); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} daysInMonth={daysInMonth} />
         </Modal>
       )}
     </>

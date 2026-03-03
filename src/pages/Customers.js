@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
@@ -14,7 +14,7 @@ export default function Customers() {
   const { customers, leadPOs, installations, leads } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
   const [search, setSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
@@ -90,6 +90,12 @@ export default function Customers() {
               <td><StatusBadge status={c.status} /></td>
               <td><StatusBadge status={c.installationStatus || 'Pending'} /></td>
               <td><div style={{ display: 'flex', gap: 4 }}>
+                {c.phone && <button className="btn bsm bo" title="Call" onClick={() => makeCall(c.phone)} style={{ color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>call</span>
+                </button>}
+                {c.phone && <button className="btn bsm bo" title="WhatsApp" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is from Pragathi Power Solutions.`)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>chat</span>
+                </button>}
                 <button className="btn bsm bo" title="Completion Report" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>description</span>
                 </button>

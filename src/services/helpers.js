@@ -68,24 +68,43 @@ export const priorityClass = (p) => {
   return m[p] || 'st-x';
 };
 
+// Role hierarchy levels — higher number = more access
+export const ROLE_LEVELS = {
+  super_admin: 6, admin: 5, manager: 4, coordinator: 3, engineer: 2, staff: 1
+};
+
+// Check if user's role meets minimum required access level
+export function hasAccess(userRole, minRole) {
+  return (ROLE_LEVELS[userRole] || 0) >= (ROLE_LEVELS[minRole] || 0);
+}
+
 // Designations config — maps display titles to access levels (role)
 export const DESIGNATIONS = [
-  { label: 'Admin Manager', role: 'manager' },
+  { label: 'Super Admin', role: 'super_admin' },
+  { label: 'Admin', role: 'admin' },
   { label: 'Technical Manager', role: 'manager' },
+  { label: 'Operations Manager', role: 'manager' },
   { label: 'Sales Manager', role: 'manager' },
-  { label: 'Operational Manager', role: 'manager' },
-  { label: 'Admin Assistant', role: 'assistant' },
-  { label: 'Technical Assistant', role: 'assistant' },
-  { label: 'Sales Assistant', role: 'assistant' },
-  { label: 'Operational Assistant', role: 'assistant' },
-  { label: 'Admin 1 - C', role: 'admin' },
-  { label: 'Admin 2 - V', role: 'admin' },
-  { label: 'Admin 3 - B', role: 'admin' },
+  { label: 'Admin Manager', role: 'manager' },
+  { label: 'Business Coordinator', role: 'coordinator' },
+  { label: 'Quality Coordinator', role: 'coordinator' },
+  { label: 'Accountant', role: 'coordinator' },
+  { label: 'Senior Engineer', role: 'engineer' },
+  { label: 'Engineer', role: 'engineer' },
+  { label: 'Staff', role: 'staff' },
 ];
 
 export function getRoleFromDesignation(designation) {
   const found = DESIGNATIONS.find(d => d.label === designation);
-  return found ? found.role : 'assistant';
+  return found ? found.role : 'staff';
+}
+
+// Make a phone call via tel: link
+export function makeCall(phone) {
+  if (!phone) return;
+  const cleaned = String(phone).replace(/\D/g, '');
+  if (cleaned.length < 10) return;
+  window.open('tel:+91' + (cleaned.length === 10 ? cleaned : cleaned.slice(-10)), '_self');
 }
 
 // Q5 fix: dynamic days-in-month instead of hardcoded 30

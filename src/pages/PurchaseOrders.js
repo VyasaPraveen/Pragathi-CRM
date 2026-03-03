@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
@@ -31,7 +31,7 @@ export default function PurchaseOrders() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expanded, setExpanded] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'manager');
 
   // Merge both collections with a source tag
   const allPOs = [
@@ -147,7 +147,7 @@ export default function PurchaseOrders() {
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printPO(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
                 <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
                 {canEdit && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                {role === 'admin' && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => handleDelete(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {hasAccess(role, 'admin') && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => handleDelete(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
             {expanded === (po._source + po.id) && (
@@ -194,7 +194,7 @@ function POModal({ data, id, onSave, onClose }) {
   const { bomTemplates } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
-  const canManageTemplates = role === 'admin' || role === 'manager';
+  const canManageTemplates = hasAccess(role, 'manager');
 
   const [f, setF] = useState({
     poNumber: data.poNumber || '', vendorName: data.vendorName || '',
@@ -307,7 +307,7 @@ function POModal({ data, id, onSave, onClose }) {
                 {bomTemplates.map(t => (
                   <span key={t.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(26,58,122,.06)', padding: '3px 10px', borderRadius: 12, fontSize: '.76rem', color: 'var(--muted)' }}>
                     {t.name}
-                    {role === 'admin' && <span className="material-icons-round" style={{ fontSize: 14, cursor: 'pointer', color: 'var(--err)' }} onClick={() => deleteTemplate(t.id)}>close</span>}
+                    {hasAccess(role, 'admin') && <span className="material-icons-round" style={{ fontSize: 14, cursor: 'pointer', color: 'var(--err)' }} onClick={() => deleteTemplate(t.id)}>close</span>}
                   </span>
                 ))}
               </div>

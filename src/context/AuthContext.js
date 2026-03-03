@@ -9,7 +9,7 @@ export const useAuth = () => useContext(AuthContext);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(null);
-  const [role, setRole] = useState('assistant');
+  const [role, setRole] = useState('staff');
   const [designation, setDesignation] = useState('');
   const [approved, setApproved] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -28,7 +28,7 @@ export function AuthProvider({ children }) {
           if (snap.exists()) {
             const data = snap.data();
             setUser(u);
-            setRole(data.role || 'assistant');
+            setRole(data.role || 'staff');
             setDesignation(data.designation || data.role || '');
             setApproved(data.approved === true);
           } else {
@@ -39,8 +39,8 @@ export function AuthProvider({ children }) {
             const userData = {
               email: u.email,
               displayName: u.displayName || u.email.split('@')[0],
-              role: isFirstUser ? 'admin' : 'assistant',
-              designation: isFirstUser ? 'Admin 1 - C' : '',
+              role: isFirstUser ? 'super_admin' : 'staff',
+              designation: isFirstUser ? 'Super Admin' : '',
               approved: isFirstUser,
               createdAt: new Date().toISOString()
             };
@@ -53,13 +53,13 @@ export function AuthProvider({ children }) {
         } catch (err) {
           console.error('Auth state error:', err);
           setUser(u);
-          setRole('assistant');
+          setRole('staff');
           setDesignation('');
           setApproved(false);
         }
       } else {
         setUser(null);
-        setRole('assistant');
+        setRole('staff');
         setDesignation('');
         setApproved(false);
       }
@@ -82,12 +82,12 @@ export function AuthProvider({ children }) {
       const usersSnap = await getDocs(collection(db, 'users'));
       const isFirstUser = usersSnap.empty;
 
-      const derivedRole = isFirstUser ? 'admin' : getRoleFromDesignation(chosenDesignation);
+      const derivedRole = isFirstUser ? 'super_admin' : getRoleFromDesignation(chosenDesignation);
       const userData = {
         email,
         displayName,
         role: derivedRole,
-        designation: isFirstUser ? 'Admin 1 - C' : chosenDesignation,
+        designation: isFirstUser ? 'Super Admin' : chosenDesignation,
         approved: isFirstUser,
         createdAt: new Date().toISOString()
       };
@@ -97,7 +97,7 @@ export function AuthProvider({ children }) {
       if (isFirstUser) {
         // First user = admin, auto-approved — update state directly
         setUser(cred.user);
-        setRole('admin');
+        setRole('super_admin');
         setDesignation(userData.designation);
         setApproved(true);
         setLoading(false);
@@ -105,7 +105,7 @@ export function AuthProvider({ children }) {
         // Non-first user — sign out, they need admin approval
         await signOut(auth);
         setUser(null);
-        setRole('assistant');
+        setRole('staff');
         setDesignation('');
         setApproved(false);
         setLoading(false);

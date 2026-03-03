@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, getInitials, safeStr, toNumber } from '../services/helpers';
+import { formatCurrency, formatDate, getInitials, safeStr, toNumber, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 import { storage } from '../services/firebase';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -19,7 +19,7 @@ export default function Retailers() {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
   const [detailId, setDetailId] = useState(null);
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
 
   let filtered = retailers;
   if (search) {
@@ -94,7 +94,7 @@ export default function Retailers() {
                 <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'center' }}>
                   <button className="btn bsm bo" onClick={() => setDetailId(r.id)} title="View Details"><span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span></button>
                   {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: r, id: r.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit</button>}
-                  {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(r.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                  {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(r.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
                 </div>
               </div></div>
             );

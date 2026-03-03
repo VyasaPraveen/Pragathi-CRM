@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { formatCurrency, formatDate, toNumber } from '../services/helpers';
+import { formatCurrency, formatDate, toNumber, hasAccess } from '../services/helpers';
 import { StatCard, StatusBadge, ProgressBar } from '../components/SharedUI';
 
 export default function Dashboard() {
@@ -137,7 +137,7 @@ export default function Dashboard() {
         <StatCard color="bl" icon="leaderboard" value={stats.tl} label="Total Leads" />
         <StatCard color="gr" icon="check_circle" value={stats.cv} label="Converted" />
         <StatCard color="or" icon="trending_up" value={stats.it} label="Interested" />
-        {role === 'admin' && <>
+        {hasAccess(role, 'admin') && <>
           <StatCard color="gr" icon="account_balance_wallet" value={formatCurrency(stats.tI)} label="Total Revenue" />
           <StatCard color="re" icon="payments" value={formatCurrency(stats.tE)} label="Total Expenses" />
           <StatCard color="pu" icon="savings" value={formatCurrency(stats.tI - stats.tE)} label="Net Profit" />
@@ -172,7 +172,7 @@ export default function Dashboard() {
         </div>
 
         {/* Revenue Chart (CSS bars) */}
-        {role === 'admin' ? (
+        {hasAccess(role, 'admin') ? (
           <div className="card">
             <div className="ch"><h3>Revenue vs Expenses (6 months)</h3></div>
             <div className="cb">
@@ -364,7 +364,7 @@ export default function Dashboard() {
       </div>
 
       {/* Row 6: Team Summary (Admin only) */}
-      {role === 'admin' && team.length > 0 && (
+      {hasAccess(role, 'admin') && team.length > 0 && (
         <div style={{ marginTop: 18 }}>
           <div className="card">
             <div className="ch"><h3>Team Overview</h3><button className="btn bsm bo" onClick={() => navigate('/team')}>Manage</button></div>

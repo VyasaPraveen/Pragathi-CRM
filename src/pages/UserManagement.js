@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
 import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { DESIGNATIONS, getRoleFromDesignation, formatDate } from '../services/helpers';
+import { DESIGNATIONS, getRoleFromDesignation, formatDate, hasAccess } from '../services/helpers';
 import { Modal } from '../components/SharedUI';
 
 export default function UserManagement() {
@@ -72,7 +72,7 @@ export default function UserManagement() {
     }
   };
 
-  if (role !== 'admin') {
+  if (!hasAccess(role, 'admin')) {
     return (
       <div className="card">
         <div className="cb" style={{ textAlign: 'center', padding: 40 }}>

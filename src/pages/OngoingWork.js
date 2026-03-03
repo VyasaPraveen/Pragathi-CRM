@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatDate, toNumber, safeStr } from '../services/helpers';
+import { formatDate, toNumber, safeStr, hasAccess } from '../services/helpers';
 import { StatusBadge, ProgressBar, Modal, EmptyState } from '../components/SharedUI';
 
 const statuses = ['In Progress', 'Pending', 'Completed', 'Delayed'];
@@ -16,7 +16,7 @@ export default function OngoingWork() {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'manager');
 
   let filtered = ongoingWork;
   if (filter !== 'all') filtered = filtered.filter(w => w.status === filter);
@@ -60,7 +60,7 @@ export default function OngoingWork() {
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <StatusBadge status={w.status} />
                 {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: w, id: w.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(w.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(w.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div>
             </div>
             <div className="cb">

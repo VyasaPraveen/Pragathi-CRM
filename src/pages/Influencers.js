@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, getInitials, safeStr, toNumber } from '../services/helpers';
+import { formatCurrency, formatDate, getInitials, safeStr, toNumber, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const influencerTypes = ['Electrician', 'Architect', 'Panchayat Member', 'Contractor', 'Other'];
@@ -16,7 +16,7 @@ export default function Influencers() {
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState(null);
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
 
   let filtered = influencers;
   if (search) {
@@ -86,7 +86,7 @@ export default function Influencers() {
                 </div>
                 {canEdit && <div style={{ display: 'flex', gap: 8, marginTop: 14, justifyContent: 'center' }}>
                   <button className="btn bsm bo" onClick={() => setModal({ data: inf, id: inf.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit</button>
-                  {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(inf.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                  {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(inf.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
                 </div>}
               </div></div>
             );

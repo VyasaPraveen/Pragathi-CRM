@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { getInitials } from '../services/helpers';
+import { getInitials, hasAccess } from '../services/helpers';
 
 const sections = [
   { title: 'Main', items: [
@@ -19,7 +19,7 @@ const sections = [
   ]},
   { title: 'Finance', items: [
     { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue' },
-    { to: '/reports', icon: 'assessment', label: 'Reports', hideFor: 'assistant' },
+    { to: '/reports', icon: 'assessment', label: 'Reports', minRole: 'coordinator' },
   ]},
   { title: 'People', items: [
     { to: '/team', icon: 'groups', label: 'Team' },
@@ -30,9 +30,9 @@ const sections = [
   { title: 'Company', items: [
     { to: '/about', icon: 'info', label: 'About' },
     { to: '/gallery', icon: 'photo_library', label: 'Gallery' },
-    { to: '/user-management', icon: 'admin_panel_settings', label: 'User Management', adminOnly: true },
-    { to: '/activity-log', icon: 'history', label: 'Activity Log', adminOnly: true },
-    { to: '/settings', icon: 'settings', label: 'Settings', hideFor: 'assistant' },
+    { to: '/user-management', icon: 'admin_panel_settings', label: 'User Management', minRole: 'admin' },
+    { to: '/activity-log', icon: 'history', label: 'Activity Log', minRole: 'admin' },
+    { to: '/settings', icon: 'settings', label: 'Settings', minRole: 'coordinator' },
   ]},
 ];
 
@@ -64,8 +64,7 @@ export default function Sidebar({ open, onClose }) {
             <div key={sec.title}>
               <div className="ns-t">{sec.title}</div>
               {sec.items.map(item => {
-                if (item.hideFor === role) return null;
-                if (item.adminOnly && role !== 'admin') return null;
+                if (item.minRole && !hasAccess(role, item.minRole)) return null;
                 const badge = item.badgeKey ? getBadge(item.badgeKey) : 0;
                 return (
                   <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `ni ${isActive ? 'act' : ''}`} onClick={onClose}>

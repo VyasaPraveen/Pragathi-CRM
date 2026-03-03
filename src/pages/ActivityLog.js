@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { hasAccess } from '../services/helpers';
 
 const moduleColors = {
   leads: '#6366f1', customers: '#22c55e', installations: '#f59e0b', team: '#3b82f6',
@@ -18,7 +19,7 @@ export default function ActivityLog() {
   const [filterUser, setFilterUser] = useState('all');
   const [search, setSearch] = useState('');
 
-  if (role !== 'admin') {
+  if (!hasAccess(role, 'admin')) {
     return (
       <div className="card">
         <div className="cb" style={{ textAlign: 'center', padding: 40 }}>

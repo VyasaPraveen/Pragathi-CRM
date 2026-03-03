@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatDate, safeStr, priorityClass } from '../services/helpers';
+import { formatDate, safeStr, priorityClass, hasAccess } from '../services/helpers';
 import { StatCard, StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const taskStatuses = ['Pending', 'In Progress', 'Completed', 'Overdue'];
@@ -67,7 +67,7 @@ export default function EmployeeTasks() {
     }
   };
 
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
 
   return (
     <>
@@ -107,7 +107,7 @@ export default function EmployeeTasks() {
             <td><div style={{ display: 'flex', gap: 4 }}>
               <button className="btn bsm bo" onClick={() => setDetailModal(t)} title="View Details"><span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span></button>
               {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: t, id: t.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-              {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+              {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
             </div></td>
           </tr>
         ))}
@@ -158,7 +158,7 @@ function TaskModal({ data, id, onSave, onClose }) {
 function TaskDetailModal({ task, onClose, onEdit }) {
   const { role, user } = useAuth();
   const { toast } = useToast();
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'coordinator');
 
   const [showUpdateForm, setShowUpdateForm] = useState(false);
   const [updateData, setUpdateData] = useState({ date: new Date().toISOString().slice(0, 10), update: '' });

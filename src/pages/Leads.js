@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
@@ -146,10 +146,12 @@ export default function Leads() {
             <td style={{ fontSize: '.76rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td>
             <td style={{ fontSize: '.78rem', fontWeight: 600 }}>{daysSince(l.dateGenerated) != null ? daysSince(l.dateGenerated) + 'd' : '-'}</td>
             <td><div style={{ display: 'flex', gap: 3 }}>
+              {l.phone && <button className="btn bsm bo" onClick={() => makeCall(l.phone)} title="Call" style={{ padding: '5px 8px', color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>call</span></button>}
+              {l.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(l.phone, `Hi ${l.name}, this is from Pragathi Power Solutions regarding your solar enquiry.`)} title="WhatsApp" style={{ padding: '5px 8px', color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>chat</span></button>}
               <button className="btn bsm bo" onClick={() => setDetailId(l.id)} title="View Details" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>visibility</span></button>
               <button className="btn bsm bo" onClick={() => { setDetailTab('pos'); setDetailId(l.id); }} title="PO & BOM" style={{ padding: '5px 8px', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>receipt_long</span></button>
               <button className="btn bsm bo" onClick={() => setModal({ data: l, id: l.id })} title="Edit" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>
-              {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(l.id)} title="Delete" style={{ padding: '5px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
+              {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(l.id)} title="Delete" style={{ padding: '5px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
             </div></td>
           </tr>
         ))}
@@ -414,9 +416,15 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           {/* -------- OVERVIEW TAB -------- */}
           {tab === 'overview' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, gap: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, gap: 8, flexWrap: 'wrap' }}>
+                {lead.phone && <button className="btn bsm bo" onClick={() => makeCall(lead.phone)} style={{ color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>call</span> Call
+                </button>}
+                {lead.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(lead.phone, `Hi ${lead.name}, this is from Pragathi Power Solutions regarding your solar enquiry.`)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>chat</span> WhatsApp
+                </button>}
                 <button className="btn bsm bo" onClick={() => shareLeadWhatsApp(lead)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> Share
                 </button>
                 <button className="btn bsm bo" onClick={() => printLeadSummary(lead)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print Lead
@@ -563,13 +571,13 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {/* Recommend: manager or admin, only Unapproved */}
-                        {po.status === 'Unapproved' && (role === 'manager' || role === 'admin') && (
+                        {po.status === 'Unapproved' && (hasAccess(role, 'manager')) && (
                           <button className="btn bsm bo" onClick={() => handleRecommend(po)} style={{ color: '#d68910', borderColor: 'rgba(243,156,18,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>thumb_up</span> Recommend
                           </button>
                         )}
                         {/* Approve: admin only, only Recommended */}
-                        {po.status === 'Recommended' && role === 'admin' && (
+                        {po.status === 'Recommended' && hasAccess(role, 'admin') && (
                           <button className="btn bsm bo" onClick={() => handleApprove(po)} style={{ color: 'var(--ok)', borderColor: 'rgba(0,184,148,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>check_circle</span> Approve
                           </button>
@@ -591,13 +599,13 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                           <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
                         </button>
                         {/* Edit: non-Approved, admin/manager */}
-                        {po.status !== 'Approved' && (role === 'admin' || role === 'manager') && (
+                        {po.status !== 'Approved' && (hasAccess(role, 'manager')) && (
                           <button className="btn bsm bo" onClick={() => setPOModal({ data: po, id: po.id })}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span>
                           </button>
                         )}
                         {/* Delete: admin only */}
-                        {role === 'admin' && (
+                        {hasAccess(role, 'admin') && (
                           <button className="btn bsm bo" onClick={() => handleDeletePO(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>delete</span>
                           </button>
@@ -669,7 +677,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   const { bomTemplates } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
-  const canManageTemplates = role === 'admin' || role === 'manager';
+  const canManageTemplates = hasAccess(role, 'manager');
   const autoNumber = poId ? po.poNumber : generatePONumber(existingPOs);
 
   const [f, setF] = useState({

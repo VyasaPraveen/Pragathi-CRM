@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { toNumber } from '../services/helpers';
+import { toNumber, hasAccess } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
 
 // Q4 fix: added full CRUD (was read-only)
@@ -12,7 +12,7 @@ export default function Materials() {
   const { role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
-  const canEdit = role === 'admin' || role === 'manager';
+  const canEdit = hasAccess(role, 'manager');
 
   const handleSave = async (data, id) => {
     try {
@@ -44,7 +44,7 @@ export default function Materials() {
             <td>{m.balance < 10 ? <span className="st st-r">Low Stock</span> : m.balance < 30 ? <span className="st st-o">Medium</span> : <span className="st st-g">Good</span>}</td>
             {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
               <button className="btn bsm bo" onClick={() => setModal({ data: m, id: m.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-              {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(m.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+              {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(m.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
             </div></td>}
           </tr>
         ))}
