@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
+import { useData } from '../context/DataContext';
 import { DESIGNATIONS, getRoleFromDesignation, hasAccess } from '../services/helpers';
 import { useToast } from '../context/ToastContext';
 import { Modal } from '../components/SharedUI';
 
 export default function UserManagement() {
   const { role, user: currentUser } = useAuth();
+  const { team } = useData();
   const { toast } = useToast();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -92,6 +94,42 @@ export default function UserManagement() {
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
   };
 
+  const handleCreateUsersFromTeam = async () => {
+    const activeTeam = team.filter(t => t.status === 'Active');
+    if (activeTeam.length === 0) { toast('No active team members found', 'er'); return; }
+    // Find team members that don't already have a user account (match by phone or name)
+    const existingPhones = new Set(users.map(u => String(u.phone || '').replace(/\D/g, '').slice(-10)).filter(p => p.length === 10));
+    const existingNames = new Set(users.map(u => (u.displayName || '').toLowerCase()));
+    const toCreate = activeTeam.filter(t => {
+      const ph = String(t.phone || '').replace(/\D/g, '').slice(-10);
+      const nm = (t.name || '').toLowerCase();
+      return !(ph.length === 10 && existingPhones.has(ph)) && !existingNames.has(nm);
+    });
+    if (toCreate.length === 0) { toast('All team members already have user accounts', 'er'); return; }
+    if (!window.confirm(`Create ${toCreate.length} user account(s) from team members with Manager role?\n\n${toCreate.map(t => t.name).join(', ')}`)) return;
+    try {
+      let count = 0;
+      for (const t of toCreate) {
+        const phone = String(t.phone || '').replace(/\D/g, '').slice(-10);
+        const userId = 'team_' + t.id; // use team-prefixed ID so they're identifiable
+        await setDoc(doc(db, 'users', userId), {
+          displayName: t.name || '',
+          email: t.email || '',
+          phone: phone,
+          designation: 'Operations Manager',
+          role: 'manager',
+          approved: true,
+          teamId: t.id,
+          createdAt: new Date().toISOString(),
+          createdVia: 'bulk_team_import'
+        });
+        count++;
+      }
+      await fetchUsers();
+      toast(`${count} user(s) created from team members`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+  };
+
   const handleEditSave = async (uid, data) => {
     try {
       const newRole = data.designation ? getRoleFromDesignation(data.designation) : undefined;
@@ -161,8 +199,11 @@ export default function UserManagement() {
             <input className="fi" placeholder="Search by name, email, phone..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 34, fontSize: '.84rem' }} />
           </div>
         </div>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn bp" onClick={handleBulkSetManager} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Set all approved users to Manager role">
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn bp" onClick={handleCreateUsersFromTeam} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Create user accounts from team members">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>group_add</span> Create Users from Team
+          </button>
+          <button className="btn" onClick={handleBulkSetManager} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Set all approved users to Manager role">
             <span className="material-icons-round" style={{ fontSize: 16 }}>admin_panel_settings</span> Set All to Manager
           </button>
           <button className="btn" onClick={fetchUsers} style={{ padding: '6px 16px', fontSize: '.84rem' }}>
