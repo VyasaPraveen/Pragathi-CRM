@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument } from '../services/firestore';
+import { addDocument, updateDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
@@ -12,7 +12,7 @@ const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
 const phases = ['Single Phase', 'Three Phase'];
 
 export default function Customers() {
-  const { customers, leadPOs, installations, leads } = useData();
+  const { customers, leadPOs, installations, leads, users } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const canEdit = hasAccess(role, 'coordinator');
@@ -51,8 +51,24 @@ export default function Customers() {
       const cleaned = { ...data };
       numericFields.forEach(f => { cleaned[f] = toNumber(cleaned[f]); });
 
-      if (id) { await updateDocument('customers', id, cleaned); toast('Customer updated'); }
-      else { await addDocument('customers', { ...cleaned, status: 'Active' }); toast('Customer added'); }
+      if (id) {
+        const prevCustomer = customers.find(c => c.id === id);
+        await updateDocument('customers', id, cleaned);
+        toast('Customer updated');
+        // Notify admins about customer update
+        notifyAdmins(users, { title: 'Customer Updated', message: `Customer "${cleaned.name}" has been updated`, type: 'customer', module: 'customers', relatedId: id });
+        // Notify assigned user if assignment changed
+        if (cleaned.assignedTo && cleaned.assignedTo !== (prevCustomer?.assignedTo || '')) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'Customer Assigned to You', message: `Customer "${cleaned.name}" has been assigned to you`, type: 'customer', module: 'customers', relatedId: id });
+        }
+      } else {
+        const newId = await addDocument('customers', { ...cleaned, status: 'Active' });
+        toast('Customer added');
+        notifyAdmins(users, { title: 'New Customer Added', message: `New customer "${cleaned.name}" added`, type: 'customer', module: 'customers', relatedId: newId });
+        if (cleaned.assignedTo) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Customer Assigned', message: `Customer "${cleaned.name}" has been assigned to you`, type: 'customer', module: 'customers', relatedId: newId });
+        }
+      }
       setModal(null);
     } catch (e) { toast(e.message, 'er'); }
   };

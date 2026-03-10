@@ -32,5 +32,6 @@ service cloud.firestore {
     match /bomTemplates/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
     match /company/{id} { allow read: if isApproved(); allow write: if isAdmin(); }
     match /activityLog/{id} { allow read: if isApproved(); allow create: if isApproved(); allow delete: if isAdmin(); }
+    match /notifications/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
   }
 }

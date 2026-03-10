@@ -50,6 +50,33 @@ export async function deleteDocument(col, id) {
   logActivity('Deleted', col, id);
 }
 
+// Notification helper — creates a notification for a specific user
+export async function createNotification({ forUser, title, message, type = 'info', module = '', relatedId = '' }) {
+  try {
+    await addDoc(collection(db, 'notifications'), {
+      forUser,       // team member name (matched to logged-in user displayName)
+      title,
+      message,
+      type,          // 'lead', 'customer', 'task', 'status_update', 'info'
+      module,
+      relatedId,
+      read: false,
+      fromUser: auth.currentUser?.displayName || auth.currentUser?.email || 'System',
+      createdAt: serverTimestamp()
+    });
+  } catch (e) {
+    // Non-critical — swallow silently
+  }
+}
+
+// Send notification to all admin/super_admin users
+export async function notifyAdmins(users, { title, message, type = 'info', module = '', relatedId = '' }) {
+  const admins = users.filter(u => u.role === 'admin' || u.role === 'super_admin');
+  for (const admin of admins) {
+    await createNotification({ forUser: admin.displayName || admin.email, title, message, type, module, relatedId });
+  }
+}
+
 // Activity log helper
 export async function logActivity(action, module, details = '') {
   try {

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
+import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
@@ -32,7 +32,7 @@ const DEFAULT_BOM_MATERIALS = [
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads } = useData();
+  const { leads, users } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -71,12 +71,31 @@ export default function Leads() {
         floors: toNumber(data.floors),
         sanctionedLoad: toNumber(data.sanctionedLoad)
       };
+      const prevLead = id ? leads.find(l => l.id === id) : null;
       if (id) {
         await updateDocument('leads', id, cleaned);
         toast('Lead updated');
+        // Notify assigned user on lead update
+        if (cleaned.assignedTo) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Updated', message: `Lead "${cleaned.name}" has been updated`, type: 'lead', module: 'leads', relatedId: id });
+        }
+        // Notify new assignee if assignment changed
+        if (cleaned.assignedTo && prevLead && cleaned.assignedTo !== prevLead.assignedTo) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Assigned to You', message: `Lead "${cleaned.name}" has been assigned to you`, type: 'lead', module: 'leads', relatedId: id });
+        }
+        // Notify admin on status change
+        if (prevStatus && cleaned.status !== prevStatus) {
+          notifyAdmins(users, { title: 'Lead Status Changed', message: `Lead "${cleaned.name}" changed from ${prevStatus} to ${cleaned.status}`, type: 'lead', module: 'leads', relatedId: id });
+        }
       } else {
         const newId = await addDocument('leads', cleaned);
         toast('Lead added');
+        // Notify assigned user on new lead
+        if (cleaned.assignedTo) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `New lead "${cleaned.name}" has been assigned to you`, type: 'lead', module: 'leads', relatedId: newId });
+        }
+        // Notify admins about new lead
+        notifyAdmins(users, { title: 'New Lead Created', message: `New lead "${cleaned.name}" created`, type: 'lead', module: 'leads', relatedId: newId });
         // Auto-open lead detail on PO tab for the new lead
         setModal(null);
         setDetailTab('pos');

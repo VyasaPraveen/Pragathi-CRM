@@ -24,6 +24,8 @@ export function DataProvider({ children }) {
   const [leadPOs, setLeadPOs] = useState([]);
   const [bomTemplates, setBomTemplates] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
+  const [notifications, setNotifications] = useState([]);
+  const [users, setUsers] = useState([]);
 
   useEffect(() => {
     if (!user) return;
@@ -47,6 +49,8 @@ export function DataProvider({ children }) {
       listenCollection('leadPOs', (d) => d && setLeadPOs(d)),
       listenCollection('bomTemplates', (d) => d && setBomTemplates(d)),
       listenCollection('activityLog', (d) => d && setActivityLog(d), 'timestamp', 'desc'),
+      listenCollection('notifications', (d) => d && setNotifications(d)),
+      listenCollection('users', (d) => d && setUsers(d)),
     ];
     return () => unsubs.forEach(u => u());
   }, [user]);
@@ -55,7 +59,7 @@ export function DataProvider({ children }) {
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
-      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, bomTemplates, activityLog
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, bomTemplates, activityLog, notifications, users
     }}>
       {children}
     </DataContext.Provider>

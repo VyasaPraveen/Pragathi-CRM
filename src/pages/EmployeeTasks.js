@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
+import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatDate, safeStr, priorityClass, hasAccess } from '../services/helpers';
 import { StatCard, StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
@@ -12,7 +12,7 @@ const taskCategories = ['Installation', 'Service', 'Follow-up', 'Documentation',
 const PAGE_SIZE = 20;
 
 export default function EmployeeTasks() {
-  const { employeeTasks, team } = useData();
+  const { employeeTasks, team, users } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -51,10 +51,32 @@ export default function EmployeeTasks() {
       if (cleaned.status !== 'Completed') {
         cleaned.completedDate = '';
       }
-      if (id) { await updateDocument('employeeTasks', id, cleaned); toast('Task updated'); }
-      else {
+      if (id) {
+        const prevTask = employeeTasks.find(t => t.id === id);
+        await updateDocument('employeeTasks', id, cleaned);
+        toast('Task updated');
+        // Notify assigned user if assignment changed
+        if (cleaned.assignedTo && cleaned.assignedTo !== (prevTask?.assignedTo || '')) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'Task Assigned to You', message: `Task "${cleaned.title}" has been assigned to you`, type: 'task', module: 'employeeTasks', relatedId: id });
+        }
+        // Notify admin when status changes (user updated their task)
+        if (prevTask && cleaned.status !== prevTask.status) {
+          notifyAdmins(users, { title: 'Task Status Updated', message: `Task "${cleaned.title}" changed to ${cleaned.status} by ${cleaned.assignedTo || 'user'}`, type: 'status_update', module: 'employeeTasks', relatedId: id });
+          // Also notify assigned user about status change
+          if (cleaned.assignedTo) {
+            createNotification({ forUser: cleaned.assignedTo, title: 'Task Status Changed', message: `Your task "${cleaned.title}" status changed to ${cleaned.status}`, type: 'task', module: 'employeeTasks', relatedId: id });
+          }
+        }
+      } else {
         if (!cleaned.assignedDate) cleaned.assignedDate = new Date().toISOString().slice(0, 10);
-        await addDocument('employeeTasks', cleaned); toast('Task created');
+        const newId = await addDocument('employeeTasks', cleaned);
+        toast('Task created');
+        // Notify assigned user about new task
+        if (cleaned.assignedTo) {
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Task Assigned', message: `Task "${cleaned.title}" has been assigned to you. Due: ${cleaned.dueDate || 'Not set'}`, type: 'task', module: 'employeeTasks', relatedId: newId });
+        }
+        // Notify admins about new task
+        notifyAdmins(users, { title: 'New Task Created', message: `Task "${cleaned.title}" assigned to ${cleaned.assignedTo || 'Unassigned'}`, type: 'task', module: 'employeeTasks', relatedId: newId });
       }
       setModal(null);
     } catch (e) { toast(e.message, 'er'); }
