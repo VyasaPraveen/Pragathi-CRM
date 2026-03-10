@@ -1,17 +1,22 @@
 import React from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
+import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
+import { hasAccess } from '../services/helpers';
 
 const titles = {
   '/': 'Dashboard', '/leads': 'Lead Management', '/customers': 'Customers',
   '/installations': 'Installations', '/ongoing': 'Ongoing Work', '/materials': 'Materials & Inventory',
   '/revenue': 'Revenue', '/reports': 'Reports', '/team': 'Team Management',
-  '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings'
+  '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings',
+  '/purchase-orders': 'Purchase Orders', '/retailers': 'Retailers', '/influencers': 'Influencers',
+  '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log'
 };
 
 export default function Topbar({ onMenuClick }) {
   const { pathname } = useLocation();
   const navigate = useNavigate();
+  const { role } = useAuth();
   const { reminders } = useData();
   const pending = reminders.filter(r => r.status === 'Pending').length;
 
@@ -26,9 +31,11 @@ export default function Topbar({ onMenuClick }) {
           <span className="material-icons-round">notifications</span>
           {pending > 0 && <span className="dot"></span>}
         </button>
-        <button className="tbtn" onClick={() => navigate('/settings')} title="Settings">
-          <span className="material-icons-round">settings</span>
-        </button>
+        {hasAccess(role, 'coordinator') && (
+          <button className="tbtn" onClick={() => navigate('/settings')} title="Settings">
+            <span className="material-icons-round">settings</span>
+          </button>
+        )}
       </div>
     </header>
   );

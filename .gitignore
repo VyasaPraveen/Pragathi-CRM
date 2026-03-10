@@ -8,3 +8,4 @@ backup-firestore.js
 backups/
 *-adminsdk-*.json
 serviceAccountKey.json
+nul

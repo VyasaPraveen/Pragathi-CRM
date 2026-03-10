@@ -5,6 +5,7 @@ import { addDocument, updateDocument } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 
 const PAGE_SIZE = 20;
 const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
@@ -19,6 +20,7 @@ export default function Customers() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [modal, setModal] = useState(null);
+  const [detailId, setDetailId] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // Unique areas for filter dropdown
@@ -90,6 +92,9 @@ export default function Customers() {
               <td><StatusBadge status={c.status} /></td>
               <td><StatusBadge status={c.installationStatus || 'Pending'} /></td>
               <td><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title="View Details" onClick={() => setDetailId(c.id)}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span>
+                </button>
                 {c.phone && <button className="btn bsm bo" title="Call" onClick={() => makeCall(c.phone)} style={{ color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>call</span>
                 </button>}
@@ -117,6 +122,11 @@ export default function Customers() {
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
       </div></div>
       {modal && <CustomerModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
+      {detailId && (() => {
+        const c = customers.find(x => x.id === detailId);
+        if (!c) return null;
+        return <CustomerDetailModal customer={c} onClose={() => setDetailId(null)} onEdit={() => { setModal({ data: c, id: c.id }); setDetailId(null); }} />;
+      })()}
     </>
   );
 }
@@ -228,6 +238,278 @@ function CustomerModal({ data, id, onSave, onClose }) {
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
       </form>
     </Modal>
+  );
+}
+
+/* ============ CUSTOMER DETAIL MODAL ============ */
+function CustomerDetailModal({ customer, onClose, onEdit }) {
+  const [tab, setTab] = useState('overview');
+  const { leadPOs, leads, installations } = useData();
+  const { role } = useAuth();
+  const canEdit = hasAccess(role, 'coordinator');
+
+  const c = customer;
+  const linkedLead = leads.find(l => l.phone === c.phone && l.name === c.name) || leads.find(l => l.phone === c.phone);
+  const customerPOs = leadPOs.filter(po =>
+    (linkedLead && po.leadId === linkedLead.id) ||
+    (po.customerName === c.name && po.customerPhone === c.phone)
+  );
+  const inst = installations.find(i => i.customerName === c.name && i.phone === c.phone) || installations.find(i => i.customerName === c.name);
+
+  const paid = c.paymentType === 'Finance'
+    ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
+    : toNumber(c.advanceAmount) + toNumber(c.secondPayment) + toNumber(c.thirdPayment) + toNumber(c.finalPayment);
+  const balance = toNumber(c.totalPrice) - paid;
+
+  const tabs = [
+    ['overview', 'Overview', 'info'],
+    ['pos', 'Purchase Orders (' + customerPOs.length + ')', 'receipt_long']
+  ];
+
+  return (
+    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="md" style={{ width: '860px', maxWidth: '96vw' }}>
+        <div className="mh">
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span className="material-icons-round" style={{ fontSize: 22, color: 'var(--pri)' }}>person</span>
+            {c.name}
+          </h3>
+          <button className="mx" onClick={onClose}><span className="material-icons-round">close</span></button>
+        </div>
+
+        {/* Tab bar */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', padding: '0 24px', overflowX: 'auto' }}>
+          {tabs.map(([key, label, icon]) => (
+            <button key={key} onClick={() => setTab(key)} style={{
+              padding: '12px 18px', fontWeight: 600, fontSize: '.85rem',
+              color: tab === key ? 'var(--pri)' : 'var(--muted)',
+              borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
+              marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 6,
+              background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+            }}>
+              <span className="material-icons-round" style={{ fontSize: 18 }}>{icon}</span>{label}
+            </button>
+          ))}
+        </div>
+
+        <div style={{ padding: 24, maxHeight: '65vh', overflowY: 'auto' }}>
+
+          {/* -------- OVERVIEW TAB -------- */}
+          {tab === 'overview' && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, gap: 8, flexWrap: 'wrap' }}>
+                {c.phone && <button className="btn bsm bo" onClick={() => makeCall(c.phone)} style={{ color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>call</span> Call
+                </button>}
+                {c.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is from Pragathi Power Solutions.`)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>chat</span> WhatsApp
+                </button>}
+                <button className="btn bsm bo" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>description</span> Completion Report
+                </button>
+                {canEdit && <button className="btn bsm bo" onClick={onEdit}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit
+                </button>}
+              </div>
+
+              {/* Customer info grid */}
+              <div className="dg">
+                <div className="di"><div className="dl">Phone</div><div className="dv">{c.phone || '-'}</div></div>
+                <div className="di"><div className="dl">Email</div><div className="dv">{c.email || '-'}</div></div>
+                {c.alternatePhone && <div className="di"><div className="dl">Alternate Phone</div><div className="dv">{c.alternatePhone}</div></div>}
+                <div className="di"><div className="dl">Address</div><div className="dv">{c.address || '-'}</div></div>
+                {(c.area || c.pincode) && <div className="di"><div className="dl">Area / Pincode</div><div className="dv">{[c.area, c.pincode].filter(Boolean).join(' - ') || '-'}</div></div>}
+                {c.gstNumber && <div className="di"><div className="dl">GST Number</div><div className="dv">{c.gstNumber}</div></div>}
+                <div className="di"><div className="dl">Customer Type</div><div className="dv">{c.customerType || '-'}</div></div>
+                <div className="di"><div className="dl">kW Required</div><div className="dv">{c.kwRequired || '-'}</div></div>
+                <div className="di"><div className="dl">Power Phase</div><div className="dv">{c.powerPhase || '-'}</div></div>
+                <div className="di"><div className="dl">Status</div><div className="dv"><StatusBadge status={c.status} /></div></div>
+                <div className="di"><div className="dl">Installation Status</div><div className="dv"><StatusBadge status={c.installationStatus || 'Pending'} /></div></div>
+              </div>
+
+              {/* Payment Details */}
+              <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
+                <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>Payment Details ({c.paymentType})</label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
+                  <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatCurrency(c.totalPrice)}</div>
+                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Total Price</div>
+                  </div>
+                  <div style={{ background: 'rgba(39,174,96,.06)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--ok)' }}>{formatCurrency(paid)}</div>
+                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Paid</div>
+                  </div>
+                  <div style={{ background: balance > 0 ? 'rgba(231,76,60,.06)' : 'rgba(39,174,96,.06)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem', color: balance > 0 ? 'var(--err)' : 'var(--ok)' }}>{formatCurrency(balance)}</div>
+                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Balance</div>
+                  </div>
+                  {c.agreedPrice > 0 && <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatCurrency(c.agreedPrice)}</div>
+                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Agreed Price</div>
+                  </div>}
+                </div>
+                {c.paymentType === 'Finance' && (
+                  <div className="dg" style={{ marginTop: 12 }}>
+                    <div className="di"><div className="dl">Bank Name</div><div className="dv">{c.bankName || '-'}</div></div>
+                    <div className="di"><div className="dl">Quotation Value</div><div className="dv">{formatCurrency(c.quotationProjectValue)}</div></div>
+                    <div className="di"><div className="dl">BOS Amount Status</div><div className="dv"><StatusBadge status={c.bosAmountStatus || 'Pending'} /></div></div>
+                  </div>
+                )}
+              </div>
+
+              {/* System & Warranty */}
+              <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
+                <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>System & Warranty</label>
+                <div className="dg">
+                  {c.panelDetails && <div className="di"><div className="dl">Panel Details</div><div className="dv">{c.panelDetails}</div></div>}
+                  {c.inverterDetails && <div className="di"><div className="dl">Inverter Details</div><div className="dv">{c.inverterDetails}</div></div>}
+                  <div className="di"><div className="dl">Warranty Start</div><div className="dv">{formatDate(c.warrantyStartDate)}</div></div>
+                  <div className="di"><div className="dl">Warranty End</div><div className="dv">{formatDate(c.warrantyEndDate)}</div></div>
+                  <div className="di"><div className="dl">Advance Paid Date</div><div className="dv">{formatDate(c.advancePaidDate)}</div></div>
+                  <div className="di"><div className="dl">1st Service Date</div><div className="dv">{formatDate(c.firstServiceDate)}</div></div>
+                  <div className="di"><div className="dl">Next Service Date</div><div className="dv">{formatDate(c.nextServiceDate)}</div></div>
+                </div>
+              </div>
+
+              {/* Installation Picture */}
+              {c.installationPicUrl && (
+                <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
+                  <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>Installation Picture</label>
+                  <img src={c.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
+                </div>
+              )}
+
+              {/* Installation Record */}
+              {inst && (
+                <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
+                  <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>Installation Record</label>
+                  <div className="dg">
+                    <div className="di"><div className="dl">Progress</div><div className="dv" style={{ fontWeight: 700, color: 'var(--pri)' }}>{inst.progress || 0}%</div></div>
+                    <div className="di"><div className="dl">Team Leader</div><div className="dv">{inst.teamLeader || '-'}</div></div>
+                    <div className="di"><div className="dl">Start Date</div><div className="dv">{formatDate(inst.startDate)}</div></div>
+                    <div className="di"><div className="dl">Total Days</div><div className="dv">{inst.totalDays || '-'}</div></div>
+                    <div className="di"><div className="dl">Quality Inspection</div><div className="dv">{inst.qualityInspection || 'Pending'}</div></div>
+                    <div className="di"><div className="dl">Material Dispatched</div><div className="dv">{inst.materialDispatched || 'No'}</div></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Reference & Feedback */}
+              {(c.customerReference === 'Yes' || c.feedback) && (
+                <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
+                  {c.customerReference === 'Yes' && (
+                    <div className="dg" style={{ marginBottom: 12 }}>
+                      <div className="di"><div className="dl">Reference Lead Name</div><div className="dv">{c.referenceLeadName || '-'}</div></div>
+                      <div className="di"><div className="dl">Reference Phone</div><div className="dv">{c.referencePhoneNumber || '-'}</div></div>
+                    </div>
+                  )}
+                  {c.feedback && <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14 }}>
+                    <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Customer Feedback</div>
+                    <p style={{ margin: 0, fontSize: '.88rem' }}>{c.feedback}</p>
+                  </div>}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* -------- PURCHASE ORDERS TAB -------- */}
+          {tab === 'pos' && (
+            <div>
+              {customerPOs.length > 0 ? (
+                customerPOs.map(po => (
+                  <div key={po.id} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: 16, marginBottom: 12, background: '#fafbfc' }}>
+                    {/* PO Header */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <strong style={{ fontSize: '1rem' }}>{po.poNumber}</strong>
+                        <StatusBadge status={po.status} />
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                        <button className="btn bsm bo" onClick={() => printPO(po, linkedLead || c)}>
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print PO
+                        </button>
+                        <button className="btn bsm bo" onClick={() => printBOM(po, linkedLead || c)}>
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print BOM
+                        </button>
+                        <button className="btn bsm bo" onClick={() => downloadPO(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> PO
+                        </button>
+                        <button className="btn bsm bo" onClick={() => downloadBOM(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> BOM
+                        </button>
+                        <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* PO Details Grid */}
+                    <div className="dg" style={{ gap: 8 }}>
+                      <div className="di"><div className="dl">PO Date</div><div className="dv">{po.poDate || '-'}</div></div>
+                      <div className="di"><div className="dl">Vendor</div><div className="dv">{po.vendorName || '-'}</div></div>
+                      {po.moduleCount && <div className="di"><div className="dl">Modules</div><div className="dv">{po.moduleCount}</div></div>}
+                      {po.inverterDetails && <div className="di"><div className="dl">Inverter</div><div className="dv">{po.inverterDetails}</div></div>}
+                      {po.plantLocation && <div className="di"><div className="dl">Plant Location</div><div className="dv">{po.plantLocation}</div></div>}
+                      <div className="di"><div className="dl">Items</div><div className="dv">{(po.items || []).length} items</div></div>
+                      <div className="di"><div className="dl">Total Value</div><div className="dv" style={{ fontWeight: 700 }}>{formatCurrency(po.totalValue)}</div></div>
+                      {po.extraChargesTotal > 0 && <div className="di"><div className="dl">Extra Charges</div><div className="dv" style={{ fontWeight: 600, color: 'var(--sec)' }}>{formatCurrency(po.extraChargesTotal)}</div></div>}
+                      {po.agreedPrice && <div className="di"><div className="dl">Price After Subsidy</div><div className="dv" style={{ fontWeight: 700, color: 'var(--pri)' }}>{formatCurrency(po.agreedPrice)}</div></div>}
+                      <div className="di"><div className="dl">Created By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.createdBy || '-'}</div></div>
+                      {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{po.approvalDate}</span></div></div>}
+                    </div>
+
+                    {/* Expandable BOM items */}
+                    {(po.items || []).length > 0 && (
+                      <details style={{ marginTop: 10 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--pri)' }}>View BOM Items</summary>
+                        <div className="tw" style={{ marginTop: 8 }}>
+                          <table>
+                            <thead><tr><th>#</th><th>Material</th><th>Make</th><th>Model / Rating</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead>
+                            <tbody>
+                              {po.items.map((item, i) => (
+                                <tr key={i}>
+                                  <td>{i + 1}</td>
+                                  <td>{item.materialName}</td>
+                                  <td style={{ fontSize: '.82rem' }}>{item.make || '-'}</td>
+                                  <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{item.specification || '-'}</td>
+                                  <td>{item.quantity}</td>
+                                  <td>{item.unit || '-'}</td>
+                                  <td>{formatCurrency(item.rate)}</td>
+                                  <td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td>
+                                  <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{item.remarks || '-'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </details>
+                    )}
+
+                    {/* Extra charges breakdown */}
+                    {po.extraChargesTotal > 0 && (
+                      <details style={{ marginTop: 8 }}>
+                        <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--sec)' }}>View Extra Charges</summary>
+                        <div className="dg" style={{ marginTop: 8, gap: 6 }}>
+                          {po.discomCharges > 0 && <div className="di"><div className="dl">Discom Charges</div><div className="dv">{formatCurrency(po.discomCharges)}</div></div>}
+                          {po.civilWork > 0 && <div className="di"><div className="dl">Civil Work</div><div className="dv">{formatCurrency(po.civilWork)}</div></div>}
+                          {po.upvcPipes > 0 && <div className="di"><div className="dl">UPVC Pipes</div><div className="dv">{formatCurrency(po.upvcPipes)}</div></div>}
+                          {po.additionalRelay > 0 && <div className="di"><div className="dl">Additional Relay</div><div className="dv">{formatCurrency(po.additionalRelay)}</div></div>}
+                          {po.elevatedStructure > 0 && <div className="di"><div className="dl">Elevated Structure</div><div className="dv">{formatCurrency(po.elevatedStructure)}</div></div>}
+                          {po.additionalBom > 0 && <div className="di"><div className="dl">Additional BOM</div><div className="dv">{formatCurrency(po.additionalBom)}</div></div>}
+                          {po.otherCharges > 0 && <div className="di"><div className="dl">Others</div><div className="dv">{formatCurrency(po.otherCharges)}</div></div>}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                ))
+              ) : (
+                <EmptyState icon="receipt_long" title="No purchase orders" message="POs linked to this customer's lead will appear here automatically." />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 

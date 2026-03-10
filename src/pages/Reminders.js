@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatDate, sendWhatsApp, safeStr } from '../services/helpers';
+import { formatDate, sendWhatsApp, safeStr, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const types = ['Payment Reminder', 'Service Due', 'Follow-up', 'Warranty', 'Other'];
@@ -76,7 +76,7 @@ export default function Reminders() {
             <td><div style={{ display: 'flex', gap: 4 }}>
               {r.status === 'Pending' && r.phone && <button className="btn bsm bs" onClick={() => { sendWhatsApp(r.phone, r.message); markSent(r.id); }}><span className="material-icons-round" style={{ fontSize: 16 }}>send</span></button>}
               <button className="btn bsm bo" onClick={() => setModal({ data: r, id: r.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-              {role === 'admin' && <button className="btn bsm bo" onClick={() => handleDelete(r.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+              {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(r.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
             </div></td>
           </tr>
         ))}

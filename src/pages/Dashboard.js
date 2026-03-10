@@ -198,16 +198,13 @@ export default function Dashboard() {
             <div className="ch"><h3>Monthly Leads (6 months)</h3></div>
             <div className="cb">
               <div style={{ display: 'flex', gap: 10, alignItems: 'flex-end', height: 160, padding: '0 4px' }}>
-                {monthlyData.map(m => {
-                  const maxL = Math.max(...monthlyData.map(x => x.leads), 1);
-                  return (
+                {(() => { const maxL = Math.max(...monthlyData.map(x => x.leads), 1); return monthlyData.map(m => (
                     <div key={m.key} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
                       <span style={{ fontSize: '.72rem', fontWeight: 600, color: 'var(--pri)' }}>{m.leads}</span>
                       <div style={{ width: '70%', background: 'var(--pri)', borderRadius: '3px 3px 0 0', height: Math.max((m.leads / maxL) * 120, m.leads > 0 ? 4 : 0), transition: 'height .5s' }} />
                       <span style={{ fontSize: '.68rem', color: 'var(--muted)' }}>{m.label}</span>
                     </div>
-                  );
-                })}
+                  )); })()}
               </div>
             </div>
           </div>

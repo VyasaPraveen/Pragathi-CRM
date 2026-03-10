@@ -141,7 +141,7 @@ function TaskModal({ data, id, onSave, onClose }) {
         <div className="mb">
           <div className="fg"><label>Title *</label><input className="fi" value={f.title} onChange={e => set('title', e.target.value)} required /></div>
           <div className="fg"><label>Description</label><textarea className="fi" value={f.description} onChange={e => set('description', e.target.value)} rows="3" /></div>
-          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={f.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name} ({t.role})</option>)}</select></div><div className="fg"><label>Assigned Date</label><input type="date" className="fi" value={f.assignedDate} onChange={e => set('assignedDate', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={f.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Assigned Date</label><input type="date" className="fi" value={f.assignedDate} onChange={e => set('assignedDate', e.target.value)} /></div></div>
           <div className="fr"><div className="fg"><label>Due Date *</label><input type="date" className="fi" value={f.dueDate} onChange={e => set('dueDate', e.target.value)} required /></div><div className="fg"><label>Related Customer</label><input className="fi" value={f.relatedCustomer} onChange={e => set('relatedCustomer', e.target.value)} placeholder="Optional" /></div></div>
           <div className="fr3"><div className="fg"><label>Priority</label><select className="fi" value={f.priority} onChange={e => set('priority', e.target.value)}>{taskPriorities.map(p => <option key={p}>{p}</option>)}</select></div><div className="fg"><label>Category</label><select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>{taskCategories.map(c => <option key={c}>{c}</option>)}</select></div><div className="fg"><label>Status</label><select className="fi" value={f.status} onChange={e => set('status', e.target.value)}>{taskStatuses.map(s => <option key={s}>{s}</option>)}</select></div></div>
           <div className="fg"><label>Remarks</label><textarea className="fi" value={f.remarks} onChange={e => set('remarks', e.target.value)} rows="2" placeholder="Admin/Manager remarks" /></div>
@@ -230,7 +230,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
               <thead><tr><th>Date</th><th>Work Done</th><th>Updated By</th></tr></thead>
               <tbody>
                 {[...workUpdates].reverse().map((wu, i) => (
-                  <tr key={i}>
+                  <tr key={`wu-${wu.date}-${i}`}>
                     <td style={{ fontSize: '.82rem', whiteSpace: 'nowrap' }}>{formatDate(wu.date)}</td>
                     <td style={{ fontSize: '.84rem' }}>{wu.update}</td>
                     <td style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{wu.by}<br />{wu.at ? new Date(wu.at).toLocaleString() : ''}</td>

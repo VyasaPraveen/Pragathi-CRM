@@ -8,12 +8,13 @@ export function listenCollection(col, cb, ob = 'createdAt', dir = 'desc') {
   let q;
   try {
     q = query(collection(db, col), orderBy(ob, dir));
-  } catch {
+  } catch (e) {
+    // Fallback to unordered if index missing
     q = collection(db, col);
   }
   return onSnapshot(q, snap => {
     cb(snap.docs.map(d => ({ id: d.id, ...d.data() })), null);
-  }, err => cb(null, err));
+  }, err => cb([], err));
 }
 
 function trimStrings(obj) {
@@ -62,6 +63,6 @@ export async function logActivity(action, module, details = '') {
       createdAt: serverTimestamp()
     });
   } catch (e) {
-    console.error('Activity log error:', e);
+    // Activity log write failed — non-critical, swallow silently
   }
 }

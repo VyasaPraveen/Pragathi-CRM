@@ -38,7 +38,7 @@ export function AuthProvider({ children }) {
             const isFirstUser = usersSnap.empty;
             const userData = {
               email: u.email,
-              displayName: u.displayName || u.email.split('@')[0],
+              displayName: u.displayName || (u.email ? u.email.split('@')[0] : 'User'),
               role: isFirstUser ? 'super_admin' : 'staff',
               designation: isFirstUser ? 'Super Admin' : '',
               approved: isFirstUser,
@@ -51,7 +51,7 @@ export function AuthProvider({ children }) {
             setApproved(userData.approved);
           }
         } catch (err) {
-          console.error('Auth state error:', err);
+          // Auth state error — fall back to unapproved staff
           setUser(u);
           setRole('staff');
           setDesignation('');
@@ -107,7 +107,13 @@ export function AuthProvider({ children }) {
         createdAt: new Date().toISOString()
       };
 
-      await setDoc(doc(db, 'users', cred.user.uid), userData);
+      try {
+        await setDoc(doc(db, 'users', cred.user.uid), userData);
+      } catch (docErr) {
+        // Firestore doc creation failed — clean up the orphaned auth account
+        await cred.user.delete().catch(() => {});
+        throw docErr;
+      }
 
       // Link team record to this user account
       if (teamMatch) {

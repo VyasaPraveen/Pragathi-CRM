@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -29,18 +29,23 @@ export default function Influencers() {
     );
   }
 
-  const getStats = (influencerId) => {
-    const referred = leads.filter(l => l.referredByType === 'Influencer' && l.referredById === influencerId);
-    const referredIds = referred.map(l => l.id);
-    const linkedPOs = leadPOs.filter(po => referredIds.includes(po.leadId));
-    const totalOrderValue = linkedPOs.reduce((s, po) => s + toNumber(po.totalValue), 0);
-    return {
-      totalLeads: referred.length,
-      totalConversions: referred.filter(l => l.status === 'Converted').length,
-      totalOrders: linkedPOs.length,
-      totalOrderValue
-    };
-  };
+  const statsMap = useMemo(() => {
+    const map = {};
+    influencers.forEach(inf => {
+      const referred = leads.filter(l => l.referredByType === 'Influencer' && l.referredById === inf.id);
+      const referredIds = referred.map(l => l.id);
+      const linkedPOs = leadPOs.filter(po => referredIds.includes(po.leadId));
+      const totalOrderValue = linkedPOs.reduce((s, po) => s + toNumber(po.totalValue), 0);
+      map[inf.id] = {
+        totalLeads: referred.length,
+        totalConversions: referred.filter(l => l.status === 'Converted').length,
+        totalOrders: linkedPOs.length,
+        totalOrderValue
+      };
+    });
+    return map;
+  }, [influencers, leads, leadPOs]);
+  const getStats = (id) => statsMap[id] || { totalLeads: 0, totalConversions: 0, totalOrders: 0, totalOrderValue: 0 };
 
   const handleSave = async (data, id) => {
     try {

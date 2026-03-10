@@ -3,8 +3,9 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 
 const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
 const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
@@ -167,7 +168,7 @@ export default function Leads() {
 
 /* ============ EDIT MODAL (UNCHANGED) ============ */
 function LeadModal({ data, id, onSave, onClose }) {
-  const { leads, team, retailers, influencers } = useData();
+  const { leads, customers, team, retailers, influencers } = useData();
   // B1 fix: track previous status to detect first conversion
   const prevStatus = data.status;
   const [form, setForm] = useState({
@@ -254,19 +255,19 @@ function LeadModal({ data, id, onSave, onClose }) {
           )}
           {form.leadReference === 'Referral' && (
             <div className="fr">
-              <div className="fg"><label>Referred By</label><select className="fi" value={form.referredByType} onChange={e => { set('referredByType', e.target.value); set('referredById', ''); set('referredByName', ''); }}><option value="">-- Select Type --</option><option>Retailer</option><option>Influencer</option></select></div>
+              <div className="fg"><label>Referred By</label><select className="fi" value={form.referredByType} onChange={e => { set('referredByType', e.target.value); set('referredById', ''); set('referredByName', ''); }}><option value="">-- Select Type --</option><option>Retailer</option><option>Influencer</option><option>Lead</option><option>Client</option></select></div>
               <div className="fg"><label>Select {form.referredByType || 'Referrer'}</label><select className="fi" value={form.referredById} onChange={e => {
                 const val = e.target.value;
                 set('referredById', val);
-                const list = form.referredByType === 'Retailer' ? retailers : influencers;
+                const list = form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : form.referredByType === 'Lead' ? leads : form.referredByType === 'Client' ? customers : [];
                 const found = list.find(r => r.id === val);
                 set('referredByName', found ? found.name : '');
-              }}><option value="">-- Select --</option>{(form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : []).filter(r => r.status === 'Active').map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+              }}><option value="">-- Select --</option>{(form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : form.referredByType === 'Lead' ? leads.filter(l => l.id !== id) : form.referredByType === 'Client' ? customers : []).filter(r => form.referredByType === 'Lead' || form.referredByType === 'Client' || r.status === 'Active').map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
             </div>
           )}
           <div className="fr"><div className="fg"><label>Last Follow-up</label><input type="date" className="fi" value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name} ({t.role})</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><input type="date" className="fi" value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
-          <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => set('salesExecutive', e.target.value)}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name} ({t.role})</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><input type="date" className="fi" value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><input type="date" className="fi" value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => set('salesExecutive', e.target.value)}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><input type="date" className="fi" value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
           <div className="fg"><label>Supporting Team</label><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 12px', border: '1px solid var(--bor)', borderRadius: 8, minHeight: 38, background: '#fff' }}>{team.filter(t => t.status === 'Active').map(t => (<label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.84rem', cursor: 'pointer' }}><input type="checkbox" checked={(form.supportingTeam || []).includes(t.name)} onChange={e => { const cur = form.supportingTeam || []; if (e.target.checked) set('supportingTeam', [...cur, t.name]); else set('supportingTeam', cur.filter(n => n !== t.name)); }} />{t.name}</label>))}{team.filter(t => t.status === 'Active').length === 0 && <span style={{ color: 'var(--muted)', fontSize: '.82rem' }}>No active team members</span>}</div></div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => set('advancePaid', e.target.value)}><option>No</option><option>Yes</option></select></div></div>
           {form.siteVisit === 'Yes' && (
@@ -534,7 +535,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                     <thead><tr><th>#</th><th>Date</th><th>Status</th><th>Notes</th><th>Logged By</th></tr></thead>
                     <tbody>
                       {[...history].reverse().map((h, i) => (
-                        <tr key={i}>
+                        <tr key={`fup-${h.date}-${i}`}>
                           <td>{history.length - i}</td>
                           <td style={{ fontSize: '.84rem' }}>{h.date || '-'}</td>
                           <td><StatusBadge status={h.status} /></td>
@@ -956,9 +957,10 @@ function generatePONumber(existingPOs) {
 
 function generateQuotation(lead) {
   const l = lead || {};
-  const kw = l.kwRequired || '___';
+  const e = escapeHtml;
+  const kw = e(l.kwRequired || '___');
   const price = l.expectedValue ? Number(l.expectedValue).toLocaleString('en-IN') : '___________';
-  const html = `<html><head><title>Quotation - ${l.name}</title>
+  const html = `<html><head><title>Quotation - ${e(l.name)}</title>
 <style>
 body{font-family:'Times New Roman',Times,serif;padding:40px 50px;line-height:1.7;font-size:14px;color:#000}
 .hdr{text-align:center;border-bottom:2px solid #000;padding-bottom:12px;margin-bottom:16px}
@@ -992,12 +994,12 @@ th{background:#f0f0f0;font-weight:700}
 <div class="ref-line">Ref: PPS/QTN/${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}</div>
 <div class="to-block">
 <strong>To,</strong><br/>
-${l.name || '___________'},<br/>
-${l.address || '___________'}${l.city ? ', ' + l.city : ''}${l.district ? ', ' + l.district : ''}${l.pincode ? ' - ' + l.pincode : ''}<br/>
-Ph: ${l.phone || '___________'}${l.email ? '<br/>Email: ' + l.email : ''}
+${e(l.name || '___________')},<br/>
+${e(l.address || '___________')}${l.city ? ', ' + e(l.city) : ''}${l.district ? ', ' + e(l.district) : ''}${l.pincode ? ' - ' + e(l.pincode) : ''}<br/>
+Ph: ${e(l.phone || '___________')}${l.email ? '<br/>Email: ' + e(l.email) : ''}
 </div>
 <div class="section">
-<p><strong>Sub:</strong> Quotation for Supply & Installation of <strong>${kw} kW</strong> Grid Connected Rooftop Solar Power Plant.</p>
+<p><strong>Sub:</strong> Quotation for Supply &amp; Installation of <strong>${kw} kW</strong> Grid Connected Rooftop Solar Power Plant.</p>
 <p>Dear Sir/Madam,</p>
 <p>Thank you for showing interest in Solar Energy. We are pleased to submit our quotation for the supply and installation of a <strong>${kw} kW On-Grid Solar Power Plant</strong> at your premises.</p>
 </div>
@@ -1032,14 +1034,14 @@ Ph: ${l.phone || '___________'}${l.email ? '<br/>Email: ' + l.email : ''}
 ${l.siteVisit === 'Yes' ? `
 <p style="margin-top:16px"><strong>Site Details:</strong></p>
 <table class="terms">
-${l.roofType ? '<tr><td>Roof Type</td><td>:</td><td>' + l.roofType + '</td></tr>' : ''}
-${l.structureType ? '<tr><td>Structure</td><td>:</td><td>' + l.structureType + '</td></tr>' : ''}
-${l.existingConnection ? '<tr><td>Existing Connection</td><td>:</td><td>' + l.existingConnection + '</td></tr>' : ''}
-${l.sanctionedLoad ? '<tr><td>Sanctioned Load</td><td>:</td><td>' + l.sanctionedLoad + ' kW</td></tr>' : ''}
-${l.floors ? '<tr><td>Floors</td><td>:</td><td>' + l.floors + '</td></tr>' : ''}
-${l.availableSpace ? '<tr><td>Available Space</td><td>:</td><td>' + l.availableSpace + '</td></tr>' : ''}
-${l.meterNumber ? '<tr><td>Meter No</td><td>:</td><td>' + l.meterNumber + '</td></tr>' : ''}
-${l.consumerNumber ? '<tr><td>Consumer No</td><td>:</td><td>' + l.consumerNumber + '</td></tr>' : ''}
+${l.roofType ? '<tr><td>Roof Type</td><td>:</td><td>' + e(l.roofType) + '</td></tr>' : ''}
+${l.structureType ? '<tr><td>Structure</td><td>:</td><td>' + e(l.structureType) + '</td></tr>' : ''}
+${l.existingConnection ? '<tr><td>Existing Connection</td><td>:</td><td>' + e(l.existingConnection) + '</td></tr>' : ''}
+${l.sanctionedLoad ? '<tr><td>Sanctioned Load</td><td>:</td><td>' + e(l.sanctionedLoad) + ' kW</td></tr>' : ''}
+${l.floors ? '<tr><td>Floors</td><td>:</td><td>' + e(l.floors) + '</td></tr>' : ''}
+${l.availableSpace ? '<tr><td>Available Space</td><td>:</td><td>' + e(l.availableSpace) + '</td></tr>' : ''}
+${l.meterNumber ? '<tr><td>Meter No</td><td>:</td><td>' + e(l.meterNumber) + '</td></tr>' : ''}
+${l.consumerNumber ? '<tr><td>Consumer No</td><td>:</td><td>' + e(l.consumerNumber) + '</td></tr>' : ''}
 </table>` : ''}
 
 <p style="margin-top:20px">We hope you find our offer competitive. Please feel free to contact us for any further clarification.</p>
@@ -1059,34 +1061,36 @@ ${l.consumerNumber ? '<tr><td>Consumer No</td><td>:</td><td>' + l.consumerNumber
 
 function printLeadSummary(lead) {
   const w = window.open('', '_blank');
-  w.document.write(`<html><head><title>Lead - ${lead.name}</title>
+  if (!w) { alert('Popup blocked — please allow popups to print.'); return; }
+  const e = escapeHtml;
+  w.document.write(`<html><head><title>Lead - ${e(lead.name)}</title>
 <style>body{font-family:Arial,sans-serif;padding:40px;line-height:1.6;color:#333}h1{font-size:20px;margin-bottom:5px;color:#1a3a7a}.sub{color:#666;font-size:13px;margin-bottom:20px}table{width:100%;border-collapse:collapse;margin:15px 0}th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #eee;font-size:13px}th{color:#666;font-weight:600;width:35%}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style>
 </head><body>
-<h1>Lead Summary: ${lead.name}</h1>
-<div class="sub">Phone: ${lead.phone || '-'} | Generated: ${lead.dateGenerated || '-'}</div>
+<h1>Lead Summary: ${e(lead.name)}</h1>
+<div class="sub">Phone: ${e(lead.phone || '-')} | Generated: ${e(lead.dateGenerated || '-')}</div>
 <table>
-<tr><th>Status</th><td>${lead.status || '-'}</td></tr>
-<tr><th>Priority</th><td>${lead.priority || '-'}</td></tr>
-<tr><th>Email</th><td>${lead.email || '-'}</td></tr>
-<tr><th>Address</th><td>${lead.address || '-'}</td></tr>
-${lead.city ? `<tr><th>City / District</th><td>${lead.city}${lead.district ? ', ' + lead.district : ''}${lead.pincode ? ' - ' + lead.pincode : ''}</td></tr>` : ''}
-${lead.monthlyBill ? `<tr><th>Monthly Bill</th><td>${lead.monthlyBill} Units</td></tr>` : ''}
-<tr><th>kW Required</th><td>${lead.kwRequired || '-'}</td></tr>
+<tr><th>Status</th><td>${e(lead.status || '-')}</td></tr>
+<tr><th>Priority</th><td>${e(lead.priority || '-')}</td></tr>
+<tr><th>Email</th><td>${e(lead.email || '-')}</td></tr>
+<tr><th>Address</th><td>${e(lead.address || '-')}</td></tr>
+${lead.city ? `<tr><th>City / District</th><td>${e(lead.city)}${lead.district ? ', ' + e(lead.district) : ''}${lead.pincode ? ' - ' + e(lead.pincode) : ''}</td></tr>` : ''}
+${lead.monthlyBill ? `<tr><th>Monthly Bill</th><td>${e(lead.monthlyBill)} Units</td></tr>` : ''}
+<tr><th>kW Required</th><td>${e(lead.kwRequired || '-')}</td></tr>
 <tr><th>Expected Value</th><td>${lead.expectedValue ? '₹' + Number(lead.expectedValue).toLocaleString('en-IN') : '-'}</td></tr>
-<tr><th>Assigned To</th><td>${lead.assignedTo || '-'}</td></tr>
-${lead.salesExecutive ? `<tr><th>Sales Executive</th><td>${lead.salesExecutive}</td></tr>` : ''}
-${lead.supportingTeam && lead.supportingTeam.length ? `<tr><th>Supporting Team</th><td>${lead.supportingTeam.join(', ')}</td></tr>` : ''}
-${lead.expectedSignUpDate ? `<tr><th>Expected Sign-up</th><td>${lead.expectedSignUpDate}</td></tr>` : ''}
-<tr><th>Lead Source</th><td>${lead.leadReference || '-'}</td></tr>
-<tr><th>Site Visit</th><td>${lead.siteVisit || 'No'}</td></tr>
-<tr><th>Quotation Sent</th><td>${lead.quotationSent || 'No'}</td></tr>
-<tr><th>Advance Paid</th><td>${lead.advancePaid || 'No'}</td></tr>
-<tr><th>Follow-up Status</th><td>${lead.followUpStatus || '-'}</td></tr>
-<tr><th>Last Follow-up</th><td>${lead.lastFollowUp || '-'}</td></tr>
-<tr><th>Next Follow-up</th><td>${lead.nextFollowUpDate || '-'}</td></tr>
-${lead.referredByName ? `<tr><th>Referred By</th><td>${lead.referredByName} (${lead.referredByType})</td></tr>` : ''}
-${lead.siteVisit === 'Yes' && lead.roofType ? `<tr><th>Site Visit</th><td>Done${lead.siteVisitDate ? ' (' + lead.siteVisitDate + ')' : ''} | Roof: ${lead.roofType || '-'} | Floors: ${lead.floors || '-'} | Structure: ${lead.structureType || '-'} | Connection: ${lead.existingConnection || '-'}${lead.sanctionedLoad ? ' | Load: ' + lead.sanctionedLoad + 'kW' : ''}${lead.availableSpace ? ' | Space: ' + lead.availableSpace : ''}</td></tr>` : ''}
-${lead.notes ? `<tr><th>Notes</th><td>${lead.notes}</td></tr>` : ''}
+<tr><th>Assigned To</th><td>${e(lead.assignedTo || '-')}</td></tr>
+${lead.salesExecutive ? `<tr><th>Sales Executive</th><td>${e(lead.salesExecutive)}</td></tr>` : ''}
+${lead.supportingTeam && lead.supportingTeam.length ? `<tr><th>Supporting Team</th><td>${e(lead.supportingTeam.join(', '))}</td></tr>` : ''}
+${lead.expectedSignUpDate ? `<tr><th>Expected Sign-up</th><td>${e(lead.expectedSignUpDate)}</td></tr>` : ''}
+<tr><th>Lead Source</th><td>${e(lead.leadReference || '-')}</td></tr>
+<tr><th>Site Visit</th><td>${e(lead.siteVisit || 'No')}</td></tr>
+<tr><th>Quotation Sent</th><td>${e(lead.quotationSent || 'No')}</td></tr>
+<tr><th>Advance Paid</th><td>${e(lead.advancePaid || 'No')}</td></tr>
+<tr><th>Follow-up Status</th><td>${e(lead.followUpStatus || '-')}</td></tr>
+<tr><th>Last Follow-up</th><td>${e(lead.lastFollowUp || '-')}</td></tr>
+<tr><th>Next Follow-up</th><td>${e(lead.nextFollowUpDate || '-')}</td></tr>
+${lead.referredByName ? `<tr><th>Referred By</th><td>${e(lead.referredByName)} (${e(lead.referredByType)})</td></tr>` : ''}
+${lead.siteVisit === 'Yes' && lead.roofType ? `<tr><th>Site Visit</th><td>Done${lead.siteVisitDate ? ' (' + e(lead.siteVisitDate) + ')' : ''} | Roof: ${e(lead.roofType || '-')} | Floors: ${e(lead.floors || '-')} | Structure: ${e(lead.structureType || '-')} | Connection: ${e(lead.existingConnection || '-')}${lead.sanctionedLoad ? ' | Load: ' + e(lead.sanctionedLoad) + 'kW' : ''}${lead.availableSpace ? ' | Space: ' + e(lead.availableSpace) : ''}</td></tr>` : ''}
+${lead.notes ? `<tr><th>Notes</th><td>${e(lead.notes)}</td></tr>` : ''}
 </table>
 <div class="footer">Pragathi Power Solutions — Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
 </body></html>`);
@@ -1097,14 +1101,16 @@ ${lead.notes ? `<tr><th>Notes</th><td>${lead.notes}</td></tr>` : ''}
 function printFollowUpHistory(lead) {
   const history = lead.followUpHistory || [];
   const w = window.open('', '_blank');
-  w.document.write(`<html><head><title>Follow-up History - ${lead.name}</title>
+  if (!w) { alert('Popup blocked — please allow popups to print.'); return; }
+  const e = escapeHtml;
+  w.document.write(`<html><head><title>Follow-up History - ${e(lead.name)}</title>
 <style>body{font-family:Arial,sans-serif;padding:40px;line-height:1.6;color:#333}h1{font-size:18px;margin-bottom:5px;color:#1a3a7a}.sub{color:#666;font-size:13px;margin-bottom:20px}.cur{background:#f0f8f0;padding:12px 16px;border-radius:8px;margin-bottom:20px;font-size:13px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px 12px;text-align:left;font-size:13px}th{background:#f5f5f5;font-weight:600}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style>
 </head><body>
-<h1>Follow-up History: ${lead.name}</h1>
-<div class="sub">Phone: ${lead.phone || '-'} | Status: ${lead.status || '-'} | Address: ${lead.address || '-'}</div>
-<div class="cur"><strong>Current:</strong> ${lead.followUpStatus || '-'} | Last: ${lead.lastFollowUp || '-'} | Next: ${lead.nextFollowUpDate || '-'}</div>
+<h1>Follow-up History: ${e(lead.name)}</h1>
+<div class="sub">Phone: ${e(lead.phone || '-')} | Status: ${e(lead.status || '-')} | Address: ${e(lead.address || '-')}</div>
+<div class="cur"><strong>Current:</strong> ${e(lead.followUpStatus || '-')} | Last: ${e(lead.lastFollowUp || '-')} | Next: ${e(lead.nextFollowUpDate || '-')}</div>
 ${history.length > 0 ? `<table><thead><tr><th>#</th><th>Date</th><th>Status</th><th>Notes</th><th>Logged By</th></tr></thead><tbody>
-${history.map((h, i) => `<tr><td>${i + 1}</td><td>${h.date || '-'}</td><td>${h.status || '-'}</td><td>${h.notes || '-'}</td><td>${h.by || '-'}</td></tr>`).join('')}
+${history.map((h, i) => `<tr><td>${i + 1}</td><td>${e(h.date || '-')}</td><td>${e(h.status || '-')}</td><td>${e(h.notes || '-')}</td><td>${e(h.by || '-')}</td></tr>`).join('')}
 </tbody></table>` : '<p style="color:#999">No follow-up history recorded yet.</p>'}
 <div class="footer">Pragathi Power Solutions — Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
 </body></html>`);
@@ -1112,274 +1118,7 @@ ${history.map((h, i) => `<tr><td>${i + 1}</td><td>${h.date || '-'}</td><td>${h.s
   w.print();
 }
 
-function buildPOHtml(po, lead) {
-  const agreedPrice = Number(po.agreedPrice || po.totalValue || 0);
-  const l = lead || {};
-  return `<html><head><title>Purchase Order - ${po.poNumber}</title>
-<style>
-body{font-family:'Times New Roman',Times,serif;padding:40px 50px;line-height:1.8;font-size:14px;color:#000}
-h2{text-align:center;margin:0 0 20px;font-size:18px;text-decoration:underline}
-.date-line{text-align:right;margin-bottom:20px}
-.addr{margin-bottom:8px;line-height:1.6}
-.addr strong{font-size:14px}
-.lead-box{background:#f8f9fa;border:1px solid #ddd;border-radius:6px;padding:12px 16px;margin:16px 0;font-size:12px;line-height:1.7}
-.lead-box h4{margin:0 0 6px;font-size:13px;border-bottom:1px solid #ddd;padding-bottom:4px}
-.lead-grid{display:grid;grid-template-columns:1fr 1fr;gap:2px 20px}
-.lead-grid span{display:block}
-.lead-grid strong{min-width:100px;display:inline-block}
-.terms-tbl{margin:15px 0}
-.terms-tbl td{padding:4px 12px 4px 0;vertical-align:top;font-size:13px}
-.terms-tbl td:first-child{font-weight:600;white-space:nowrap;padding-right:8px}
-.terms-tbl td:nth-child(2){padding-right:8px}
-.sig-section{margin-top:60px;display:flex;justify-content:space-between}
-.sig-block{text-align:center;min-width:200px}
-.sig-line{border-top:1px solid #000;margin-top:70px;padding-top:5px;font-size:12px}
-.footer{margin-top:40px;font-size:10px;color:#999;text-align:center;border-top:1px solid #ccc;padding-top:8px}
-@media print{body{padding:20px 30px}.lead-box{background:#f8f9fa !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-</style>
-</head><body>
-<div style="text-align:center;border-bottom:2px solid #000;padding-bottom:12px;margin-bottom:16px">
-<img src="/logo.png" alt="Pragathi Power Solutions" style="max-height:60px;object-fit:contain;margin-bottom:4px" onerror="this.style.display='none'" />
-<p style="margin:2px 0;font-size:11px">19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-517501 | Mob: 9701426440 | Email: ppstirupathi@gmail.com</p>
-<p style="margin:0;font-size:11px;font-weight:600">GST: 37AAOFP6349K2ZG</p>
-</div>
-<h2>Purchase Order</h2>
-<div class="date-line">Dated: ${po.poDate || '___________'}</div>
-<div class="addr">
-<strong>To</strong><br/>
-${po.vendorName || 'M/S. Tata Power Solar Systems Limited'},<br/>
-78, Electronic City, Phase 1,<br/>
-Hosur Road, Bangalore - 560100
-</div>
-<div class="addr" style="margin-top:16px">
-<strong>Through</strong><br/><br/>
-<strong>Pragathi Power Solutions</strong><br/>
-19-3-12/J, Ground Floor, Ramanuja Circle,<br/>
-Tiruchanoor Road, Tirupati-517501, Chittoor, AP.<br/>
-Contact No: 9701426440.
-</div>
-
-<div class="lead-box">
-<h4>Lead / Customer Details</h4>
-<div class="lead-grid">
-<span><strong>Name:</strong> ${po.customerName || l.name || '-'}</span>
-<span><strong>Phone:</strong> ${po.customerPhone || l.phone || '-'}</span>
-<span><strong>Address:</strong> ${po.customerAddress || l.address || '-'}</span>
-<span><strong>City:</strong> ${l.city || '-'}${l.district ? ', ' + l.district : ''}${l.pincode ? ' - ' + l.pincode : ''}</span>
-${l.email ? `<span><strong>Email:</strong> ${l.email}</span>` : ''}
-<span><strong>Lead Status:</strong> ${l.status || '-'}</span>
-<span><strong>Priority:</strong> ${l.priority || '-'}</span>
-<span><strong>kW Required:</strong> ${po.kwRequired || l.kwRequired || '-'}</span>
-<span><strong>Monthly Bill:</strong> ${l.monthlyBill ? l.monthlyBill + ' Units' : '-'}</span>
-${l.expectedValue ? `<span><strong>Expected Value:</strong> ₹${Number(l.expectedValue).toLocaleString('en-IN')}</span>` : ''}
-<span><strong>Lead Source:</strong> ${l.leadReference || '-'}</span>
-${l.assignedTo ? `<span><strong>Assigned To:</strong> ${l.assignedTo}</span>` : ''}
-${l.salesExecutive ? `<span><strong>Sales Executive:</strong> ${l.salesExecutive}</span>` : ''}
-<span><strong>Site Visit:</strong> ${l.siteVisit || 'No'}${l.siteVisitDate ? ' (' + l.siteVisitDate + ')' : ''}</span>
-<span><strong>Quotation Sent:</strong> ${l.quotationSent || 'No'}</span>
-<span><strong>Advance Paid:</strong> ${l.advancePaid || 'No'}</span>
-${l.existingConnection ? `<span><strong>Connection:</strong> ${l.existingConnection}</span>` : ''}
-${l.roofType ? `<span><strong>Roof Type:</strong> ${l.roofType}</span>` : ''}
-${l.structureType ? `<span><strong>Structure:</strong> ${l.structureType}</span>` : ''}
-${l.floors ? `<span><strong>Floors:</strong> ${l.floors}</span>` : ''}
-${l.sanctionedLoad ? `<span><strong>Sanctioned Load:</strong> ${l.sanctionedLoad} kW</span>` : ''}
-${l.meterNumber ? `<span><strong>Meter No:</strong> ${l.meterNumber}</span>` : ''}
-${l.consumerNumber ? `<span><strong>Consumer No:</strong> ${l.consumerNumber}</span>` : ''}
-${l.availableSpace ? `<span><strong>Available Space:</strong> ${l.availableSpace}</span>` : ''}
-${l.followUpStatus ? `<span><strong>Follow-up:</strong> ${l.followUpStatus}</span>` : ''}
-${l.referredByName ? `<span><strong>Referred By:</strong> ${l.referredByName} (${l.referredByType || ''})</span>` : ''}
-${l.notes ? `<span style="grid-column:1/-1"><strong>Notes:</strong> ${l.notes}</span>` : ''}
-</div>
-</div>
-
-<p>Sir,</p>
-<p>We are pleased to release the Letter of Indent / PO for the Supply &amp; Installation of Tata Power Solar System of <strong>${po.moduleCount || '___'}</strong> Modules with <strong>${po.inverterDetails || '___'}</strong> Inverter on our Residential Building/ Plant Location <strong>${po.plantLocation || po.customerAddress || '___'}</strong>.</p>
-<p><strong>Company Scope</strong>&emsp;: ${po.companyScope || 'System Supply and Installation as per BOM.'}</p>
-<p><strong>Customer Scope</strong>&emsp;: ${po.customerScope || 'Civil works, UPVC Pipes, Additional cable if required more than 20 metres and Grid Synchronization Charges and Coordination with APSPDCL.'}</p>
-<p><strong>Final agreed price</strong>&emsp;: Rs. ${agreedPrice > 0 ? agreedPrice.toLocaleString('en-IN') : '_______________'} Including GST.</p>
-${po.referenceNumber ? `<p><strong>Note-</strong> : All Technical specifications should be inline with your Reference No: ${po.referenceNumber}.</p>` : ''}
-<br/>
-<p><strong>Other Terms &amp; Conditions</strong></p>
-<table class="terms-tbl">
-<tr><td>Taxes</td><td>:</td><td>GST included.</td></tr>
-<tr><td>Freight</td><td>:</td><td>Included in the above said prices.</td></tr>
-<tr><td>Guarantee/Warranty</td><td>:</td><td>${po.warrantyTerms || 'Solar Inverter \u2013 5 Yrs, Solar Modules- 5 Yrs +20 Yrs'}</td></tr>
-<tr><td>Delivery Lead Time</td><td>:</td><td>${po.deliveryTerms || '3-4 Weeks from the receipt of LOI /PO.'}</td></tr>
-<tr><td>Installation Lead Time</td><td>:</td><td>${po.installationTerms || 'Within 10 days from the date of material received.'}</td></tr>
-<tr><td>Pay-term</td><td>:</td><td>${po.paymentTerms || '80% Advance along with PO, 20% Before dispatching the materials against PI.'}</td></tr>
-</table>
-<p style="margin-top:30px">With Regards,</p>
-<div class="sig-section">
-<div class="sig-block"><div class="sig-line">${po.customerName || l.name || '___'}<br/>${po.customerAddress || l.address || ''}</div></div>
-</div>
-<div class="footer">Ref: ${po.poNumber} | Pragathi Power Solutions \u2014 Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
-</body></html>`;
-}
-
-function printPO(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups to print.'); return; }
-  w.document.write(buildPOHtml(po, lead));
-  w.document.close();
-  w.print();
-}
-
-function downloadPO(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups.'); return; }
-  w.document.write(buildPOHtml(po, lead));
-  w.document.close();
-}
-
-function buildBOMHtml(po, lead) {
-  const items = po.items || [];
-  const l = lead || {};
-  return `<html><head><title>Delivery Challan - ${po.poNumber}</title>
-<style>
-body{font-family:Arial,sans-serif;padding:20px 30px;font-size:12px;color:#000;line-height:1.5}
-.hdr{text-align:center;border-bottom:2px solid #000;padding-bottom:10px;margin-bottom:6px}
-.hdr h2{margin:0;font-size:16px;letter-spacing:1px}
-.hdr p{margin:2px 0;font-size:11px}
-.gst-row{display:flex;justify-content:space-between;font-size:11px;font-weight:600;margin-bottom:10px}
-.title{text-align:center;font-size:15px;font-weight:700;margin:14px 0;text-decoration:underline}
-.info-row{display:flex;justify-content:space-between;margin-bottom:12px;font-size:12px}
-.lead-info{background:#f8f9fa;border:1px solid #ddd;padding:8px 12px;margin-bottom:12px;font-size:11px;line-height:1.6}
-.lead-info strong{min-width:80px;display:inline-block}
-table{width:100%;border-collapse:collapse;margin:10px 0}
-th,td{border:1px solid #000;padding:5px 8px;text-align:left;font-size:11px}
-th{background:#f0f0f0;font-weight:700}
-.transport{margin-top:16px;font-size:12px}
-.transport td{border:none;padding:4px 10px 4px 0}
-.decl{margin-top:16px;font-size:11px}
-.sig-row{display:flex;justify-content:space-between;margin-top:40px}
-.sig-box{text-align:center;min-width:180px;font-size:11px}
-.sig-box .line{border-top:1px solid #000;margin-top:50px;padding-top:4px}
-.approvals{display:flex;justify-content:space-between;margin-top:40px;font-size:10px;text-align:center}
-.approvals div{border-top:1px solid #000;padding-top:4px;min-width:150px}
-@media print{body{padding:10px 15px}.lead-info{background:#f8f9fa !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
-</style>
-</head><body>
-<div class="hdr">
-<img src="/logo.png" alt="Pragathi Power Solutions" style="max-height:60px;object-fit:contain" onerror="this.style.display='none'" />
-<p>19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-517501, Mob: 9701426440, E-Mail: ppstirupathi@gmail.com</p>
-</div>
-<div class="gst-row">
-<span>GST : 37AAOFP6349K2ZG</span>
-<span>9700073796</span>
-</div>
-<div class="title">DELIVERY CHALLAN</div>
-<div class="info-row">
-<div><strong>Customer / Vendor Details:</strong><br/>${po.customerName || l.name || '___'}<br/>${po.customerAddress || l.address || ''}<br/>Ph: ${po.customerPhone || l.phone || ''}</div>
-<div style="text-align:right"><strong>DC.NO / D.C.Date :</strong><br/>${po.poNumber || '___'} / ${po.poDate || '___'}</div>
-</div>
-<div class="lead-info">
-<strong>Lead Status:</strong> ${l.status || '-'} &nbsp;|&nbsp;
-<strong>Priority:</strong> ${l.priority || '-'} &nbsp;|&nbsp;
-<strong>kW:</strong> ${po.kwRequired || l.kwRequired || '-'} &nbsp;|&nbsp;
-<strong>City:</strong> ${l.city || '-'}${l.district ? ', ' + l.district : ''} &nbsp;|&nbsp;
-<strong>Pincode:</strong> ${l.pincode || '-'}
-${l.monthlyBill ? ' &nbsp;|&nbsp; <strong>Monthly Bill:</strong> ' + l.monthlyBill + ' Units' : ''}
-${l.expectedValue ? ' &nbsp;|&nbsp; <strong>Value:</strong> ₹' + Number(l.expectedValue).toLocaleString('en-IN') : ''}
-<br/>
-<strong>Site Visit:</strong> ${l.siteVisit || 'No'}${l.siteVisitDate ? ' (' + l.siteVisitDate + ')' : ''} &nbsp;|&nbsp;
-<strong>Quotation:</strong> ${l.quotationSent || 'No'} &nbsp;|&nbsp;
-<strong>Advance:</strong> ${l.advancePaid || 'No'}
-${l.existingConnection ? ' &nbsp;|&nbsp; <strong>Connection:</strong> ' + l.existingConnection : ''}
-${l.roofType ? ' &nbsp;|&nbsp; <strong>Roof:</strong> ' + l.roofType : ''}
-${l.structureType ? ' &nbsp;|&nbsp; <strong>Structure:</strong> ' + l.structureType : ''}
-${l.sanctionedLoad ? ' &nbsp;|&nbsp; <strong>Load:</strong> ' + l.sanctionedLoad + ' kW' : ''}
-${l.meterNumber ? ' &nbsp;|&nbsp; <strong>Meter:</strong> ' + l.meterNumber : ''}
-${l.consumerNumber ? ' &nbsp;|&nbsp; <strong>Consumer:</strong> ' + l.consumerNumber : ''}
-${l.availableSpace ? ' &nbsp;|&nbsp; <strong>Space:</strong> ' + l.availableSpace : ''}
-${l.assignedTo ? '<br/><strong>Assigned:</strong> ' + l.assignedTo : ''}
-${l.salesExecutive ? ' &nbsp;|&nbsp; <strong>Sales Exec:</strong> ' + l.salesExecutive : ''}
-${l.leadReference ? ' &nbsp;|&nbsp; <strong>Source:</strong> ' + l.leadReference : ''}
-${l.referredByName ? ' &nbsp;|&nbsp; <strong>Referred By:</strong> ' + l.referredByName : ''}
-</div>
-<table>
-<thead><tr><th>Sl. No</th><th>Description of Material</th><th>Make</th><th>Model / Rating</th><th>Quantity</th><th>Remarks</th></tr></thead>
-<tbody>
-${items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.materialName || ''}</td><td>${item.make || ''}</td><td>${item.specification || ''}</td><td>${item.quantity || ''}</td><td>${item.remarks || ''}</td></tr>`).join('')}
-<tr style="font-weight:700"><td></td><td>Total Quantity</td><td></td><td></td><td>${items.reduce((s, it) => s + Number(it.quantity || 0), 0)}</td><td></td></tr>
-</tbody>
-</table>
-<div class="transport">
-<strong>Transportation Details</strong>
-<table><tr><td>Vehicle No:</td><td style="min-width:120px">___________</td><td>Driver Name:</td><td style="min-width:120px">___________</td><td>LR No (if any):</td><td style="min-width:100px">___________</td></tr></table>
-</div>
-<div class="decl">
-<strong>Declaration:</strong><br/>
-We hereby confirm that the above-mentioned materials are delivered in good condition at the customer site.
-</div>
-<div class="sig-row">
-<div class="sig-box">Date:<div class="line">Delivered By (Name &amp; Signature)</div></div>
-<div class="sig-box"><div class="line">Received By (Customer Name &amp; Signature)</div></div>
-</div>
-<div class="approvals">
-<div>Finance Clearance</div>
-<div>Material Availability Confirmation</div>
-<div>Material Loading Authorization</div>
-</div>
-</body></html>`;
-}
-
-function printBOM(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups to print.'); return; }
-  w.document.write(buildBOMHtml(po, lead));
-  w.document.close();
-  w.print();
-}
-
-function downloadBOM(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups.'); return; }
-  w.document.write(buildBOMHtml(po, lead));
-  w.document.close();
-}
-
-function sharePOWhatsApp(po) {
-  const items = (po.items || []).map((item, i) =>
-    (i + 1) + '. ' + item.materialName + (item.specification ? ' (' + item.specification + ')' : '') + ' - Qty: ' + item.quantity + (item.unit ? ' ' + item.unit : '') + ' - ₹' + Number(item.amount).toLocaleString('en-IN')
-  ).join('\n');
-
-  /* Extra charges breakdown */
-  const extraLines = [
-    { label: 'Discom Charges', val: Number(po.discomCharges || 0) },
-    { label: 'Civil Work', val: Number(po.civilWork || 0) },
-    { label: 'UPVC Pipes', val: Number(po.upvcPipes || 0) },
-    { label: 'Additional Relay', val: Number(po.additionalRelay || 0) },
-    { label: 'Elevated Structure', val: Number(po.elevatedStructure || 0) },
-    { label: 'Additional BOM', val: Number(po.additionalBom || 0) },
-    { label: 'Others', val: Number(po.otherCharges || 0) }
-  ].filter(e => e.val > 0);
-  const extraTotal = Number(po.extraChargesTotal || 0);
-
-  const msg = '*PURCHASE ORDER - ' + po.poNumber + '*\n' +
-    'Ref: ' + po.poNumber + '\n\n' +
-    'Date: ' + (po.poDate || '-') + '\n' +
-    'Customer: ' + (po.customerName || '-') + '\n' +
-    'Address: ' + (po.customerAddress || '-') + '\n' +
-    'kW: ' + (po.kwRequired || '-') + '\n' +
-    'Vendor: ' + (po.vendorName || '-') + '\n\n' +
-    '*BOM Items:*\n' + items + '\n\n' +
-    '*BOM Total: ₹' + Number(po.totalValue || 0).toLocaleString('en-IN') + '*' +
-    (extraLines.length > 0 ? '\n\n*Extra Charges:*\n' + extraLines.map(e => '• ' + e.label + ': ₹' + e.val.toLocaleString('en-IN')).join('\n') + '\n*Extra Total: ₹' + extraTotal.toLocaleString('en-IN') + '*' : '') +
-    (po.agreedPrice ? '\n\n*Price After Subsidy: ₹' + Number(po.agreedPrice).toLocaleString('en-IN') + '*' : '') +
-    '\n\nPayment: ' + (po.paymentTerms || '80% advance, 20% before dispatch') +
-    '\nWarranty: ' + (po.warrantyTerms || 'Inverter 5yr, Modules 5+20yr') +
-    '\nDelivery: ' + (po.deliveryTerms || '3-4 weeks') +
-    '\n\nApproved by: ' + (po.approvedBy || '-') +
-    '\nDate: ' + (po.approvalDate || '-') +
-    '\n\n_Pragathi Power Solutions_';
-
-  if (po.customerPhone) {
-    const phone = po.customerPhone.replace(/\D/g, '');
-    window.open('https://wa.me/91' + phone + '?text=' + encodeURIComponent(msg), '_blank');
-  } else {
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-  }
-}
+/* PO/BOM print/download/share functions moved to ../services/poUtils.js */
 
 /* ============ WHATSAPP SHARE - LEAD SUMMARY ============ */
 function shareLeadWhatsApp(lead) {

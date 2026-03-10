@@ -2,11 +2,13 @@ import React, { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
 import { collection, getDocs, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { DESIGNATIONS, getRoleFromDesignation, formatDate, hasAccess } from '../services/helpers';
+import { DESIGNATIONS, getRoleFromDesignation, hasAccess } from '../services/helpers';
+import { useToast } from '../context/ToastContext';
 import { Modal } from '../components/SharedUI';
 
 export default function UserManagement() {
   const { role, user: currentUser } = useAuth();
+  const { toast } = useToast();
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState('all');
@@ -22,7 +24,7 @@ export default function UserManagement() {
       list.sort((a, b) => (a.approved === b.approved ? 0 : a.approved ? 1 : -1));
       setUsers(list);
     } catch (err) {
-      console.error('Failed to fetch users:', err);
+      toast('Failed to load users: ' + err.message, 'er');
     }
     setLoading(false);
   };
@@ -30,33 +32,64 @@ export default function UserManagement() {
   useEffect(() => { fetchUsers(); }, []);
 
   const handleApprove = async (uid) => {
-    await updateDoc(doc(db, 'users', uid), { approved: true });
-    setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: true } : u));
+    try {
+      await updateDoc(doc(db, 'users', uid), { approved: true });
+      setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: true } : u));
+      toast('User approved');
+    } catch (err) { toast('Failed to approve: ' + err.message, 'er'); }
   };
 
   const handleReject = async (uid) => {
     if (!window.confirm('Remove this user? They will need to sign up again.')) return;
-    await deleteDoc(doc(db, 'users', uid));
-    setUsers(prev => prev.filter(u => u.id !== uid));
+    try {
+      await deleteDoc(doc(db, 'users', uid));
+      setUsers(prev => prev.filter(u => u.id !== uid));
+      toast('User removed');
+    } catch (err) { toast('Failed to remove: ' + err.message, 'er'); }
   };
 
   const handleDesignationChange = async (uid, newDesignation) => {
-    const newRole = getRoleFromDesignation(newDesignation);
-    await updateDoc(doc(db, 'users', uid), { designation: newDesignation, role: newRole });
-    setUsers(prev => prev.map(u => u.id === uid ? { ...u, designation: newDesignation, role: newRole } : u));
+    try {
+      const newRole = getRoleFromDesignation(newDesignation);
+      await updateDoc(doc(db, 'users', uid), { designation: newDesignation, role: newRole });
+      setUsers(prev => prev.map(u => u.id === uid ? { ...u, designation: newDesignation, role: newRole } : u));
+      toast('Designation updated');
+    } catch (err) { toast('Failed to update: ' + err.message, 'er'); }
   };
 
   const handleRevoke = async (uid) => {
     if (!window.confirm('Revoke access for this user? They will see the pending approval screen.')) return;
-    await updateDoc(doc(db, 'users', uid), { approved: false });
-    setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: false } : u));
+    try {
+      await updateDoc(doc(db, 'users', uid), { approved: false });
+      setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: false } : u));
+      toast('Access revoked');
+    } catch (err) { toast('Failed to revoke: ' + err.message, 'er'); }
   };
 
   const handleDelete = async (uid) => {
     if (!window.confirm('Permanently delete this user account? This action cannot be undone.')) return;
-    await deleteDoc(doc(db, 'users', uid));
-    setUsers(prev => prev.filter(u => u.id !== uid));
-    if (detailModal?.id === uid) setDetailModal(null);
+    try {
+      await deleteDoc(doc(db, 'users', uid));
+      setUsers(prev => prev.filter(u => u.id !== uid));
+      if (detailModal?.id === uid) setDetailModal(null);
+      toast('User deleted');
+    } catch (err) { toast('Failed to delete: ' + err.message, 'er'); }
+  };
+
+  const handleBulkSetManager = async () => {
+    if (!window.confirm('Set ALL approved users (except yourself) to Manager role? You can reassign individual permissions later in Settings.')) return;
+    try {
+      let count = 0;
+      for (const u of users) {
+        if (u.id === currentUser?.uid) continue;
+        if (!u.approved) continue;
+        if (u.role === 'manager' && u.designation === 'Operations Manager') continue;
+        await updateDoc(doc(db, 'users', u.id), { designation: 'Operations Manager', role: 'manager' });
+        count++;
+      }
+      await fetchUsers();
+      toast(`${count} user(s) updated to Manager role`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
   };
 
   const handleEditSave = async (uid, data) => {
@@ -128,9 +161,14 @@ export default function UserManagement() {
             <input className="fi" placeholder="Search by name, email, phone..." value={search} onChange={e => setSearch(e.target.value)} style={{ paddingLeft: 34, fontSize: '.84rem' }} />
           </div>
         </div>
-        <button className="btn" onClick={fetchUsers} style={{ padding: '6px 16px', fontSize: '.84rem' }}>
-          <span className="material-icons-round" style={{ fontSize: 16 }}>refresh</span> Refresh
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn bp" onClick={handleBulkSetManager} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Set all approved users to Manager role">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>admin_panel_settings</span> Set All to Manager
+          </button>
+          <button className="btn" onClick={fetchUsers} style={{ padding: '6px 16px', fontSize: '.84rem' }}>
+            <span className="material-icons-round" style={{ fontSize: 16 }}>refresh</span> Refresh
+          </button>
+        </div>
       </div>
 
       {loading ? (

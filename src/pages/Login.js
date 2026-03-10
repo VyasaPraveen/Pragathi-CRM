@@ -10,7 +10,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [phone, setPhone] = useState('');
-  const [designation, setDesignation] = useState('Admin Assistant');
+  const [designation, setDesignation] = useState('Staff');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,7 +67,7 @@ export default function Login() {
           setEmail('');
           setPassword('');
           setConfirmPassword('');
-          setDesignation('Admin Assistant');
+          setDesignation('Staff');
           setPhone('');
         }
         setLoading(false);
@@ -145,7 +145,7 @@ export default function Login() {
             <div className="fg">
               <label>Designation</label>
               <select className="fi" value={designation} onChange={e => setDesignation(e.target.value)}>
-                {DESIGNATIONS.filter(d => d.role !== 'admin').map(d => (
+                {DESIGNATIONS.filter(d => d.role !== 'admin' && d.role !== 'super_admin').map(d => (
                   <option key={d.label} value={d.label}>{d.label}</option>
                 ))}
               </select>

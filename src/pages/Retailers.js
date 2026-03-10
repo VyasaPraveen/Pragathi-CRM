@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -32,20 +32,25 @@ export default function Retailers() {
     );
   }
 
-  const getStats = (retailerId) => {
-    const referred = leads.filter(l => l.referredByType === 'Retailer' && l.referredById === retailerId);
-    const referredIds = referred.map(l => l.id);
-    const linkedPOs = leadPOs.filter(po => referredIds.includes(po.leadId));
-    const totalOrderValue = linkedPOs.reduce((s, po) => s + toNumber(po.totalValue), 0);
-    const allItems = linkedPOs.flatMap(po => (po.items || []).map(it => ({ ...it, poNumber: po.poNumber, poDate: po.poDate })));
-    return {
-      totalLeads: referred.length,
-      totalConversions: referred.filter(l => l.status === 'Converted').length,
-      totalOrders: linkedPOs.length,
-      totalOrderValue,
-      materials: allItems
-    };
-  };
+  const statsMap = useMemo(() => {
+    const map = {};
+    retailers.forEach(r => {
+      const referred = leads.filter(l => l.referredByType === 'Retailer' && l.referredById === r.id);
+      const referredIds = referred.map(l => l.id);
+      const linkedPOs = leadPOs.filter(po => referredIds.includes(po.leadId));
+      const totalOrderValue = linkedPOs.reduce((s, po) => s + toNumber(po.totalValue), 0);
+      const allItems = linkedPOs.flatMap(po => (po.items || []).map(it => ({ ...it, poNumber: po.poNumber, poDate: po.poDate })));
+      map[r.id] = {
+        totalLeads: referred.length,
+        totalConversions: referred.filter(l => l.status === 'Converted').length,
+        totalOrders: linkedPOs.length,
+        totalOrderValue,
+        materials: allItems
+      };
+    });
+    return map;
+  }, [retailers, leads, leadPOs]);
+  const getStats = (id) => statsMap[id] || { totalLeads: 0, totalConversions: 0, totalOrders: 0, totalOrderValue: 0, materials: [] };
 
   const handleSave = async (data, id) => {
     try {
