@@ -10,8 +10,8 @@ service cloud.firestore {
     function isCoordinatorPlus() { return isApproved() && (getRole() == 'super_admin' || getRole() == 'admin' || getRole() == 'manager' || getRole() == 'coordinator'); }
     match /users/{uid} {
       allow read: if isAuth();
-      allow create: if isAuth() && request.auth.uid == uid
-        && request.resource.data.role in ['staff', 'engineer'];
+      allow create: if (isAuth() && request.auth.uid == uid
+        && request.resource.data.role in ['staff', 'engineer']) || isAdmin();
       allow update, delete: if isAdmin();
     }
     match /leads/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
