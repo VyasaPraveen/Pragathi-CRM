@@ -120,8 +120,9 @@ export default function Leads() {
           name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
           email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
           city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
-          advanceAmount: 0, secondPayment: 0, thirdPayment: 0, finalPayment: 0,
+          advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
           totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
+          customerServiceNumber: cleaned.customerServiceNumber || '',
           status: 'Active'
         });
         toast(cleaned.name + ' auto-added to Customers!');
@@ -196,7 +197,7 @@ function LeadModal({ data, id, onSave, onClose }) {
     leadReference: data.leadReference || 'Website', leadReferenceOther: data.leadReferenceOther || '', dateGenerated: data.dateGenerated || new Date().toISOString().slice(0, 10),
     lastFollowUp: data.lastFollowUp || '', followUpStatus: data.followUpStatus || 'New Lead',
     siteVisit: data.siteVisit || 'No', quotationSent: data.quotationSent || 'No',
-    advancePaid: data.advancePaid || 'No', status: data.status || 'Interested',
+    advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', status: data.status || 'Interested',
     assignedTo: data.assignedTo || '', expectedValue: data.expectedValue || '',
     kwRequired: data.kwRequired || '', nextFollowUpDate: data.nextFollowUpDate || '',
     priority: data.priority || '', notes: data.notes || '',
@@ -210,7 +211,8 @@ function LeadModal({ data, id, onSave, onClose }) {
     siteVisitDate: data.siteVisitDate || '', roofType: data.roofType || '',
     floors: data.floors || '', structureType: data.structureType || '',
     existingConnection: data.existingConnection || '', sanctionedLoad: data.sanctionedLoad || '',
-    meterNumber: data.meterNumber || '', consumerNumber: data.consumerNumber || '',
+    elevatedHeight: data.elevatedHeight || '', elevatedPole: data.elevatedPole || 'North Pole',
+    customerServiceNumber: data.customerServiceNumber || data.meterNumber || '',
     availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || ''
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
@@ -259,6 +261,20 @@ function LeadModal({ data, id, onSave, onClose }) {
         e.preventDefault();
         if (!id && !form.city.trim()) { toast('City is required for new leads', 'er'); return; }
         if (duplicatePhone && !window.confirm(`Phone ${form.phone} already exists for lead "${duplicatePhone.name}". Save anyway?`)) return;
+        // Validation: Required KW must be <= Sanctioned Load
+        const kw = toNumber(form.kwRequired);
+        const sl = toNumber(form.sanctionedLoad);
+        if (kw > 0 && sl > 0 && kw > sl) {
+          alert(`⚠️ Sanctioned Load (${sl} kW) is less than Required KW (${kw} kW).\nPlease enhance the sanctioned load by ${(kw - sl).toFixed(2)} kW before proceeding.`);
+          return;
+        }
+        // Validation: Available Space must be >= kwRequired * 70
+        const minSpace = kw * 70;
+        const space = toNumber(form.availableSpace);
+        if (kw > 0 && space > 0 && space < minSpace) {
+          alert(`⚠️ Not possible for installation!\nRequired space for ${kw} kW system: ${minSpace} sq.ft\nAvailable space entered: ${space} sq.ft\nRequired space is less than minimum for installation.`);
+          return;
+        }
         onSave(form, id, prevStatus, data.expectedSignUpDate || '');
       }}>
         <div className="mb">
@@ -288,14 +304,20 @@ function LeadModal({ data, id, onSave, onClose }) {
           <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><input type="date" className="fi" value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
           <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => set('salesExecutive', e.target.value)}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><input type="date" className="fi" value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
           <div className="fg"><label>Supporting Team</label><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 12px', border: '1px solid var(--bor)', borderRadius: 8, minHeight: 38, background: '#fff' }}>{team.filter(t => t.status === 'Active').map(t => (<label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.84rem', cursor: 'pointer' }}><input type="checkbox" checked={(form.supportingTeam || []).includes(t.name)} onChange={e => { const cur = form.supportingTeam || []; if (e.target.checked) set('supportingTeam', [...cur, t.name]); else set('supportingTeam', cur.filter(n => n !== t.name)); }} />{t.name}</label>))}{team.filter(t => t.status === 'Active').length === 0 && <span style={{ color: 'var(--muted)', fontSize: '.82rem' }}>No active team members</span>}</div></div>
-          <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => set('advancePaid', e.target.value)}><option>No</option><option>Yes</option></select></div></div>
+          <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>
+          {form.advancePaid === 'Yes' && (
+            <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
+          )}
           {form.siteVisit === 'Yes' && (
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
               <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Site Visit Details</label>
-              <div className="fr"><div className="fg"><label>Visit Date</label><input type="date" className="fi" value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option></select></div></div>
-              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Structure</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option><option>Flat</option><option>Sloped</option></select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option><option>Single Phase</option><option>Three Phase</option><option>CT Meter</option><option>HT Meter</option></select></div></div>
-              <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft)</label><input className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder="e.g. 200 sq.ft" /></div></div>
-              <div className="fr"><div className="fg"><label>Meter Number</label><input className="fi" value={form.meterNumber} onChange={e => set('meterNumber', e.target.value)} /></div><div className="fg"><label>Consumer Number</label><input className="fi" value={form.consumerNumber} onChange={e => set('consumerNumber', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>Visit Date</label><input type="date" className="fi" value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div></div>
+              {form.roofType === 'Elevated' && (
+                <div className="fr"><div className="fg"><label>Height (Feet)</label><input type="number" className="fi" value={form.elevatedHeight} onChange={e => set('elevatedHeight', e.target.value)} placeholder="e.g. 10" min="1" /></div><div className="fg"><label>Pole Direction</label><select className="fi" value={form.elevatedPole} onChange={e => set('elevatedPole', e.target.value)}><option>North Pole</option><option>South Pole</option></select></div></div>
+              )}
+              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option><option>Flat</option><option>Sloped</option></select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option><option>Single Phase</option><option>Three Phase</option><option>CT Meter</option><option>HT Meter</option></select></div></div>
+              <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft) <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Min: {toNumber(form.kwRequired) > 0 ? (toNumber(form.kwRequired) * 70) + ' sq.ft' : 'kW × 70'}</span></label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder={toNumber(form.kwRequired) > 0 ? `Min ${toNumber(form.kwRequired) * 70} sq.ft` : 'e.g. 200'} /></div></div>
+              <div className="fg"><label>Customer Service Number</label><input className="fi" value={form.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} placeholder="Service number from electricity bill" /></div>
               <div className="fg"><label>Site Visit Notes</label><textarea className="fi" value={form.siteVisitNotes} onChange={e => set('siteVisitNotes', e.target.value)} rows="2" placeholder="Observations from site visit..." /></div>
             </div>
           )}
@@ -479,12 +501,12 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                     <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl" style={{ fontWeight: 700 }}>Site Visit Details</div><div className="dv">{lead.siteVisitDate ? formatDate(lead.siteVisitDate) : ''}</div></div>
                     {lead.roofType && <div className="di"><div className="dl">Roof Type</div><div className="dv">{lead.roofType}</div></div>}
                     {lead.floors && <div className="di"><div className="dl">Floors</div><div className="dv">{lead.floors}</div></div>}
-                    {lead.structureType && <div className="di"><div className="dl">Structure</div><div className="dv">{lead.structureType}</div></div>}
+                    {lead.structureType && <div className="di"><div className="dl">Tilt</div><div className="dv">{lead.structureType}</div></div>}
+                    {lead.roofType === 'Elevated' && lead.elevatedHeight && <div className="di"><div className="dl">Elevated Height</div><div className="dv">{lead.elevatedHeight} ft ({lead.elevatedPole || 'North Pole'})</div></div>}
                     {lead.existingConnection && <div className="di"><div className="dl">Connection</div><div className="dv">{lead.existingConnection}</div></div>}
                     {lead.sanctionedLoad && <div className="di"><div className="dl">Sanctioned Load</div><div className="dv">{lead.sanctionedLoad} kW</div></div>}
-                    {lead.availableSpace && <div className="di"><div className="dl">Available Space</div><div className="dv">{lead.availableSpace}</div></div>}
-                    {lead.meterNumber && <div className="di"><div className="dl">Meter No.</div><div className="dv">{lead.meterNumber}</div></div>}
-                    {lead.consumerNumber && <div className="di"><div className="dl">Consumer No.</div><div className="dv">{lead.consumerNumber}</div></div>}
+                    {lead.availableSpace && <div className="di"><div className="dl">Available Space</div><div className="dv">{lead.availableSpace} sq.ft</div></div>}
+                    {(lead.customerServiceNumber || lead.meterNumber) && <div className="di"><div className="dl">Customer Service No.</div><div className="dv">{lead.customerServiceNumber || lead.meterNumber}</div></div>}
                     {lead.siteVisitNotes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Site Visit Notes</div><div className="dv">{lead.siteVisitNotes}</div></div>}
                   </>
                 )}
@@ -1054,13 +1076,13 @@ ${l.siteVisit === 'Yes' ? `
 <p style="margin-top:16px"><strong>Site Details:</strong></p>
 <table class="terms">
 ${l.roofType ? '<tr><td>Roof Type</td><td>:</td><td>' + e(l.roofType) + '</td></tr>' : ''}
-${l.structureType ? '<tr><td>Structure</td><td>:</td><td>' + e(l.structureType) + '</td></tr>' : ''}
+${l.structureType ? '<tr><td>Tilt</td><td>:</td><td>' + e(l.structureType) + '</td></tr>' : ''}
+${l.roofType === 'Elevated' && l.elevatedHeight ? '<tr><td>Elevated Height</td><td>:</td><td>' + e(l.elevatedHeight) + ' ft (' + e(l.elevatedPole || 'North Pole') + ')</td></tr>' : ''}
 ${l.existingConnection ? '<tr><td>Existing Connection</td><td>:</td><td>' + e(l.existingConnection) + '</td></tr>' : ''}
 ${l.sanctionedLoad ? '<tr><td>Sanctioned Load</td><td>:</td><td>' + e(l.sanctionedLoad) + ' kW</td></tr>' : ''}
 ${l.floors ? '<tr><td>Floors</td><td>:</td><td>' + e(l.floors) + '</td></tr>' : ''}
-${l.availableSpace ? '<tr><td>Available Space</td><td>:</td><td>' + e(l.availableSpace) + '</td></tr>' : ''}
-${l.meterNumber ? '<tr><td>Meter No</td><td>:</td><td>' + e(l.meterNumber) + '</td></tr>' : ''}
-${l.consumerNumber ? '<tr><td>Consumer No</td><td>:</td><td>' + e(l.consumerNumber) + '</td></tr>' : ''}
+${l.availableSpace ? '<tr><td>Available Space</td><td>:</td><td>' + e(l.availableSpace) + ' sq.ft</td></tr>' : ''}
+${(l.customerServiceNumber || l.meterNumber) ? '<tr><td>Customer Service No</td><td>:</td><td>' + e(l.customerServiceNumber || l.meterNumber) + '</td></tr>' : ''}
 </table>` : ''}
 
 <p style="margin-top:20px">We hope you find our offer competitive. Please feel free to contact us for any further clarification.</p>
