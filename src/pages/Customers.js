@@ -364,9 +364,26 @@ function CustomerModal({ data, id, onSave, onClose }) {
 /* ============ CUSTOMER DETAIL MODAL (10 TABS) ============ */
 function CustomerDetailModal({ customer, onClose, onEdit }) {
   const [tab, setTab] = useState('info');
+  const [instModal, setInstModal] = useState(false);
   const { leadPOs, leads, installations } = useData();
   const { role } = useAuth();
+  const { toast } = useToast();
   const canEdit = hasAccess(role, 'coordinator');
+
+  const handleInstSave = async (data, id) => {
+    try {
+      data.progress = Math.min(100, Math.max(0, toNumber(data.progress)));
+      data.floors = toNumber(data.floors);
+      if (id) {
+        await updateDocument('installations', id, data);
+        toast('Installation updated');
+      } else {
+        await addDocument('installations', { ...data, customerName: customer.name, phone: customer.phone });
+        toast('Installation record created');
+      }
+      setInstModal(false);
+    } catch (e) { toast(e.message, 'er'); }
+  };
 
   const c = customer;
   const linkedLead = leads.find(l => l.phone === c.phone && l.name === c.name) || leads.find(l => l.phone === c.phone);
@@ -565,61 +582,122 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
           {/* ===== TAB 4: INSTALLATION DETAILS ===== */}
           {tab === 'installation' && (
             <div>
-              <SectionTitle>Installation Status</SectionTitle>
-              <InfoGrid>
-                <div className="di"><div className="dl">Installation Status</div><div className="dv"><StatusBadge status={c.installationStatus || 'Pending'} /></div></div>
-                {c.advancePaidDate && <InfoItem label="Advance Paid Date" value={formatDate(c.advancePaidDate)} />}
-              </InfoGrid>
+              {/* Header actions */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div className="di" style={{ margin: 0 }}><div className="dl" style={{ marginBottom: 2 }}>Status</div><div className="dv"><StatusBadge status={c.installationStatus || 'Pending'} /></div></div>
+                  {c.advancePaidDate && <div className="di" style={{ margin: 0 }}><div className="dl" style={{ marginBottom: 2 }}>Advance Paid</div><div className="dv">{formatDate(c.advancePaidDate)}</div></div>}
+                </div>
+                {canEdit && (
+                  <button className="btn bp bsm" onClick={() => setInstModal(true)}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>{inst ? 'edit' : 'add'}</span>
+                    {inst ? 'Edit Installation' : 'Create Installation Record'}
+                  </button>
+                )}
+              </div>
 
               {inst ? (<>
-                <SectionTitle>Installation Record</SectionTitle>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 10, marginBottom: 16 }}>
-                  <div style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: 10, padding: 14, textAlign: 'center', color: '#fff' }}>
-                    <div style={{ fontWeight: 700, fontSize: '1.4rem' }}>{inst.progress || 0}%</div>
-                    <div style={{ fontSize: '.72rem', opacity: .85 }}>Progress</div>
+                {/* Progress */}
+                <div style={{ marginBottom: 20 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontWeight: 700, fontSize: '.88rem' }}>Installation Progress</span>
+                    <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--pri)' }}>{inst.progress || 0}%</span>
                   </div>
-                  <div style={{ background: 'linear-gradient(135deg,#f093fb,#f5576c)', borderRadius: 10, padding: 14, textAlign: 'center', color: '#fff' }}>
-                    <div style={{ fontWeight: 700, fontSize: '1rem' }}>{inst.totalDays || '-'}</div>
-                    <div style={{ fontSize: '.72rem', opacity: .85 }}>Total Days</div>
+                  <div style={{ height: 12, borderRadius: 8, background: 'var(--bor)', overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${inst.progress || 0}%`, background: 'linear-gradient(90deg,#667eea,#764ba2)', borderRadius: 8, transition: 'width .4s' }} />
                   </div>
                 </div>
+
+                {/* Team & Schedule */}
+                <SectionTitle>Team & Schedule</SectionTitle>
                 <InfoGrid>
                   <InfoItem label="Team Leader" value={inst.teamLeader} />
+                  <InfoItem label="Team Size" value={inst.numPeople} />
                   <InfoItem label="Start Date" value={formatDate(inst.startDate)} />
-                  <InfoItem label="Material Dispatched" value={inst.materialDispatched} />
-                  {inst.installationReport && <InfoItem label="Installation Report" value={inst.installationReport} fullWidth />}
+                  <InfoItem label="Total Days" value={inst.totalDays} />
                 </InfoGrid>
+
+                {/* Site & Roof */}
+                <SectionTitle>Site & Roof Details</SectionTitle>
+                <InfoGrid>
+                  <div className="di"><div className="dl">Site Visit</div><div className="dv"><span className={`st ${inst.siteVisitStatus === 'Visited' ? 'st-g' : 'st-x'}`}>{inst.siteVisitStatus || 'Not Visited'}</span></div></div>
+                  <InfoItem label="Roof Type" value={inst.roofType} />
+                  <InfoItem label="Floors" value={inst.floors} />
+                  <InfoItem label="Structure" value={inst.structureType} />
+                </InfoGrid>
+
+                {/* Material & Quality */}
+                <SectionTitle>Material & Quality</SectionTitle>
+                <InfoGrid>
+                  <div className="di"><div className="dl">Material Dispatched</div><div className="dv"><span className={`st ${inst.materialDispatched === 'Yes' ? 'st-g' : 'st-o'}`}>{inst.materialDispatched === 'Yes' ? 'Dispatched' : 'Pending'}</span></div></div>
+                  <div className="di"><div className="dl">Quality Inspection</div><div className="dv"><StatusBadge status={inst.qualityInspection || 'Pending'} /></div></div>
+                  <div className="di"><div className="dl">Guarantee Card</div><div className="dv"><span className={`st ${inst.guaranteeCard === 'Yes' ? 'st-g' : 'st-x'}`}>{inst.guaranteeCard === 'Yes' ? 'Issued' : 'Not Issued'}</span></div></div>
+                </InfoGrid>
+
+                {/* DISCOM & Subsidy */}
+                <SectionTitle>DISCOM & Subsidy Process</SectionTitle>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 16 }}>
+                  {[
+                    { label: 'Feasibility', status: inst.discomFeasibility, date: inst.discomFeasibilityDate },
+                    { label: 'Doc Submission', status: inst.docSubmission, date: inst.docSubmissionDate },
+                    { label: 'DISCOM Inspection', status: inst.discomInspection, date: inst.discomInspectionDate },
+                    { label: 'Meter Change', status: inst.meterChange, date: inst.meterChangeDate },
+                    { label: 'Flagging', status: inst.flaggingStatus, date: inst.flaggingDate },
+                    { label: 'Subsidy', status: inst.subsidyStatus, date: inst.subsidyDate },
+                  ].map(row => (
+                    <div key={row.label} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', background: '#fafbfc' }}>
+                      <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginBottom: 4, textTransform: 'uppercase', fontWeight: 600 }}>{row.label}</div>
+                      <StatusBadge status={row.status || 'Pending'} />
+                      {row.date && <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: 4 }}>{formatDate(row.date)}</div>}
+                    </div>
+                  ))}
+                </div>
+
+                {/* Material Consumption */}
+                <SectionTitle>Material Consumption</SectionTitle>
+                <InfoGrid>
+                  {inst.acCableQty && <InfoItem label="AC Cable" value={`${inst.acCableQty} mtrs${inst.acCableSize ? ' (' + inst.acCableSize + ')' : ''}`} />}
+                  {inst.dcCableQty && <InfoItem label="DC Cable" value={`${inst.dcCableQty} mtrs${inst.dcCableSize ? ' (' + inst.dcCableSize + ')' : ''}`} />}
+                  {inst.earthCable && <InfoItem label="Earth Cable" value={`${inst.earthCable} mtrs${inst.earthCableSize ? ' (' + inst.earthCableSize + ')' : ''}`} />}
+                  {inst.upvcPipes && <InfoItem label="UPVC Pipes" value={`${inst.upvcPipes} pcs${inst.upvcPipeSize ? ' (' + inst.upvcPipeSize + ')' : ''}`} />}
+                  {!inst.acCableQty && !inst.dcCableQty && !inst.earthCable && !inst.upvcPipes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dv" style={{ color: 'var(--muted)' }}>No material consumption data entered</div></div>}
+                </InfoGrid>
+
+                {/* Service Dates */}
+                <SectionTitle>Service Dates</SectionTitle>
+                <InfoGrid>
+                  <InfoItem label="1st Service Date" value={formatDate(inst.firstServiceDate)} />
+                  <InfoItem label="Next Service Date" value={formatDate(inst.nextServiceDate)} />
+                </InfoGrid>
+
+                {/* Hand Sketch */}
+                {inst.handSketch && (<>
+                  <SectionTitle>Hand Sketch</SectionTitle>
+                  <img src={inst.handSketch} alt="Hand Sketch" style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
+                </>)}
+
+                {/* Installation Report */}
+                {inst.installationReport && (<>
+                  <SectionTitle>Installation Report</SectionTitle>
+                  <div style={{ background: '#fafbfc', borderRadius: 10, padding: 14, border: '1px solid var(--bor)', fontSize: '.88rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{inst.installationReport}</div>
+                </>)}
+
+                {/* Installation Picture (from customer) */}
+                {c.installationPicUrl && (<>
+                  <SectionTitle>Installation Picture</SectionTitle>
+                  <img src={c.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
+                </>)}
+
               </>) : (
-                <EmptyState icon="construction" title="No installation record" message="Installation details will appear here once linked." />
+                <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+                  <span className="material-icons-round" style={{ fontSize: 48, color: 'var(--muted)', opacity: .4 }}>construction</span>
+                  <p style={{ color: 'var(--muted)', margin: '12px 0 16px' }}>No installation record linked to this customer yet.</p>
+                  {canEdit && <button className="btn bp" onClick={() => setInstModal(true)}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create Installation Record</button>}
+                </div>
               )}
 
-              {c.installationPicUrl && (<>
-                <SectionTitle>Installation Picture</SectionTitle>
-                <img src={c.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
-              </>)}
-
-              {customerPOs.length > 0 && (<>
-                <SectionTitle>Purchase Orders</SectionTitle>
-                {customerPOs.map(po => (
-                  <div key={po.id} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: 14, marginBottom: 10, background: '#fafbfc' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                        <strong>{po.poNumber}</strong><StatusBadge status={po.status} />
-                      </div>
-                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                        <button className="btn bsm bo" onClick={() => printPO(po, linkedLead || c)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> PO</button>
-                        <button className="btn bsm bo" onClick={() => downloadPO(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> PO</button>
-                        <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>share</span></button>
-                      </div>
-                    </div>
-                    <div className="dg" style={{ marginTop: 10, gap: 6 }}>
-                      <InfoItem label="PO Date" value={po.poDate} />
-                      <InfoItem label="Vendor" value={po.vendorName} />
-                      <div className="di"><div className="dl">Total Value</div><div className="dv" style={{ fontWeight: 700 }}>{formatCurrency(po.totalValue)}</div></div>
-                    </div>
-                  </div>
-                ))}
-              </>)}
+              {/* Installation modal */}
+              {instModal && <InstallationInlineModal data={inst || { customerName: c.name, phone: c.phone, address: c.address }} id={inst?.id} onSave={handleInstSave} onClose={() => setInstModal(false)} />}
             </div>
           )}
 
@@ -865,6 +943,111 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ============ INSTALLATION INLINE MODAL (from Customer view) ============ */
+function InstallationInlineModal({ data, id, onSave, onClose }) {
+  const d = data || {};
+  const [f, setF] = useState({
+    customerName: d.customerName || '', phone: d.phone || '', address: d.address || '',
+    siteVisitStatus: d.siteVisitStatus || 'Not Visited',
+    roofType: d.roofType || 'RCC', floors: d.floors || 1, structureType: d.structureType || 'Flat',
+    startDate: d.startDate || '', totalDays: d.totalDays || '', teamLeader: d.teamLeader || '',
+    numPeople: d.numPeople || '', materialDispatched: d.materialDispatched || 'No',
+    progress: d.progress || 0,
+    qualityInspection: d.qualityInspection || 'Pending', guaranteeCard: d.guaranteeCard || 'No',
+    customerReference: d.customerReference || 'No',
+    referenceLeadName: d.referenceLeadName || '', referencePhoneNumber: d.referencePhoneNumber || '',
+    // DISCOM & Subsidy
+    discomFeasibility: d.discomFeasibility || 'Pending', discomFeasibilityDate: d.discomFeasibilityDate || '',
+    docSubmission: d.docSubmission || 'Pending', docSubmissionDate: d.docSubmissionDate || '',
+    discomInspection: d.discomInspection || 'Pending', discomInspectionDate: d.discomInspectionDate || '',
+    meterChange: d.meterChange || 'Pending', meterChangeDate: d.meterChangeDate || '',
+    flaggingStatus: d.flaggingStatus || 'Pending', flaggingDate: d.flaggingDate || '',
+    subsidyStatus: d.subsidyStatus || 'Not Applied', subsidyDate: d.subsidyDate || '',
+    // Material Consumption
+    acCableQty: d.acCableQty || '', acCableSize: d.acCableSize || '',
+    dcCableQty: d.dcCableQty || '', dcCableSize: d.dcCableSize || '',
+    earthCable: d.earthCable || '', earthCableSize: d.earthCableSize || '',
+    upvcPipes: d.upvcPipes || '', upvcPipeSize: d.upvcPipeSize || '',
+    // Service
+    firstServiceDate: d.firstServiceDate || '', nextServiceDate: d.nextServiceDate || '',
+    // Documents
+    handSketch: d.handSketch || '', installationReport: d.installationReport || '',
+  });
+  const [tab, setTab] = useState('basic');
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const ITABS = [
+    { key: 'basic', label: 'Basic', icon: 'construction' },
+    { key: 'discom', label: 'DISCOM & Subsidy', icon: 'account_balance' },
+    { key: 'materials', label: 'Materials', icon: 'cable' },
+    { key: 'docs', label: 'Documents', icon: 'description' },
+  ];
+
+  const ts = (key) => ({
+    padding: '9px 13px', fontWeight: 600, fontSize: '.78rem',
+    color: tab === key ? 'var(--pri)' : 'var(--muted)',
+    borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
+    marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 4,
+    background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+  });
+
+  return (
+    <Modal title={id ? 'Edit Installation Record' : 'Create Installation Record'} onClose={onClose} wide>
+      <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
+        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', marginBottom: 16, overflowX: 'auto' }}>
+          {ITABS.map(t => <button key={t.key} type="button" onClick={() => setTab(t.key)} style={ts(t.key)}><span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}</button>)}
+        </div>
+        <div className="mb">
+          {/* Basic Tab */}
+          {tab === 'basic' && (<>
+            <div className="fr"><div className="fg"><label>Customer Name</label><input className="fi" value={f.customerName} onChange={e => set('customerName', e.target.value)} /></div><div className="fg"><label>Phone</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} /></div></div>
+            <div className="fr"><div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div><div className="fg"><label>Site Visit Status</label><select className="fi" value={f.siteVisitStatus} onChange={e => set('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div></div>
+            <div className="fr3"><div className="fg"><label>Roof Type</label><select className="fi" value={f.roofType} onChange={e => set('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option></select></div><div className="fg"><label>Floors</label><input type="number" className="fi" value={f.floors} onChange={e => set('floors', e.target.value)} /></div><div className="fg"><label>Structure</label><select className="fi" value={f.structureType} onChange={e => set('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div></div>
+            <div className="fr3"><div className="fg"><label>Start Date</label><input type="date" className="fi" value={f.startDate} onChange={e => set('startDate', e.target.value)} /></div><div className="fg"><label>Total Days</label><input type="number" className="fi" value={f.totalDays} onChange={e => set('totalDays', e.target.value)} /></div><div className="fg"><label>Team Leader</label><input className="fi" value={f.teamLeader} onChange={e => set('teamLeader', e.target.value)} /></div></div>
+            <div className="fr3"><div className="fg"><label>Team Size</label><input type="number" className="fi" value={f.numPeople} onChange={e => set('numPeople', e.target.value)} /></div><div className="fg"><label>Material Dispatched</label><select className="fi" value={f.materialDispatched} onChange={e => set('materialDispatched', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Progress %</label><input type="number" className="fi" value={f.progress} min="0" max="100" onChange={e => set('progress', e.target.value)} /></div></div>
+            <div className="fr"><div className="fg"><label>Quality Inspection</label><select className="fi" value={f.qualityInspection} onChange={e => set('qualityInspection', e.target.value)}><option>Pending</option><option>Done</option><option>Approved</option></select></div><div className="fg"><label>Guarantee Card</label><select className="fi" value={f.guaranteeCard} onChange={e => set('guaranteeCard', e.target.value)}><option>No</option><option>Yes</option></select></div></div>
+            <div className="fr"><div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={f.firstServiceDate} onChange={e => set('firstServiceDate', e.target.value)} /></div><div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={f.nextServiceDate} onChange={e => set('nextServiceDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Customer Reference?</label><select className="fi" value={f.customerReference} onChange={e => set('customerReference', e.target.value)}><option>No</option><option>Yes</option></select></div>
+            {f.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>}
+          </>)}
+          {/* DISCOM & Subsidy Tab */}
+          {tab === 'discom' && (<>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', marginBottom: 10 }}>DISCOM & Subsidy Tracking</div>
+            {[
+              { label: 'Feasibility Status', key: 'discomFeasibility', dateKey: 'discomFeasibilityDate', opts: ['Pending','Done','Approved'] },
+              { label: 'Doc Submission', key: 'docSubmission', dateKey: 'docSubmissionDate', opts: ['Pending','Done','Approved'] },
+              { label: 'DISCOM Inspection', key: 'discomInspection', dateKey: 'discomInspectionDate', opts: ['Pending','Done','Approved'] },
+              { label: 'Meter Change', key: 'meterChange', dateKey: 'meterChangeDate', opts: ['Pending','Done'] },
+              { label: 'Flagging', key: 'flaggingStatus', dateKey: 'flaggingDate', opts: ['Pending','Done'] },
+              { label: 'Subsidy', key: 'subsidyStatus', dateKey: 'subsidyDate', opts: ['Not Applied','Pending','Approved','Released'] },
+            ].map(row => (
+              <div className="fr" key={row.key}>
+                <div className="fg"><label>{row.label}</label><select className="fi" value={f[row.key]} onChange={e => set(row.key, e.target.value)}>{row.opts.map(o => <option key={o}>{o}</option>)}</select></div>
+                <div className="fg"><label>Date</label><input type="date" className="fi" value={f[row.dateKey]} onChange={e => set(row.dateKey, e.target.value)} /></div>
+              </div>
+            ))}
+          </>)}
+          {/* Materials Tab */}
+          {tab === 'materials' && (<>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', marginBottom: 10 }}>Material Consumption</div>
+            <div className="fr"><div className="fg"><label>AC Cable Qty (mtrs)</label><input type="number" className="fi" value={f.acCableQty} onChange={e => set('acCableQty', e.target.value)} /></div><div className="fg"><label>AC Cable Size (mm)</label><input className="fi" value={f.acCableSize} onChange={e => set('acCableSize', e.target.value)} placeholder="e.g. 4mm" /></div></div>
+            <div className="fr"><div className="fg"><label>DC Cable Qty (mtrs)</label><input type="number" className="fi" value={f.dcCableQty} onChange={e => set('dcCableQty', e.target.value)} /></div><div className="fg"><label>DC Cable Size (mm)</label><input className="fi" value={f.dcCableSize} onChange={e => set('dcCableSize', e.target.value)} placeholder="e.g. 6mm" /></div></div>
+            <div className="fr"><div className="fg"><label>Earth Cable (mtrs)</label><input type="number" className="fi" value={f.earthCable} onChange={e => set('earthCable', e.target.value)} /></div><div className="fg"><label>Earth Cable Size (mm)</label><input className="fi" value={f.earthCableSize} onChange={e => set('earthCableSize', e.target.value)} placeholder="e.g. 4mm" /></div></div>
+            <div className="fr"><div className="fg"><label>UPVC Pipes (pcs)</label><input type="number" className="fi" value={f.upvcPipes} onChange={e => set('upvcPipes', e.target.value)} /></div><div className="fg"><label>UPVC Pipe Size (mm)</label><input className="fi" value={f.upvcPipeSize} onChange={e => set('upvcPipeSize', e.target.value)} placeholder="e.g. 25mm" /></div></div>
+          </>)}
+          {/* Documents Tab */}
+          {tab === 'docs' && (<>
+            <div className="fg"><label>Hand Sketch URL</label><input className="fi" type="url" value={f.handSketch} onChange={e => set('handSketch', e.target.value)} placeholder="https://..." /></div>
+            {f.handSketch && <img src={f.handSketch} alt="Hand Sketch" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)', marginTop: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
+            <div className="fg" style={{ marginTop: 10 }}><label>Installation Report / Notes</label><textarea className="fi" value={f.installationReport} onChange={e => set('installationReport', e.target.value)} rows="4" placeholder="Enter installation report details..." /></div>
+          </>)}
+        </div>
+        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Create'}</button></div>
+      </form>
+    </Modal>
   );
 }
 
