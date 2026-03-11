@@ -96,6 +96,19 @@ export default function Leads() {
         }
         // Notify admins about new lead
         notifyAdmins(users, { title: 'New Lead Created', message: `New lead "${cleaned.name}" created`, type: 'lead', module: 'leads', relatedId: newId });
+        // Auto-create customer if lead is created directly as Converted
+        if (cleaned.status === 'Converted') {
+          await addDocument('customers', {
+            name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
+            email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
+            city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
+            advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
+            totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
+            customerServiceNumber: cleaned.customerServiceNumber || '',
+            status: 'Active'
+          });
+          toast(cleaned.name + ' auto-added to Customers!');
+        }
         // Auto-open lead detail on PO tab for the new lead
         setModal(null);
         setDetailTab('pos');
