@@ -31,7 +31,7 @@ export default function UserManagement() {
     setLoading(false);
   };
 
-  useEffect(() => { fetchUsers(); }, []);
+  useEffect(() => { fetchUsers(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleApprove = async (uid) => {
     try {
@@ -39,15 +39,6 @@ export default function UserManagement() {
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: true } : u));
       toast('User approved');
     } catch (err) { toast('Failed to approve: ' + err.message, 'er'); }
-  };
-
-  const handleReject = async (uid) => {
-    if (!window.confirm('Remove this user? They will need to sign up again.')) return;
-    try {
-      await deleteDoc(doc(db, 'users', uid));
-      setUsers(prev => prev.filter(u => u.id !== uid));
-      toast('User removed');
-    } catch (err) { toast('Failed to remove: ' + err.message, 'er'); }
   };
 
   const handleDesignationChange = async (uid, newDesignation) => {

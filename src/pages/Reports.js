@@ -18,7 +18,7 @@ function downloadCSV(filename, headers, rows) {
 }
 
 export default function Reports() {
-  const { leads, customers, installations, income, expenses, retailers, influencers, team, purchaseOrders, leadPOs } = useData();
+  const { leads, customers, installations, income, expenses, retailers, influencers, team, leadPOs } = useData();
   const tI = income.reduce((s, i) => s + toNumber(i.amount), 0);
   const tE = expenses.reduce((s, i) => s + toNumber(i.amount), 0);
 
