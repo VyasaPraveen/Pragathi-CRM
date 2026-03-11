@@ -222,33 +222,34 @@ function CustomerModal({ data, id, onSave, onClose }) {
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   const EDIT_TABS = [
-    { key: 'info', label: 'Customer Info', icon: 'person' },
-    { key: 'payment', label: 'Payment', icon: 'payments' },
-    { key: 'dispatch', label: 'Dispatch', icon: 'local_shipping' },
-    { key: 'installation', label: 'Installation', icon: 'construction' },
-    { key: 'quality', label: 'Quality', icon: 'fact_check' },
-    { key: 'warranty', label: 'Warranty', icon: 'verified_user' },
-    { key: 'subsidy', label: 'Subsidy', icon: 'savings' },
-    { key: 'sync', label: 'Sync & Flag', icon: 'sync' },
-    { key: 'firstbill', label: 'First Bill', icon: 'receipt' },
-    { key: 'om', label: 'O&M', icon: 'build_circle' },
+    { key: 'info',         label: 'Customer Info', icon: 'person',          color: '#3b82f6' },
+    { key: 'payment',      label: 'Payment',       icon: 'payments',        color: '#10b981' },
+    { key: 'dispatch',     label: 'Dispatch',      icon: 'local_shipping',  color: '#f59e0b' },
+    { key: 'installation', label: 'Installation',  icon: 'construction',    color: '#8b5cf6' },
+    { key: 'quality',      label: 'Quality',       icon: 'fact_check',      color: '#06b6d4' },
+    { key: 'warranty',     label: 'Warranty',      icon: 'verified_user',   color: '#059669' },
+    { key: 'subsidy',      label: 'Subsidy',       icon: 'savings',         color: '#d97706' },
+    { key: 'sync',         label: 'Sync & Flag',   icon: 'sync',            color: '#6366f1' },
+    { key: 'firstbill',    label: 'First Bill',    icon: 'receipt',         color: '#f43f5e' },
+    { key: 'om',           label: 'O&M',           icon: 'build_circle',    color: '#14b8a6' },
   ];
 
-  const tabStyle = (key) => ({
-    padding: '9px 13px', fontWeight: 600, fontSize: '.78rem',
-    color: tab === key ? 'var(--pri)' : 'var(--muted)',
-    borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
-    marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 4,
-    background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+  const tabStyle = (key, color) => ({
+    padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
+    color: tab === key ? '#fff' : color,
+    background: tab === key ? color : `${color}1a`,
+    border: `1.5px solid ${tab === key ? color : `${color}55`}`,
+    display: 'flex', alignItems: 'center', gap: 4,
+    cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .15s',
   });
 
   return (
     <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
         {/* Tab bar */}
-        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', marginBottom: 16, overflowX: 'auto' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, padding: '4px 0' }}>
           {EDIT_TABS.map(t => (
-            <button key={t.key} type="button" onClick={() => setTab(t.key)} style={tabStyle(t.key)}>
+            <button key={t.key} type="button" onClick={() => setTab(t.key)} style={tabStyle(t.key, t.color)}>
               <span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}
             </button>
           ))}
@@ -399,24 +400,25 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
   const balance = toNumber(c.totalPrice) - paid;
 
   const TABS = [
-    { key: 'info', label: 'Customer Info', icon: 'person' },
-    { key: 'payment', label: 'Payment Details', icon: 'payments' },
-    { key: 'dispatch', label: 'Material Dispatch', icon: 'local_shipping' },
-    { key: 'installation', label: 'Installation', icon: 'construction' },
-    { key: 'quality', label: 'Quality Inspection', icon: 'fact_check' },
-    { key: 'warranty', label: 'Warranty Details', icon: 'verified_user' },
-    { key: 'subsidy', label: 'Subsidy Process', icon: 'savings' },
-    { key: 'sync', label: 'Sync & Flagging', icon: 'sync' },
-    { key: 'firstbill', label: 'First Bill', icon: 'receipt' },
-    { key: 'om', label: 'Next O&M', icon: 'build_circle' },
+    { key: 'info',         label: 'Customer Info',    icon: 'person',         color: '#3b82f6' },
+    { key: 'payment',      label: 'Payment Details',  icon: 'payments',       color: '#10b981' },
+    { key: 'dispatch',     label: 'Material Dispatch',icon: 'local_shipping', color: '#f59e0b' },
+    { key: 'installation', label: 'Installation',     icon: 'construction',   color: '#8b5cf6' },
+    { key: 'quality',      label: 'Quality Inspection',icon: 'fact_check',    color: '#06b6d4' },
+    { key: 'warranty',     label: 'Warranty Details', icon: 'verified_user',  color: '#059669' },
+    { key: 'subsidy',      label: 'Subsidy Process',  icon: 'savings',        color: '#d97706' },
+    { key: 'sync',         label: 'Sync & Flagging',  icon: 'sync',           color: '#6366f1' },
+    { key: 'firstbill',    label: 'First Bill',       icon: 'receipt',        color: '#f43f5e' },
+    { key: 'om',           label: 'Next O&M',         icon: 'build_circle',   color: '#14b8a6' },
   ];
 
-  const tabStyle = (key) => ({
-    padding: '11px 14px', fontWeight: 600, fontSize: '.8rem',
-    color: tab === key ? 'var(--pri)' : 'var(--muted)',
-    borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
-    marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 5,
-    background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+  const tabStyle = (key, color) => ({
+    padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
+    color: tab === key ? '#fff' : color,
+    background: tab === key ? color : `${color}1a`,
+    border: `1.5px solid ${tab === key ? color : `${color}55`}`,
+    display: 'flex', alignItems: 'center', gap: 5,
+    cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .15s',
   });
 
   const SectionTitle = ({ children }) => (
@@ -452,10 +454,10 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
         </div>
 
         {/* Tab bar */}
-        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', padding: '0 4px', overflowX: 'auto' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 24px 0', borderBottom: '1px solid var(--bor)', paddingBottom: 12 }}>
           {TABS.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={tabStyle(t.key)}>
-              <span className="material-icons-round" style={{ fontSize: 16 }}>{t.icon}</span>{t.label}
+            <button key={t.key} onClick={() => setTab(t.key)} style={tabStyle(t.key, t.color)}>
+              <span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}
             </button>
           ))}
         </div>
