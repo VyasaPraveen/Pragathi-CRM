@@ -222,7 +222,8 @@ function LeadModal({ data, id, onSave, onClose }) {
     siteVisitDate: data.siteVisitDate || '', roofType: data.roofType || '',
     floors: data.floors || '', structureType: data.structureType || '',
     existingConnection: data.existingConnection || '', sanctionedLoad: data.sanctionedLoad || '',
-    elevatedHeight: data.elevatedHeight || '', elevatedPole: data.elevatedPole || 'North Pole',
+    elevatedNorthHeight: data.elevatedNorthHeight || data.elevatedHeight || '',
+    elevatedSouthHeight: data.elevatedSouthHeight || '',
     customerServiceNumber: data.customerServiceNumber || data.meterNumber || '',
     availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || ''
   });
@@ -343,7 +344,7 @@ function LeadModal({ data, id, onSave, onClose }) {
               <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Site Visit Details</label>
               <div className="fr"><div className="fg"><label>Visit Date</label><input type="date" className="fi" value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div></div>
               {form.roofType === 'Elevated' && (
-                <div className="fr"><div className="fg"><label>Height (Feet)</label><input type="number" className="fi" value={form.elevatedHeight} onChange={e => set('elevatedHeight', e.target.value)} placeholder="e.g. 10" min="1" /></div><div className="fg"><label>Pole Direction</label><select className="fi" value={form.elevatedPole} onChange={e => set('elevatedPole', e.target.value)}><option>North Pole</option><option>South Pole</option></select></div></div>
+                <div className="fr"><div className="fg"><label>North Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedNorthHeight} onChange={e => set('elevatedNorthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div><div className="fg"><label>South Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedSouthHeight} onChange={e => set('elevatedSouthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div></div>
               )}
               <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option><option>Flat</option><option>Sloped</option></select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option><option>Single Phase</option><option>Three Phase</option><option>CT Meter</option><option>HT Meter</option></select></div></div>
               <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft) <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Min: {toNumber(form.kwRequired) > 0 ? (toNumber(form.kwRequired) * 70) + ' sq.ft' : 'kW × 70'}</span></label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder={toNumber(form.kwRequired) > 0 ? `Min ${toNumber(form.kwRequired) * 70} sq.ft` : 'e.g. 200'} /></div></div>
@@ -532,7 +533,8 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                     {lead.roofType && <div className="di"><div className="dl">Roof Type</div><div className="dv">{lead.roofType}</div></div>}
                     {lead.floors && <div className="di"><div className="dl">Floors</div><div className="dv">{lead.floors}</div></div>}
                     {lead.structureType && <div className="di"><div className="dl">Tilt</div><div className="dv">{lead.structureType}</div></div>}
-                    {lead.roofType === 'Elevated' && lead.elevatedHeight && <div className="di"><div className="dl">Elevated Height</div><div className="dv">{lead.elevatedHeight} ft ({lead.elevatedPole || 'North Pole'})</div></div>}
+                    {lead.roofType === 'Elevated' && (lead.elevatedNorthHeight || lead.elevatedHeight) && <div className="di"><div className="dl">North Pole Height</div><div className="dv">{lead.elevatedNorthHeight || lead.elevatedHeight} ft</div></div>}
+                    {lead.roofType === 'Elevated' && lead.elevatedSouthHeight && <div className="di"><div className="dl">South Pole Height</div><div className="dv">{lead.elevatedSouthHeight} ft</div></div>}
                     {lead.existingConnection && <div className="di"><div className="dl">Connection</div><div className="dv">{lead.existingConnection}</div></div>}
                     {lead.sanctionedLoad && <div className="di"><div className="dl">Sanctioned Load</div><div className="dv">{lead.sanctionedLoad} kW</div></div>}
                     {lead.availableSpace && <div className="di"><div className="dl">Available Space</div><div className="dv">{lead.availableSpace} sq.ft</div></div>}
@@ -1107,7 +1109,8 @@ ${l.siteVisit === 'Yes' ? `
 <table class="terms">
 ${l.roofType ? '<tr><td>Roof Type</td><td>:</td><td>' + e(l.roofType) + '</td></tr>' : ''}
 ${l.structureType ? '<tr><td>Tilt</td><td>:</td><td>' + e(l.structureType) + '</td></tr>' : ''}
-${l.roofType === 'Elevated' && l.elevatedHeight ? '<tr><td>Elevated Height</td><td>:</td><td>' + e(l.elevatedHeight) + ' ft (' + e(l.elevatedPole || 'North Pole') + ')</td></tr>' : ''}
+${l.roofType === 'Elevated' && (l.elevatedNorthHeight || l.elevatedHeight) ? '<tr><td>North Pole Height</td><td>:</td><td>' + e(l.elevatedNorthHeight || l.elevatedHeight) + ' ft</td></tr>' : ''}
+${l.roofType === 'Elevated' && l.elevatedSouthHeight ? '<tr><td>South Pole Height</td><td>:</td><td>' + e(l.elevatedSouthHeight) + ' ft</td></tr>' : ''}
 ${l.existingConnection ? '<tr><td>Existing Connection</td><td>:</td><td>' + e(l.existingConnection) + '</td></tr>' : ''}
 ${l.sanctionedLoad ? '<tr><td>Sanctioned Load</td><td>:</td><td>' + e(l.sanctionedLoad) + ' kW</td></tr>' : ''}
 ${l.floors ? '<tr><td>Floors</td><td>:</td><td>' + e(l.floors) + '</td></tr>' : ''}
