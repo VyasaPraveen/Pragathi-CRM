@@ -42,8 +42,8 @@ export default function Leads() {
   const [detailId, setDetailId] = useState(null);
   const [detailTab, setDetailTab] = useState(null);
 
-  let filtered = leads;
-  if (filter !== 'all') filtered = filtered.filter(l => l.status === filter);
+  // When 'all', exclude Converted leads (they move to Customers); Converted tab shows only converted
+  let filtered = leads.filter(l => filter === 'all' ? l.status !== 'Converted' : l.status === filter);
   // B4 fix: null-safe search using safeStr
   if (search) {
     const q = search.toLowerCase();
