@@ -282,7 +282,23 @@ function LeadModal({ data, id, onSave, onClose }) {
           {duplicatePhone && <div style={{ background: 'rgba(243,156,18,.1)', border: '1px solid rgba(243,156,18,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#d68910', marginBottom: 10 }}>Duplicate phone: already exists for <strong>{duplicatePhone.name}</strong></div>}
           <div className="fr3"><div className="fg"><label>Email</label><input type="email" className="fi" value={form.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Monthly Bill (Units)</label><input type="number" className="fi" value={form.monthlyBill} onChange={e => handleMonthlyBillChange(e.target.value)} placeholder="e.g. 350" /></div><div className="fg"><label>kW Required</label><input className="fi" value={form.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="Auto or manual" /></div></div>
           <div className="fg"><label>Address</label><input className="fi" value={form.address} onChange={e => set('address', e.target.value)} /></div>
-          <div className="fr3"><div className="fg"><label>Pincode</label><input className="fi" value={form.pincode} onChange={e => handlePincodeChange(e.target.value)} maxLength={6} placeholder="e.g. 500001" /></div><div className="fg"><label>City {!id && '*'}</label>{cityOptions.length > 0 ? <select className="fi" value={form.city} onChange={e => set('city', e.target.value)}><option value="">-- Select City --</option>{cityOptions.map(c => <option key={c} value={c}>{c}</option>)}</select> : <input className="fi" value={form.city} onChange={e => set('city', e.target.value)} placeholder="City name" />}</div><div className="fg"><label>District</label><input className="fi" value={form.district} onChange={e => set('district', e.target.value)} placeholder="District" /></div></div>
+          <div className="fr3">
+            <div className="fg"><label>Pincode</label><input className="fi" value={form.pincode} onChange={e => handlePincodeChange(e.target.value)} maxLength={6} placeholder="e.g. 500001" /></div>
+            <div className="fg">
+              <label>City {!id && '*'}</label>
+              {cityOptions.length > 0
+                ? <select className="fi" value={cityOptions.includes(form.city) ? form.city : '__other__'} onChange={e => { if (e.target.value === '__other__') set('city', ''); else set('city', e.target.value); }}>
+                    <option value="">-- Select City --</option>
+                    {cityOptions.map(c => <option key={c} value={c}>{c}</option>)}
+                    <option value="__other__">Other (Enter manually)</option>
+                  </select>
+                : null}
+              {(cityOptions.length === 0 || !cityOptions.includes(form.city))
+                ? <input className="fi" style={cityOptions.length > 0 ? { marginTop: 6 } : {}} value={form.city} onChange={e => set('city', e.target.value)} placeholder="Enter city name" />
+                : null}
+            </div>
+            <div className="fg"><label>District</label><input className="fi" value={form.district} onChange={e => set('district', e.target.value)} placeholder="District" /></div>
+          </div>
           <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{priorities.map(o => <option key={o}>{o}</option>)}</select></div></div>
           <div className="fr"><div className="fg"><label>Lead Reference</label><select className="fi" value={form.leadReference} onChange={e => set('leadReference', e.target.value)}>{refs.map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Date Generated</label><input type="date" className="fi" value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div></div>
           {form.leadReference === 'Other' && (
