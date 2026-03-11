@@ -23,13 +23,11 @@ export default function Customers() {
   const [detailId, setDetailId] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
-  // Unique areas for filter dropdown
   const areas = [...new Set(customers.map(c => c.area).filter(Boolean))].sort();
 
   let filtered = customers;
   if (typeFilter !== 'all') filtered = filtered.filter(c => c.customerType === typeFilter);
   if (areaFilter !== 'all') filtered = filtered.filter(c => c.area === areaFilter);
-  // B4 fix: null-safe search
   if (search) {
     const q = search.toLowerCase();
     filtered = filtered.filter(c =>
@@ -46,8 +44,11 @@ export default function Customers() {
 
   const handleSave = async (data, id) => {
     try {
-      // D1 fix: convert all numeric fields before saving to Firestore
-      const numericFields = ['agreedPrice', 'bosAmount', 'totalPrice', 'advanceAmount', 'secondPayment', 'thirdPayment', 'finalPayment', 'quotationProjectValue', 'advanceReceivedAmount', 'finalAmount'];
+      const numericFields = [
+        'agreedPrice', 'bosAmount', 'totalPrice', 'advanceAmount', 'secondPayment', 'thirdPayment', 'finalPayment',
+        'quotationProjectValue', 'advanceReceivedAmount', 'finalAmount',
+        'subsidyAmount', 'firstBillAmount', 'firstBillUnits'
+      ];
       const cleaned = { ...data };
       numericFields.forEach(f => { cleaned[f] = toNumber(cleaned[f]); });
 
@@ -55,9 +56,7 @@ export default function Customers() {
         const prevCustomer = customers.find(c => c.id === id);
         await updateDocument('customers', id, cleaned);
         toast('Customer updated');
-        // Notify admins about customer update
         notifyAdmins(users, { title: 'Customer Updated', message: `Customer "${cleaned.name}" has been updated`, type: 'customer', module: 'customers', relatedId: id });
-        // Notify assigned user if assignment changed
         if (cleaned.assignedTo && cleaned.assignedTo !== (prevCustomer?.assignedTo || '')) {
           createNotification({ forUser: cleaned.assignedTo, title: 'Customer Assigned to You', message: `Customer "${cleaned.name}" has been assigned to you`, type: 'customer', module: 'customers', relatedId: id });
         }
@@ -147,119 +146,224 @@ export default function Customers() {
   );
 }
 
+/* ============ CUSTOMER MODAL (ADD / EDIT) ============ */
 function CustomerModal({ data, id, onSave, onClose }) {
+  const [tab, setTab] = useState('info');
   const [f, setF] = useState({
-    name: data.name || '', phone: data.phone || '', address: data.address || '',
-    pincode: data.pincode || '', area: data.area || '',
-    email: data.email || '', alternatePhone: data.alternatePhone || '',
-    gstNumber: data.gstNumber || '', customerType: data.customerType || 'Residential',
+    // Basic Info
+    name: data.name || '', phone: data.phone || '', email: data.email || '',
+    alternatePhone: data.alternatePhone || '', address: data.address || '',
+    pincode: data.pincode || '', area: data.area || '', city: data.city || '',
+    district: data.district || '', gstNumber: data.gstNumber || '',
+    customerType: data.customerType || 'Residential',
     powerPhase: data.powerPhase || 'Single Phase',
-    kwRequired: data.kwRequired || '', paymentType: data.paymentType || 'Cash',
+    kwRequired: data.kwRequired || '', status: data.status || 'Active',
+    customerServiceNumber: data.customerServiceNumber || '',
+    // Payment
+    paymentType: data.paymentType || 'Cash',
     agreedPrice: data.agreedPrice || 0, bosAmount: data.bosAmount || 0, totalPrice: data.totalPrice || 0,
     advanceAmount: data.advanceAmount || 0, secondPayment: data.secondPayment || 0,
-    thirdPayment: data.thirdPayment || 0, finalPayment: data.finalPayment || 0, bankName: data.bankName || '',
+    thirdPayment: data.thirdPayment || 0, finalPayment: data.finalPayment || 0,
+    bankName: data.bankName || '',
     quotationProjectValue: data.quotationProjectValue || 0,
     advanceReceivedDate: data.advanceReceivedDate || '',
     advanceReceivedAmount: data.advanceReceivedAmount || 0,
-    finalAmountDate: data.finalAmountDate || '',
-    finalAmount: data.finalAmount || 0,
+    finalAmountDate: data.finalAmountDate || '', finalAmount: data.finalAmount || 0,
     bosAmountStatus: data.bosAmountStatus || 'Pending',
-    advancePaidDate: data.advancePaidDate || '',
-    firstServiceDate: data.firstServiceDate || '',
-    nextServiceDate: data.nextServiceDate || '',
+    // Material Dispatch
+    dispatchDate: data.dispatchDate || '', dispatchedBy: data.dispatchedBy || '',
+    vehicleNumber: data.vehicleNumber || '', driverName: data.driverName || '',
+    dispatchRemarks: data.dispatchRemarks || '',
+    // Installation
     installationStatus: data.installationStatus || 'Pending',
     installationPicUrl: data.installationPicUrl || '',
+    advancePaidDate: data.advancePaidDate || '',
+    // Quality Inspection
+    qualityInspectionDate: data.qualityInspectionDate || '',
+    qualityInspectedBy: data.qualityInspectedBy || '',
+    qualityInspectionRemarks: data.qualityInspectionRemarks || '',
+    qualityInspectionResult: data.qualityInspectionResult || 'Pending',
+    // Warranty
+    panelDetails: data.panelDetails || '', inverterDetails: data.inverterDetails || '',
+    warrantyStartDate: data.warrantyStartDate || '', warrantyEndDate: data.warrantyEndDate || '',
+    linkedInstallationId: data.linkedInstallationId || '',
+    // Subsidy
+    subsidyApplied: data.subsidyApplied || 'No',
+    subsidyAmount: data.subsidyAmount || 0,
+    subsidyStatus: data.subsidyStatus || 'Pending',
+    subsidyApplicationDate: data.subsidyApplicationDate || '',
+    subsidyApprovalDate: data.subsidyApprovalDate || '',
+    subsidyRemarks: data.subsidyRemarks || '',
+    // Net Metering
+    netMeteringStatus: data.netMeteringStatus || 'Pending',
+    netMeteringDate: data.netMeteringDate || '',
+    netMeteringApplicationNumber: data.netMeteringApplicationNumber || '',
+    // Sync & Flagging
+    syncStatus: data.syncStatus || 'Not Synced',
+    flagStatus: data.flagStatus || 'None',
+    flagReason: data.flagReason || '',
+    // First Bill
+    firstBillDate: data.firstBillDate || '',
+    firstBillAmount: data.firstBillAmount || 0,
+    firstBillUnits: data.firstBillUnits || 0,
+    firstBillRemarks: data.firstBillRemarks || '',
+    // O&M
+    firstServiceDate: data.firstServiceDate || '',
+    lastServiceDate: data.lastServiceDate || '',
+    nextServiceDate: data.nextServiceDate || '',
+    omServiceInterval: data.omServiceInterval || '',
+    serviceHistory: data.serviceHistory || '',
+    // Reference & Feedback
     customerReference: data.customerReference || 'No',
     referenceLeadName: data.referenceLeadName || '',
     referencePhoneNumber: data.referencePhoneNumber || '',
-    panelDetails: data.panelDetails || '', inverterDetails: data.inverterDetails || '',
-    warrantyStartDate: data.warrantyStartDate || '', warrantyEndDate: data.warrantyEndDate || '',
-    feedback: data.feedback || '', linkedInstallationId: data.linkedInstallationId || ''
+    feedback: data.feedback || '',
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const EDIT_TABS = [
+    { key: 'info', label: 'Customer Info', icon: 'person' },
+    { key: 'payment', label: 'Payment', icon: 'payments' },
+    { key: 'dispatch', label: 'Dispatch', icon: 'local_shipping' },
+    { key: 'installation', label: 'Installation', icon: 'construction' },
+    { key: 'quality', label: 'Quality', icon: 'fact_check' },
+    { key: 'warranty', label: 'Warranty', icon: 'verified_user' },
+    { key: 'subsidy', label: 'Subsidy', icon: 'savings' },
+    { key: 'sync', label: 'Sync & Flag', icon: 'sync' },
+    { key: 'firstbill', label: 'First Bill', icon: 'receipt' },
+    { key: 'om', label: 'O&M', icon: 'build_circle' },
+  ];
+
+  const tabStyle = (key) => ({
+    padding: '9px 13px', fontWeight: 600, fontSize: '.78rem',
+    color: tab === key ? 'var(--pri)' : 'var(--muted)',
+    borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
+    marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 4,
+    background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+  });
 
   return (
     <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
+        {/* Tab bar */}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', marginBottom: 16, overflowX: 'auto' }}>
+          {EDIT_TABS.map(t => (
+            <button key={t.key} type="button" onClick={() => setTab(t.key)} style={tabStyle(t.key)}>
+              <span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}
+            </button>
+          ))}
+        </div>
+
         <div className="mb">
-          <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
-          <div className="fr"><div className="fg"><label>Email</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Alternate Phone</label><input className="fi" value={f.alternatePhone} onChange={e => set('alternatePhone', e.target.value)} /></div></div>
-          <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
-          <div className="fr"><div className="fg"><label>Pincode</label><input className="fi" value={f.pincode} onChange={e => set('pincode', e.target.value)} placeholder="e.g. 500001" /></div><div className="fg"><label>Area</label><input className="fi" value={f.area} onChange={e => set('area', e.target.value)} placeholder="e.g. Kukatpally" /></div></div>
-          <div className="fr"><div className="fg"><label>GST Number</label><input className="fi" value={f.gstNumber} onChange={e => set('gstNumber', e.target.value)} /></div><div className="fg"><label>Customer Type</label><select className="fi" value={f.customerType} onChange={e => set('customerType', e.target.value)}>{customerTypes.map(t => <option key={t}>{t}</option>)}</select></div></div>
-          <div className="fr3"><div className="fg"><label>Required kW</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} /></div><div className="fg"><label>Power Phase</label><select className="fi" value={f.powerPhase} onChange={e => set('powerPhase', e.target.value)}>{phases.map(p => <option key={p}>{p}</option>)}</select></div><div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div></div>
+          {/* Tab 1: Customer Info */}
+          {tab === 'info' && (<>
+            <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
+            <div className="fr"><div className="fg"><label>Email</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Alternate Phone</label><input className="fi" value={f.alternatePhone} onChange={e => set('alternatePhone', e.target.value)} /></div></div>
+            <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
+            <div className="fr"><div className="fg"><label>Pincode</label><input className="fi" value={f.pincode} onChange={e => set('pincode', e.target.value)} /></div><div className="fg"><label>Area</label><input className="fi" value={f.area} onChange={e => set('area', e.target.value)} /></div></div>
+            <div className="fr"><div className="fg"><label>City</label><input className="fi" value={f.city} onChange={e => set('city', e.target.value)} /></div><div className="fg"><label>District</label><input className="fi" value={f.district} onChange={e => set('district', e.target.value)} /></div></div>
+            <div className="fr"><div className="fg"><label>GST Number</label><input className="fi" value={f.gstNumber} onChange={e => set('gstNumber', e.target.value)} /></div><div className="fg"><label>Customer Type</label><select className="fi" value={f.customerType} onChange={e => set('customerType', e.target.value)}>{customerTypes.map(t => <option key={t}>{t}</option>)}</select></div></div>
+            <div className="fr3"><div className="fg"><label>Required kW</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} /></div><div className="fg"><label>Power Phase</label><select className="fi" value={f.powerPhase} onChange={e => set('powerPhase', e.target.value)}>{phases.map(p => <option key={p}>{p}</option>)}</select></div><div className="fg"><label>Status</label><select className="fi" value={f.status} onChange={e => set('status', e.target.value)}><option>Active</option><option>Inactive</option><option>Completed</option></select></div></div>
+            <div className="fg"><label>Customer Service Number</label><input className="fi" value={f.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} /></div>
+          </>)}
 
-          {/* Cash Mode: Pricing & Payment Tracking */}
-          {f.paymentType === 'Cash' && (
-            <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
-              <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Cash Payment Details</label>
-              <div className="fr3"><div className="fg"><label>Agreed Price</label><input type="number" className="fi" value={f.agreedPrice} onChange={e => set('agreedPrice', e.target.value)} /></div><div className="fg"><label>BOS Amount</label><input type="number" className="fi" value={f.bosAmount} onChange={e => set('bosAmount', e.target.value)} /></div><div className="fg"><label>Total Price</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
-              <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block', marginTop: 14 }}>Payment Tracking</label>
-              <div className="fr"><div className="fg"><label>Advance</label><input type="number" className="fi" value={f.advanceAmount} onChange={e => set('advanceAmount', e.target.value)} /></div><div className="fg"><label>2nd Payment</label><input type="number" className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} /></div></div>
-              <div className="fr"><div className="fg"><label>3rd Payment</label><input type="number" className="fi" value={f.thirdPayment} onChange={e => set('thirdPayment', e.target.value)} /></div><div className="fg"><label>Final Payment</label><input type="number" className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} /></div></div>
-            </div>
-          )}
-
-          {/* Finance Mode: Bank & Finance Details */}
-          {f.paymentType === 'Finance' && (
-            <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
-              <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Finance Details</label>
+          {/* Tab 2: Payment Details */}
+          {tab === 'payment' && (<>
+            <div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div>
+            {f.paymentType === 'Cash' && (<>
+              <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '12px 0 8px' }}>Pricing</div>
+              <div className="fr3"><div className="fg"><label>Agreed Price (₹)</label><input type="number" className="fi" value={f.agreedPrice} onChange={e => set('agreedPrice', e.target.value)} /></div><div className="fg"><label>BOS Amount (₹)</label><input type="number" className="fi" value={f.bosAmount} onChange={e => set('bosAmount', e.target.value)} /></div><div className="fg"><label>Total Price (₹)</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
+              <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '12px 0 8px' }}>Payment Tracking</div>
+              <div className="fr"><div className="fg"><label>Advance (₹)</label><input type="number" className="fi" value={f.advanceAmount} onChange={e => set('advanceAmount', e.target.value)} /></div><div className="fg"><label>2nd Payment (₹)</label><input type="number" className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>3rd Payment (₹)</label><input type="number" className="fi" value={f.thirdPayment} onChange={e => set('thirdPayment', e.target.value)} /></div><div className="fg"><label>Final Payment (₹)</label><input type="number" className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} /></div></div>
+            </>)}
+            {f.paymentType === 'Finance' && (<>
               <div className="fg"><label>Bank Name</label><input className="fi" value={f.bankName} onChange={e => set('bankName', e.target.value)} /></div>
-              <div className="fr"><div className="fg"><label>Quotation Project Value</label><input type="number" className="fi" value={f.quotationProjectValue} onChange={e => set('quotationProjectValue', e.target.value)} /></div><div className="fg"><label>Total Price</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
-              <div className="fr"><div className="fg"><label>Advance Received Date</label><input type="date" className="fi" value={f.advanceReceivedDate} onChange={e => set('advanceReceivedDate', e.target.value)} /></div><div className="fg"><label>Advance Received Amount</label><input type="number" className="fi" value={f.advanceReceivedAmount} onChange={e => set('advanceReceivedAmount', e.target.value)} /></div></div>
-              <div className="fr"><div className="fg"><label>Final Amount Date</label><input type="date" className="fi" value={f.finalAmountDate} onChange={e => set('finalAmountDate', e.target.value)} /></div><div className="fg"><label>Final Amount</label><input type="number" className="fi" value={f.finalAmount} onChange={e => set('finalAmount', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>Quotation Project Value (₹)</label><input type="number" className="fi" value={f.quotationProjectValue} onChange={e => set('quotationProjectValue', e.target.value)} /></div><div className="fg"><label>Total Price (₹)</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>Advance Received Date</label><input type="date" className="fi" value={f.advanceReceivedDate} onChange={e => set('advanceReceivedDate', e.target.value)} /></div><div className="fg"><label>Advance Received Amount (₹)</label><input type="number" className="fi" value={f.advanceReceivedAmount} onChange={e => set('advanceReceivedAmount', e.target.value)} /></div></div>
+              <div className="fr"><div className="fg"><label>Final Amount Date</label><input type="date" className="fi" value={f.finalAmountDate} onChange={e => set('finalAmountDate', e.target.value)} /></div><div className="fg"><label>Final Amount (₹)</label><input type="number" className="fi" value={f.finalAmount} onChange={e => set('finalAmount', e.target.value)} /></div></div>
               <div className="fg"><label>BOS Amount Status</label><select className="fi" value={f.bosAmountStatus} onChange={e => set('bosAmountStatus', e.target.value)}><option>Included</option><option>Pending</option><option>Paid</option></select></div>
-            </div>
-          )}
+            </>)}
+          </>)}
 
-          {/* System & Warranty Details */}
-          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
-            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>System & Warranty Details</label>
+          {/* Tab 3: Material Dispatch Details */}
+          {tab === 'dispatch' && (<>
+            <div className="fr"><div className="fg"><label>Dispatch Date</label><input type="date" className="fi" value={f.dispatchDate} onChange={e => set('dispatchDate', e.target.value)} /></div><div className="fg"><label>Dispatched By</label><input className="fi" value={f.dispatchedBy} onChange={e => set('dispatchedBy', e.target.value)} /></div></div>
+            <div className="fr"><div className="fg"><label>Vehicle Number</label><input className="fi" value={f.vehicleNumber} onChange={e => set('vehicleNumber', e.target.value)} /></div><div className="fg"><label>Driver Name</label><input className="fi" value={f.driverName} onChange={e => set('driverName', e.target.value)} /></div></div>
+            <div className="fg"><label>Dispatch Remarks</label><textarea className="fi" value={f.dispatchRemarks} onChange={e => set('dispatchRemarks', e.target.value)} rows="3" placeholder="Material dispatch notes..." /></div>
+          </>)}
+
+          {/* Tab 4: Installation Details */}
+          {tab === 'installation' && (<>
+            <div className="fr"><div className="fg"><label>Installation Status</label><select className="fi" value={f.installationStatus} onChange={e => set('installationStatus', e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option><option>On Hold</option></select></div><div className="fg"><label>Advance Paid Date</label><input type="date" className="fi" value={f.advancePaidDate} onChange={e => set('advancePaidDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Installation Picture URL</label><input className="fi" type="url" value={f.installationPicUrl} onChange={e => set('installationPicUrl', e.target.value)} placeholder="https://..." /></div>
+            {f.installationPicUrl && <img src={f.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)', marginTop: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
+            {f.linkedInstallationId && <div className="fg" style={{ marginTop: 12 }}><label>Linked Installation ID</label><input className="fi" value={f.linkedInstallationId} disabled /></div>}
+          </>)}
+
+          {/* Tab 5: Quality Inspection */}
+          {tab === 'quality' && (<>
+            <div className="fr"><div className="fg"><label>Inspection Result</label><select className="fi" value={f.qualityInspectionResult} onChange={e => set('qualityInspectionResult', e.target.value)}><option>Pending</option><option>Passed</option><option>Failed</option><option>Re-inspection Required</option></select></div><div className="fg"><label>Inspection Date</label><input type="date" className="fi" value={f.qualityInspectionDate} onChange={e => set('qualityInspectionDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Inspected By</label><input className="fi" value={f.qualityInspectedBy} onChange={e => set('qualityInspectedBy', e.target.value)} /></div>
+            <div className="fg"><label>Inspection Remarks</label><textarea className="fi" value={f.qualityInspectionRemarks} onChange={e => set('qualityInspectionRemarks', e.target.value)} rows="3" placeholder="Quality inspection notes..." /></div>
+          </>)}
+
+          {/* Tab 6: Warranty Details */}
+          {tab === 'warranty' && (<>
             <div className="fr"><div className="fg"><label>Panel Details</label><input className="fi" value={f.panelDetails} onChange={e => set('panelDetails', e.target.value)} placeholder="Brand / Model / Wattage" /></div><div className="fg"><label>Inverter Details</label><input className="fi" value={f.inverterDetails} onChange={e => set('inverterDetails', e.target.value)} placeholder="Brand / Model" /></div></div>
             <div className="fr"><div className="fg"><label>Warranty Start Date</label><input type="date" className="fi" value={f.warrantyStartDate} onChange={e => set('warrantyStartDate', e.target.value)} /></div><div className="fg"><label>Warranty End Date</label><input type="date" className="fi" value={f.warrantyEndDate} onChange={e => set('warrantyEndDate', e.target.value)} /></div></div>
-          </div>
+          </>)}
 
-          {/* Service & Dates */}
-          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
-            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Service & Dates</label>
-            <div className="fr3"><div className="fg"><label>Advance Paid Date</label><input type="date" className="fi" value={f.advancePaidDate} onChange={e => set('advancePaidDate', e.target.value)} /></div><div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={f.firstServiceDate} onChange={e => set('firstServiceDate', e.target.value)} /></div><div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={f.nextServiceDate} onChange={e => set('nextServiceDate', e.target.value)} /></div></div>
-            <div className="fg"><label>Installation Status</label><select className="fi" value={f.installationStatus} onChange={e => set('installationStatus', e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option><option>On Hold</option></select></div>
-          </div>
+          {/* Tab 7: Subsidy Process */}
+          {tab === 'subsidy' && (<>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '0 0 10px' }}>Subsidy Details</div>
+            <div className="fr"><div className="fg"><label>Subsidy Applied?</label><select className="fi" value={f.subsidyApplied} onChange={e => set('subsidyApplied', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Subsidy Status</label><select className="fi" value={f.subsidyStatus} onChange={e => set('subsidyStatus', e.target.value)}><option>Pending</option><option>Applied</option><option>Approved</option><option>Received</option><option>Rejected</option></select></div></div>
+            <div className="fr"><div className="fg"><label>Subsidy Amount (₹)</label><input type="number" className="fi" value={f.subsidyAmount} onChange={e => set('subsidyAmount', e.target.value)} /></div><div className="fg"><label>Application Date</label><input type="date" className="fi" value={f.subsidyApplicationDate} onChange={e => set('subsidyApplicationDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Approval Date</label><input type="date" className="fi" value={f.subsidyApprovalDate} onChange={e => set('subsidyApprovalDate', e.target.value)} /></div>
+            <div className="fg"><label>Subsidy Remarks</label><textarea className="fi" value={f.subsidyRemarks} onChange={e => set('subsidyRemarks', e.target.value)} rows="2" /></div>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '14px 0 10px' }}>Net Metering</div>
+            <div className="fr"><div className="fg"><label>Net Metering Status</label><select className="fi" value={f.netMeteringStatus} onChange={e => set('netMeteringStatus', e.target.value)}><option>Pending</option><option>Applied</option><option>Connected</option><option>Rejected</option></select></div><div className="fg"><label>Net Metering Date</label><input type="date" className="fi" value={f.netMeteringDate} onChange={e => set('netMeteringDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Application / Reference Number</label><input className="fi" value={f.netMeteringApplicationNumber} onChange={e => set('netMeteringApplicationNumber', e.target.value)} /></div>
+          </>)}
 
-          {/* Installation Picture */}
-          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
-            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>System Installation Picture</label>
-            <div className="fg"><label>Image URL</label><input className="fi" type="url" value={f.installationPicUrl} onChange={e => set('installationPicUrl', e.target.value)} placeholder="https://..." /></div>
-            {f.installationPicUrl && (
-              <div style={{ marginTop: 10, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--bor)' }}>
-                <img src={f.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }} onError={e => { e.target.style.display = 'none'; }} />
-              </div>
-            )}
-          </div>
+          {/* Tab 8: Synchronization and Flagging */}
+          {tab === 'sync' && (<>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '0 0 10px' }}>Synchronization Status</div>
+            <div className="fg"><label>Sync Status</label><select className="fi" value={f.syncStatus} onChange={e => set('syncStatus', e.target.value)}><option>Not Synced</option><option>Synced</option><option>Sync Pending</option><option>Sync Error</option></select></div>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '14px 0 10px' }}>Flagging</div>
+            <div className="fg"><label>Flag Status</label><select className="fi" value={f.flagStatus} onChange={e => set('flagStatus', e.target.value)}><option>None</option><option>Flagged</option><option>Under Review</option><option>Resolved</option></select></div>
+            {f.flagStatus !== 'None' && <div className="fg"><label>Flag Reason</label><textarea className="fi" value={f.flagReason} onChange={e => set('flagReason', e.target.value)} rows="3" placeholder="Describe the issue..." /></div>}
+          </>)}
 
-          {/* Customer Reference */}
-          <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
-            <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Customer Reference</label>
+          {/* Tab 9: First Bill */}
+          {tab === 'firstbill' && (<>
+            <div className="fr"><div className="fg"><label>First Bill Date</label><input type="date" className="fi" value={f.firstBillDate} onChange={e => set('firstBillDate', e.target.value)} /></div><div className="fg"><label>First Bill Amount (₹)</label><input type="number" className="fi" value={f.firstBillAmount} onChange={e => set('firstBillAmount', e.target.value)} /></div></div>
+            <div className="fr"><div className="fg"><label>Units Generated (kWh)</label><input type="number" className="fi" value={f.firstBillUnits} onChange={e => set('firstBillUnits', e.target.value)} /></div><div className="fg" /></div>
+            <div className="fg"><label>First Bill Remarks</label><textarea className="fi" value={f.firstBillRemarks} onChange={e => set('firstBillRemarks', e.target.value)} rows="3" placeholder="Notes about first electricity bill after solar installation..." /></div>
+          </>)}
+
+          {/* Tab 10: Next O&M */}
+          {tab === 'om' && (<>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '0 0 10px' }}>Service Schedule</div>
+            <div className="fr3"><div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={f.firstServiceDate} onChange={e => set('firstServiceDate', e.target.value)} /></div><div className="fg"><label>Last Service Date</label><input type="date" className="fi" value={f.lastServiceDate} onChange={e => set('lastServiceDate', e.target.value)} /></div><div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={f.nextServiceDate} onChange={e => set('nextServiceDate', e.target.value)} /></div></div>
+            <div className="fg"><label>Service Interval</label><input className="fi" value={f.omServiceInterval} onChange={e => set('omServiceInterval', e.target.value)} placeholder="e.g. Every 6 months" /></div>
+            <div className="fg"><label>Service History / Notes</label><textarea className="fi" value={f.serviceHistory} onChange={e => set('serviceHistory', e.target.value)} rows="3" /></div>
+            <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '14px 0 10px' }}>Customer Reference</div>
             <div className="fg"><label>Reference Given?</label><select className="fi" value={f.customerReference} onChange={e => set('customerReference', e.target.value)}><option>No</option><option>Yes</option></select></div>
-            {f.customerReference === 'Yes' && (
-              <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone Number</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>
-            )}
-          </div>
-
-          {/* Customer Feedback */}
-          <div className="fg"><label>Customer Feedback</label><textarea className="fi" value={f.feedback} onChange={e => set('feedback', e.target.value)} rows="3" placeholder="Satisfaction notes..." /></div>
-
-          {f.linkedInstallationId && <div className="fg"><label>Linked Installation ID</label><input className="fi" value={f.linkedInstallationId} disabled /></div>}
+            {f.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>}
+            <div className="fg" style={{ marginTop: 8 }}><label>Customer Feedback</label><textarea className="fi" value={f.feedback} onChange={e => set('feedback', e.target.value)} rows="3" placeholder="Satisfaction notes..." /></div>
+          </>)}
         </div>
+
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
       </form>
     </Modal>
   );
 }
 
-/* ============ CUSTOMER DETAIL MODAL ============ */
+/* ============ CUSTOMER DETAIL MODAL (10 TABS) ============ */
 function CustomerDetailModal({ customer, onClose, onEdit }) {
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState('info');
   const { leadPOs, leads, installations } = useData();
   const { role } = useAuth();
   const canEdit = hasAccess(role, 'coordinator');
@@ -277,252 +381,487 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     : toNumber(c.advanceAmount) + toNumber(c.secondPayment) + toNumber(c.thirdPayment) + toNumber(c.finalPayment);
   const balance = toNumber(c.totalPrice) - paid;
 
-  const tabs = [
-    ['overview', 'Overview', 'info'],
-    ['pos', 'Purchase Orders (' + customerPOs.length + ')', 'receipt_long']
+  const TABS = [
+    { key: 'info', label: 'Customer Info', icon: 'person' },
+    { key: 'payment', label: 'Payment Details', icon: 'payments' },
+    { key: 'dispatch', label: 'Material Dispatch', icon: 'local_shipping' },
+    { key: 'installation', label: 'Installation', icon: 'construction' },
+    { key: 'quality', label: 'Quality Inspection', icon: 'fact_check' },
+    { key: 'warranty', label: 'Warranty Details', icon: 'verified_user' },
+    { key: 'subsidy', label: 'Subsidy Process', icon: 'savings' },
+    { key: 'sync', label: 'Sync & Flagging', icon: 'sync' },
+    { key: 'firstbill', label: 'First Bill', icon: 'receipt' },
+    { key: 'om', label: 'Next O&M', icon: 'build_circle' },
   ];
+
+  const tabStyle = (key) => ({
+    padding: '11px 14px', fontWeight: 600, fontSize: '.8rem',
+    color: tab === key ? 'var(--pri)' : 'var(--muted)',
+    borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
+    marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 5,
+    background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+  });
+
+  const SectionTitle = ({ children }) => (
+    <div style={{ fontWeight: 700, fontSize: '.88rem', color: 'var(--pri)', marginBottom: 12, paddingBottom: 6, borderBottom: '1px solid var(--bor)' }}>{children}</div>
+  );
+
+  const InfoGrid = ({ children }) => (
+    <div className="dg" style={{ marginBottom: 8 }}>{children}</div>
+  );
+
+  const InfoItem = ({ label, value, fullWidth }) => (
+    <div className="di" style={fullWidth ? { gridColumn: '1 / -1' } : {}}>
+      <div className="dl">{label}</div>
+      <div className="dv">{value || '-'}</div>
+    </div>
+  );
 
   return (
     <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="md" style={{ width: '860px', maxWidth: '96vw' }}>
+      <div className="md" style={{ width: '920px', maxWidth: '96vw' }}>
         <div className="mh">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span className="material-icons-round" style={{ fontSize: 22, color: 'var(--pri)' }}>person</span>
             {c.name}
+            <StatusBadge status={c.status} />
           </h3>
-          <button className="mx" onClick={onClose}><span className="material-icons-round">close</span></button>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {c.phone && <button className="btn bsm bo" onClick={() => makeCall(c.phone)} style={{ color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>call</span></button>}
+            {c.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is from Pragathi Power Solutions.`)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>chat</span></button>}
+            {canEdit && <button className="btn bsm bp" onClick={onEdit}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span> Edit</button>}
+            <button className="mx" onClick={onClose}><span className="material-icons-round">close</span></button>
+          </div>
         </div>
 
         {/* Tab bar */}
-        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', padding: '0 24px', overflowX: 'auto' }}>
-          {tabs.map(([key, label, icon]) => (
-            <button key={key} onClick={() => setTab(key)} style={{
-              padding: '12px 18px', fontWeight: 600, fontSize: '.85rem',
-              color: tab === key ? 'var(--pri)' : 'var(--muted)',
-              borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
-              marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 6,
-              background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
-            }}>
-              <span className="material-icons-round" style={{ fontSize: 18 }}>{icon}</span>{label}
+        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', padding: '0 4px', overflowX: 'auto' }}>
+          {TABS.map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)} style={tabStyle(t.key)}>
+              <span className="material-icons-round" style={{ fontSize: 16 }}>{t.icon}</span>{t.label}
             </button>
           ))}
         </div>
 
         <div style={{ padding: 24, maxHeight: '65vh', overflowY: 'auto' }}>
 
-          {/* -------- OVERVIEW TAB -------- */}
-          {tab === 'overview' && (
+          {/* ===== TAB 1: CUSTOMER INFO ===== */}
+          {tab === 'info' && (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, gap: 8, flexWrap: 'wrap' }}>
-                {c.phone && <button className="btn bsm bo" onClick={() => makeCall(c.phone)} style={{ color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>call</span> Call
-                </button>}
-                {c.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is from Pragathi Power Solutions.`)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>chat</span> WhatsApp
-                </button>}
-                <button className="btn bsm bo" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>description</span> Completion Report
-                </button>
-                {canEdit && <button className="btn bsm bo" onClick={onEdit}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit
-                </button>}
-              </div>
-
-              {/* Customer info grid */}
-              <div className="dg">
-                <div className="di"><div className="dl">Phone</div><div className="dv">{c.phone || '-'}</div></div>
-                <div className="di"><div className="dl">Email</div><div className="dv">{c.email || '-'}</div></div>
-                {c.alternatePhone && <div className="di"><div className="dl">Alternate Phone</div><div className="dv">{c.alternatePhone}</div></div>}
-                <div className="di"><div className="dl">Address</div><div className="dv">{c.address || '-'}</div></div>
-                {(c.area || c.pincode) && <div className="di"><div className="dl">Area / Pincode</div><div className="dv">{[c.area, c.pincode].filter(Boolean).join(' - ') || '-'}</div></div>}
-                {c.gstNumber && <div className="di"><div className="dl">GST Number</div><div className="dv">{c.gstNumber}</div></div>}
-                <div className="di"><div className="dl">Customer Type</div><div className="dv">{c.customerType || '-'}</div></div>
-                <div className="di"><div className="dl">kW Required</div><div className="dv">{c.kwRequired || '-'}</div></div>
-                <div className="di"><div className="dl">Power Phase</div><div className="dv">{c.powerPhase || '-'}</div></div>
+              <SectionTitle>Basic Information</SectionTitle>
+              <InfoGrid>
+                <InfoItem label="Phone" value={c.phone} />
+                <InfoItem label="Email" value={c.email} />
+                {c.alternatePhone && <InfoItem label="Alternate Phone" value={c.alternatePhone} />}
+                <InfoItem label="Address" value={c.address} fullWidth />
+                <InfoItem label="Area" value={c.area} />
+                <InfoItem label="City" value={c.city} />
+                <InfoItem label="District" value={c.district} />
+                <InfoItem label="Pincode" value={c.pincode} />
+                {c.gstNumber && <InfoItem label="GST Number" value={c.gstNumber} />}
+                <InfoItem label="Customer Type" value={c.customerType} />
+                <InfoItem label="Required kW" value={c.kwRequired} />
+                <InfoItem label="Power Phase" value={c.powerPhase} />
+                {c.customerServiceNumber && <InfoItem label="Customer Service Number" value={c.customerServiceNumber} />}
                 <div className="di"><div className="dl">Status</div><div className="dv"><StatusBadge status={c.status} /></div></div>
                 <div className="di"><div className="dl">Installation Status</div><div className="dv"><StatusBadge status={c.installationStatus || 'Pending'} /></div></div>
+              </InfoGrid>
+            </div>
+          )}
+
+          {/* ===== TAB 2: PAYMENT DETAILS ===== */}
+          {tab === 'payment' && (
+            <div>
+              <SectionTitle>Payment Summary ({c.paymentType})</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 20 }}>
+                <div style={{ background: 'rgba(26,58,122,.06)', borderRadius: 12, padding: 16, textAlign: 'center', border: '1px solid rgba(26,58,122,.1)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1.15rem', color: 'var(--pri)' }}>{formatCurrency(c.totalPrice)}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginTop: 4 }}>Total Price</div>
+                </div>
+                <div style={{ background: 'rgba(39,174,96,.06)', borderRadius: 12, padding: 16, textAlign: 'center', border: '1px solid rgba(39,174,96,.15)' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1.15rem', color: 'var(--ok)' }}>{formatCurrency(paid)}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginTop: 4 }}>Paid</div>
+                </div>
+                <div style={{ background: balance > 0 ? 'rgba(231,76,60,.06)' : 'rgba(39,174,96,.06)', borderRadius: 12, padding: 16, textAlign: 'center', border: `1px solid ${balance > 0 ? 'rgba(231,76,60,.15)' : 'rgba(39,174,96,.15)'}` }}>
+                  <div style={{ fontWeight: 700, fontSize: '1.15rem', color: balance > 0 ? 'var(--err)' : 'var(--ok)' }}>{formatCurrency(balance)}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginTop: 4 }}>Balance</div>
+                </div>
               </div>
 
-              {/* Payment Details */}
-              <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
-                <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>Payment Details ({c.paymentType})</label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12 }}>
-                  <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatCurrency(c.totalPrice)}</div>
-                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Total Price</div>
+              {c.paymentType === 'Cash' && (<>
+                <SectionTitle>Cash Payment Breakdown</SectionTitle>
+                <InfoGrid>
+                  <InfoItem label="Agreed Price" value={formatCurrency(c.agreedPrice)} />
+                  <InfoItem label="BOS Amount" value={formatCurrency(c.bosAmount)} />
+                  <InfoItem label="Total Price" value={formatCurrency(c.totalPrice)} />
+                  <InfoItem label="Advance" value={formatCurrency(c.advanceAmount)} />
+                  <InfoItem label="2nd Payment" value={formatCurrency(c.secondPayment)} />
+                  <InfoItem label="3rd Payment" value={formatCurrency(c.thirdPayment)} />
+                  <InfoItem label="Final Payment" value={formatCurrency(c.finalPayment)} />
+                  {c.advancePaidDate && <InfoItem label="Advance Paid Date" value={formatDate(c.advancePaidDate)} />}
+                </InfoGrid>
+              </>)}
+
+              {c.paymentType === 'Finance' && (<>
+                <SectionTitle>Finance Details</SectionTitle>
+                <InfoGrid>
+                  <InfoItem label="Bank Name" value={c.bankName} />
+                  <InfoItem label="Quotation Project Value" value={formatCurrency(c.quotationProjectValue)} />
+                  <InfoItem label="Total Price" value={formatCurrency(c.totalPrice)} />
+                  <InfoItem label="Advance Received Date" value={formatDate(c.advanceReceivedDate)} />
+                  <InfoItem label="Advance Received Amount" value={formatCurrency(c.advanceReceivedAmount)} />
+                  <InfoItem label="Final Amount Date" value={formatDate(c.finalAmountDate)} />
+                  <InfoItem label="Final Amount" value={formatCurrency(c.finalAmount)} />
+                  <div className="di"><div className="dl">BOS Amount Status</div><div className="dv"><StatusBadge status={c.bosAmountStatus || 'Pending'} /></div></div>
+                </InfoGrid>
+              </>)}
+            </div>
+          )}
+
+          {/* ===== TAB 3: MATERIAL DISPATCH DETAILS ===== */}
+          {tab === 'dispatch' && (
+            <div>
+              <SectionTitle>Dispatch Information</SectionTitle>
+              <InfoGrid>
+                <InfoItem label="Dispatch Date" value={formatDate(c.dispatchDate)} />
+                <InfoItem label="Dispatched By" value={c.dispatchedBy} />
+                <InfoItem label="Vehicle Number" value={c.vehicleNumber} />
+                <InfoItem label="Driver Name" value={c.driverName} />
+                <div className="di"><div className="dl">Material Dispatched</div><div className="dv"><StatusBadge status={inst?.materialDispatched === 'Yes' ? 'Completed' : 'Pending'} />{inst?.materialDispatched ? ` (${inst.materialDispatched})` : ''}</div></div>
+                {c.dispatchRemarks && <InfoItem label="Dispatch Remarks" value={c.dispatchRemarks} fullWidth />}
+              </InfoGrid>
+
+              {customerPOs.length > 0 && (<>
+                <SectionTitle>Purchase Orders & BOM Items</SectionTitle>
+                {customerPOs.map(po => (
+                  <div key={po.id} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: 14, marginBottom: 10, background: '#fafbfc' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, flexWrap: 'wrap', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <strong>{po.poNumber}</strong><StatusBadge status={po.status} />
+                        <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{po.vendorName}</span>
+                      </div>
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        <button className="btn bsm bo" onClick={() => printBOM(po, linkedLead || c)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => downloadBOM(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
+                      </div>
+                    </div>
+                    {(po.items || []).length > 0 && (
+                      <details open>
+                        <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--pri)', marginBottom: 8 }}>BOM Items ({po.items.length})</summary>
+                        <div className="tw"><table><thead><tr><th>#</th><th>Material</th><th>Make</th><th>Spec</th><th>Qty</th><th>Unit</th><th>Amount</th></tr></thead><tbody>
+                          {po.items.map((item, i) => (
+                            <tr key={i}><td>{i + 1}</td><td>{item.materialName}</td><td style={{ fontSize: '.8rem' }}>{item.make || '-'}</td><td style={{ fontSize: '.8rem', color: 'var(--muted)' }}>{item.specification || '-'}</td><td>{item.quantity}</td><td>{item.unit || '-'}</td><td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td></tr>
+                          ))}
+                        </tbody></table></div>
+                      </details>
+                    )}
                   </div>
-                  <div style={{ background: 'rgba(39,174,96,.06)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--ok)' }}>{formatCurrency(paid)}</div>
-                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Paid</div>
+                ))}
+              </>)}
+              {customerPOs.length === 0 && <EmptyState icon="local_shipping" title="No dispatch data" message="Add dispatch details via Edit. Purchase orders will show BOM items when available." />}
+            </div>
+          )}
+
+          {/* ===== TAB 4: INSTALLATION DETAILS ===== */}
+          {tab === 'installation' && (
+            <div>
+              <SectionTitle>Installation Status</SectionTitle>
+              <InfoGrid>
+                <div className="di"><div className="dl">Installation Status</div><div className="dv"><StatusBadge status={c.installationStatus || 'Pending'} /></div></div>
+                {c.advancePaidDate && <InfoItem label="Advance Paid Date" value={formatDate(c.advancePaidDate)} />}
+              </InfoGrid>
+
+              {inst ? (<>
+                <SectionTitle>Installation Record</SectionTitle>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(120px,1fr))', gap: 10, marginBottom: 16 }}>
+                  <div style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: 10, padding: 14, textAlign: 'center', color: '#fff' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.4rem' }}>{inst.progress || 0}%</div>
+                    <div style={{ fontSize: '.72rem', opacity: .85 }}>Progress</div>
                   </div>
-                  <div style={{ background: balance > 0 ? 'rgba(231,76,60,.06)' : 'rgba(39,174,96,.06)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '1.1rem', color: balance > 0 ? 'var(--err)' : 'var(--ok)' }}>{formatCurrency(balance)}</div>
-                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Balance</div>
+                  <div style={{ background: 'linear-gradient(135deg,#f093fb,#f5576c)', borderRadius: 10, padding: 14, textAlign: 'center', color: '#fff' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1rem' }}>{inst.totalDays || '-'}</div>
+                    <div style={{ fontSize: '.72rem', opacity: .85 }}>Total Days</div>
                   </div>
-                  {c.agreedPrice > 0 && <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14, textAlign: 'center' }}>
-                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatCurrency(c.agreedPrice)}</div>
-                    <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>Agreed Price</div>
+                </div>
+                <InfoGrid>
+                  <InfoItem label="Team Leader" value={inst.teamLeader} />
+                  <InfoItem label="Start Date" value={formatDate(inst.startDate)} />
+                  <InfoItem label="Material Dispatched" value={inst.materialDispatched} />
+                  {inst.installationReport && <InfoItem label="Installation Report" value={inst.installationReport} fullWidth />}
+                </InfoGrid>
+              </>) : (
+                <EmptyState icon="construction" title="No installation record" message="Installation details will appear here once linked." />
+              )}
+
+              {c.installationPicUrl && (<>
+                <SectionTitle>Installation Picture</SectionTitle>
+                <img src={c.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
+              </>)}
+
+              {customerPOs.length > 0 && (<>
+                <SectionTitle>Purchase Orders</SectionTitle>
+                {customerPOs.map(po => (
+                  <div key={po.id} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: 14, marginBottom: 10, background: '#fafbfc' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <strong>{po.poNumber}</strong><StatusBadge status={po.status} />
+                      </div>
+                      <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                        <button className="btn bsm bo" onClick={() => printPO(po, linkedLead || c)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> PO</button>
+                        <button className="btn bsm bo" onClick={() => downloadPO(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> PO</button>
+                        <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>share</span></button>
+                      </div>
+                    </div>
+                    <div className="dg" style={{ marginTop: 10, gap: 6 }}>
+                      <InfoItem label="PO Date" value={po.poDate} />
+                      <InfoItem label="Vendor" value={po.vendorName} />
+                      <div className="di"><div className="dl">Total Value</div><div className="dv" style={{ fontWeight: 700 }}>{formatCurrency(po.totalValue)}</div></div>
+                    </div>
+                  </div>
+                ))}
+              </>)}
+            </div>
+          )}
+
+          {/* ===== TAB 5: QUALITY INSPECTION ===== */}
+          {tab === 'quality' && (
+            <div>
+              <SectionTitle>Quality Inspection — Customer Record</SectionTitle>
+              <InfoGrid>
+                <div className="di"><div className="dl">Inspection Result</div><div className="dv"><StatusBadge status={c.qualityInspectionResult || 'Pending'} /></div></div>
+                <InfoItem label="Inspection Date" value={formatDate(c.qualityInspectionDate)} />
+                <InfoItem label="Inspected By" value={c.qualityInspectedBy} />
+                {c.qualityInspectionRemarks && <InfoItem label="Inspection Remarks" value={c.qualityInspectionRemarks} fullWidth />}
+              </InfoGrid>
+
+              {inst && (<>
+                <SectionTitle>Quality Inspection — Installation Record</SectionTitle>
+                <InfoGrid>
+                  <div className="di"><div className="dl">Quality Status</div><div className="dv"><StatusBadge status={inst.qualityInspection || 'Pending'} /></div></div>
+                  {inst.guaranteeCard && <div className="di"><div className="dl">Guarantee Card</div><div className="dv"><StatusBadge status={inst.guaranteeCard === 'Yes' ? 'Completed' : 'Pending'} />{` ${inst.guaranteeCard}`}</div></div>}
+                  <InfoItem label="Material Dispatched" value={inst.materialDispatched} />
+                  {inst.installationReport && <InfoItem label="Report Notes" value={inst.installationReport} fullWidth />}
+                </InfoGrid>
+              </>)}
+
+              {!inst && !c.qualityInspectionResult && <EmptyState icon="fact_check" title="No inspection data" message="Quality inspection details will appear here once added." />}
+            </div>
+          )}
+
+          {/* ===== TAB 6: WARRANTY DETAILS ===== */}
+          {tab === 'warranty' && (
+            <div>
+              <SectionTitle>System Details</SectionTitle>
+              <InfoGrid>
+                <InfoItem label="Panel Details" value={c.panelDetails} />
+                <InfoItem label="Inverter Details" value={c.inverterDetails} />
+                <InfoItem label="Required kW" value={c.kwRequired} />
+                <InfoItem label="Power Phase" value={c.powerPhase} />
+              </InfoGrid>
+
+              <SectionTitle>Warranty Period</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                <div style={{ background: 'linear-gradient(135deg,#11998e,#38ef7d)', borderRadius: 12, padding: 16, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem' }}>{formatDate(c.warrantyStartDate) || 'Not set'}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Warranty Start</div>
+                </div>
+                <div style={{ background: 'linear-gradient(135deg,#f5af19,#f12711)', borderRadius: 12, padding: 16, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem' }}>{formatDate(c.warrantyEndDate) || 'Not set'}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Warranty End</div>
+                </div>
+              </div>
+
+              {(() => {
+                const po = customerPOs.find(p => p.status === 'Approved') || customerPOs[0];
+                return po && po.warrantyTerms ? (<>
+                  <SectionTitle>Warranty Terms (from PO)</SectionTitle>
+                  <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14, fontSize: '.88rem' }}>{po.warrantyTerms}</div>
+                </>) : null;
+              })()}
+
+              {inst && inst.guaranteeCard && (<>
+                <SectionTitle>Guarantee Card</SectionTitle>
+                <InfoGrid>
+                  <div className="di"><div className="dl">Guarantee Card Issued</div><div className="dv"><StatusBadge status={inst.guaranteeCard === 'Yes' ? 'Completed' : 'Pending'} /> {inst.guaranteeCard}</div></div>
+                </InfoGrid>
+              </>)}
+            </div>
+          )}
+
+          {/* ===== TAB 7: SUBSIDY PROCESS ===== */}
+          {tab === 'subsidy' && (
+            <div>
+              <SectionTitle>Subsidy Details</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 20 }}>
+                <div style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: 12, padding: 14, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '.95rem' }}>{c.subsidyApplied || 'No'}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Applied</div>
+                </div>
+                <div style={{ background: 'linear-gradient(135deg,#f093fb,#f5576c)', borderRadius: 12, padding: 14, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '.95rem' }}>{c.subsidyStatus || 'Pending'}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Status</div>
+                </div>
+                {c.subsidyAmount > 0 && <div style={{ background: 'linear-gradient(135deg,#11998e,#38ef7d)', borderRadius: 12, padding: 14, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '.95rem' }}>{formatCurrency(c.subsidyAmount)}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Amount</div>
+                </div>}
+              </div>
+              <InfoGrid>
+                <InfoItem label="Application Date" value={formatDate(c.subsidyApplicationDate)} />
+                <InfoItem label="Approval Date" value={formatDate(c.subsidyApprovalDate)} />
+                {c.subsidyRemarks && <InfoItem label="Remarks" value={c.subsidyRemarks} fullWidth />}
+              </InfoGrid>
+
+              <SectionTitle>Net Metering</SectionTitle>
+              <InfoGrid>
+                <div className="di"><div className="dl">Net Metering Status</div><div className="dv"><StatusBadge status={c.netMeteringStatus || 'Pending'} /></div></div>
+                <InfoItem label="Net Metering Date" value={formatDate(c.netMeteringDate)} />
+                <InfoItem label="Application / Ref Number" value={c.netMeteringApplicationNumber} />
+              </InfoGrid>
+
+              {!c.subsidyApplied && !c.netMeteringStatus && <EmptyState icon="savings" title="No subsidy data" message="Subsidy and net metering details will appear here once added." />}
+            </div>
+          )}
+
+          {/* ===== TAB 8: SYNCHRONIZATION AND FLAGGING ===== */}
+          {tab === 'sync' && (
+            <div>
+              <SectionTitle>Synchronization</SectionTitle>
+              <div style={{ display: 'flex', gap: 12, marginBottom: 20, flexWrap: 'wrap' }}>
+                <div style={{
+                  background: c.syncStatus === 'Synced' ? 'linear-gradient(135deg,#11998e,#38ef7d)' : 'linear-gradient(135deg,#f5af19,#f12711)',
+                  borderRadius: 12, padding: '14px 20px', color: '#fff', display: 'flex', alignItems: 'center', gap: 10
+                }}>
+                  <span className="material-icons-round" style={{ fontSize: 28 }}>{c.syncStatus === 'Synced' ? 'sync' : 'sync_problem'}</span>
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{c.syncStatus || 'Not Synced'}</div>
+                    <div style={{ fontSize: '.72rem', opacity: .85 }}>Sync Status</div>
+                  </div>
+                </div>
+              </div>
+
+              <SectionTitle>Flagging</SectionTitle>
+              {c.flagStatus && c.flagStatus !== 'None' ? (
+                <div style={{
+                  background: c.flagStatus === 'Resolved' ? 'rgba(39,174,96,.08)' : 'rgba(231,76,60,.08)',
+                  border: `1px solid ${c.flagStatus === 'Resolved' ? 'rgba(39,174,96,.3)' : 'rgba(231,76,60,.3)'}`,
+                  borderRadius: 10, padding: 16
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                    <span className="material-icons-round" style={{ color: c.flagStatus === 'Resolved' ? 'var(--ok)' : 'var(--err)' }}>
+                      {c.flagStatus === 'Resolved' ? 'check_circle' : 'flag'}
+                    </span>
+                    <strong style={{ color: c.flagStatus === 'Resolved' ? 'var(--ok)' : 'var(--err)' }}>{c.flagStatus}</strong>
+                  </div>
+                  {c.flagReason && <p style={{ margin: 0, fontSize: '.88rem' }}>{c.flagReason}</p>}
+                </div>
+              ) : (
+                <div style={{ color: 'var(--ok)', display: 'flex', alignItems: 'center', gap: 6, fontSize: '.9rem' }}>
+                  <span className="material-icons-round">check_circle</span> No flags — All clear
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ===== TAB 9: FIRST BILL ===== */}
+          {tab === 'firstbill' && (
+            <div>
+              <SectionTitle>First Electricity Bill After Solar</SectionTitle>
+              {(c.firstBillDate || c.firstBillAmount > 0 || c.firstBillUnits > 0) ? (<>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 20 }}>
+                  <div style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: 12, padding: 16, color: '#fff', textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatDate(c.firstBillDate) || '-'}</div>
+                    <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Bill Date</div>
+                  </div>
+                  {c.firstBillAmount > 0 && <div style={{ background: 'linear-gradient(135deg,#f093fb,#f5576c)', borderRadius: 12, padding: 16, color: '#fff', textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{formatCurrency(c.firstBillAmount)}</div>
+                    <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Bill Amount</div>
+                  </div>}
+                  {c.firstBillUnits > 0 && <div style={{ background: 'linear-gradient(135deg,#11998e,#38ef7d)', borderRadius: 12, padding: 16, color: '#fff', textAlign: 'center' }}>
+                    <div style={{ fontWeight: 700, fontSize: '1.1rem' }}>{c.firstBillUnits} kWh</div>
+                    <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Units Generated</div>
                   </div>}
                 </div>
-                {c.paymentType === 'Finance' && (
-                  <div className="dg" style={{ marginTop: 12 }}>
-                    <div className="di"><div className="dl">Bank Name</div><div className="dv">{c.bankName || '-'}</div></div>
-                    <div className="di"><div className="dl">Quotation Value</div><div className="dv">{formatCurrency(c.quotationProjectValue)}</div></div>
-                    <div className="di"><div className="dl">BOS Amount Status</div><div className="dv"><StatusBadge status={c.bosAmountStatus || 'Pending'} /></div></div>
+                {c.firstBillRemarks && (
+                  <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14 }}>
+                    <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Remarks</div>
+                    <p style={{ margin: 0, fontSize: '.88rem' }}>{c.firstBillRemarks}</p>
                   </div>
                 )}
-              </div>
-
-              {/* System & Warranty */}
-              <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
-                <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>System & Warranty</label>
-                <div className="dg">
-                  {c.panelDetails && <div className="di"><div className="dl">Panel Details</div><div className="dv">{c.panelDetails}</div></div>}
-                  {c.inverterDetails && <div className="di"><div className="dl">Inverter Details</div><div className="dv">{c.inverterDetails}</div></div>}
-                  <div className="di"><div className="dl">Warranty Start</div><div className="dv">{formatDate(c.warrantyStartDate)}</div></div>
-                  <div className="di"><div className="dl">Warranty End</div><div className="dv">{formatDate(c.warrantyEndDate)}</div></div>
-                  <div className="di"><div className="dl">Advance Paid Date</div><div className="dv">{formatDate(c.advancePaidDate)}</div></div>
-                  <div className="di"><div className="dl">1st Service Date</div><div className="dv">{formatDate(c.firstServiceDate)}</div></div>
-                  <div className="di"><div className="dl">Next Service Date</div><div className="dv">{formatDate(c.nextServiceDate)}</div></div>
-                </div>
-              </div>
-
-              {/* Installation Picture */}
-              {c.installationPicUrl && (
-                <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
-                  <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>Installation Picture</label>
-                  <img src={c.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 240, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
-                </div>
-              )}
-
-              {/* Installation Record */}
-              {inst && (
-                <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
-                  <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 12, display: 'block' }}>Installation Record</label>
-                  <div className="dg">
-                    <div className="di"><div className="dl">Progress</div><div className="dv" style={{ fontWeight: 700, color: 'var(--pri)' }}>{inst.progress || 0}%</div></div>
-                    <div className="di"><div className="dl">Team Leader</div><div className="dv">{inst.teamLeader || '-'}</div></div>
-                    <div className="di"><div className="dl">Start Date</div><div className="dv">{formatDate(inst.startDate)}</div></div>
-                    <div className="di"><div className="dl">Total Days</div><div className="dv">{inst.totalDays || '-'}</div></div>
-                    <div className="di"><div className="dl">Quality Inspection</div><div className="dv">{inst.qualityInspection || 'Pending'}</div></div>
-                    <div className="di"><div className="dl">Material Dispatched</div><div className="dv">{inst.materialDispatched || 'No'}</div></div>
-                  </div>
-                </div>
-              )}
-
-              {/* Reference & Feedback */}
-              {(c.customerReference === 'Yes' || c.feedback) && (
-                <div style={{ borderTop: '1px solid var(--bor)', margin: '20px 0', paddingTop: 16 }}>
-                  {c.customerReference === 'Yes' && (
-                    <div className="dg" style={{ marginBottom: 12 }}>
-                      <div className="di"><div className="dl">Reference Lead Name</div><div className="dv">{c.referenceLeadName || '-'}</div></div>
-                      <div className="di"><div className="dl">Reference Phone</div><div className="dv">{c.referencePhoneNumber || '-'}</div></div>
-                    </div>
-                  )}
-                  {c.feedback && <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14 }}>
-                    <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 6 }}>Customer Feedback</div>
-                    <p style={{ margin: 0, fontSize: '.88rem' }}>{c.feedback}</p>
-                  </div>}
-                </div>
+              </>) : (
+                <EmptyState icon="receipt" title="No first bill recorded" message="First electricity bill details will appear here once added." />
               )}
             </div>
           )}
 
-          {/* -------- PURCHASE ORDERS TAB -------- */}
-          {tab === 'pos' && (
+          {/* ===== TAB 10: NEXT O&M ===== */}
+          {tab === 'om' && (
             <div>
-              {customerPOs.length > 0 ? (
-                customerPOs.map(po => (
-                  <div key={po.id} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: 16, marginBottom: 12, background: '#fafbfc' }}>
-                    {/* PO Header */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                        <strong style={{ fontSize: '1rem' }}>{po.poNumber}</strong>
-                        <StatusBadge status={po.status} />
-                      </div>
-                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        <button className="btn bsm bo" onClick={() => printPO(po, linkedLead || c)}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print PO
-                        </button>
-                        <button className="btn bsm bo" onClick={() => printBOM(po, linkedLead || c)}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print BOM
-                        </button>
-                        <button className="btn bsm bo" onClick={() => downloadPO(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> PO
-                        </button>
-                        <button className="btn bsm bo" onClick={() => downloadBOM(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> BOM
-                        </button>
-                        <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
-                        </button>
-                      </div>
-                    </div>
+              <SectionTitle>Service Schedule</SectionTitle>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 20 }}>
+                {c.firstServiceDate && <div style={{ background: 'linear-gradient(135deg,#667eea,#764ba2)', borderRadius: 12, padding: 14, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '.95rem' }}>{formatDate(c.firstServiceDate)}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>1st Service</div>
+                </div>}
+                {c.lastServiceDate && <div style={{ background: 'linear-gradient(135deg,#f5af19,#f12711)', borderRadius: 12, padding: 14, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '.95rem' }}>{formatDate(c.lastServiceDate)}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Last Service</div>
+                </div>}
+                {c.nextServiceDate && <div style={{ background: 'linear-gradient(135deg,#11998e,#38ef7d)', borderRadius: 12, padding: 14, color: '#fff', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '.95rem' }}>{formatDate(c.nextServiceDate)}</div>
+                  <div style={{ fontSize: '.72rem', opacity: .85, marginTop: 4 }}>Next Service</div>
+                </div>}
+              </div>
+              <InfoGrid>
+                {c.omServiceInterval && <InfoItem label="Service Interval" value={c.omServiceInterval} />}
+              </InfoGrid>
 
-                    {/* PO Details Grid */}
-                    <div className="dg" style={{ gap: 8 }}>
-                      <div className="di"><div className="dl">PO Date</div><div className="dv">{po.poDate || '-'}</div></div>
-                      <div className="di"><div className="dl">Vendor</div><div className="dv">{po.vendorName || '-'}</div></div>
-                      {po.moduleCount && <div className="di"><div className="dl">Modules</div><div className="dv">{po.moduleCount}</div></div>}
-                      {po.inverterDetails && <div className="di"><div className="dl">Inverter</div><div className="dv">{po.inverterDetails}</div></div>}
-                      {po.plantLocation && <div className="di"><div className="dl">Plant Location</div><div className="dv">{po.plantLocation}</div></div>}
-                      <div className="di"><div className="dl">Items</div><div className="dv">{(po.items || []).length} items</div></div>
-                      <div className="di"><div className="dl">Total Value</div><div className="dv" style={{ fontWeight: 700 }}>{formatCurrency(po.totalValue)}</div></div>
-                      {po.extraChargesTotal > 0 && <div className="di"><div className="dl">Extra Charges</div><div className="dv" style={{ fontWeight: 600, color: 'var(--sec)' }}>{formatCurrency(po.extraChargesTotal)}</div></div>}
-                      {po.agreedPrice && <div className="di"><div className="dl">Price After Subsidy</div><div className="dv" style={{ fontWeight: 700, color: 'var(--pri)' }}>{formatCurrency(po.agreedPrice)}</div></div>}
-                      <div className="di"><div className="dl">Created By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.createdBy || '-'}</div></div>
-                      {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{po.approvalDate}</span></div></div>}
-                    </div>
+              {c.serviceHistory && (<>
+                <SectionTitle>Service History</SectionTitle>
+                <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14 }}>
+                  <p style={{ margin: 0, fontSize: '.88rem', whiteSpace: 'pre-line' }}>{c.serviceHistory}</p>
+                </div>
+              </>)}
 
-                    {/* Expandable BOM items */}
-                    {(po.items || []).length > 0 && (
-                      <details style={{ marginTop: 10 }}>
-                        <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--pri)' }}>View BOM Items</summary>
-                        <div className="tw" style={{ marginTop: 8 }}>
-                          <table>
-                            <thead><tr><th>#</th><th>Material</th><th>Make</th><th>Model / Rating</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead>
-                            <tbody>
-                              {po.items.map((item, i) => (
-                                <tr key={i}>
-                                  <td>{i + 1}</td>
-                                  <td>{item.materialName}</td>
-                                  <td style={{ fontSize: '.82rem' }}>{item.make || '-'}</td>
-                                  <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{item.specification || '-'}</td>
-                                  <td>{item.quantity}</td>
-                                  <td>{item.unit || '-'}</td>
-                                  <td>{formatCurrency(item.rate)}</td>
-                                  <td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td>
-                                  <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{item.remarks || '-'}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      </details>
-                    )}
+              {c.customerReference === 'Yes' && (<>
+                <SectionTitle>Customer Reference</SectionTitle>
+                <InfoGrid>
+                  <InfoItem label="Reference Lead Name" value={c.referenceLeadName} />
+                  <InfoItem label="Reference Phone" value={c.referencePhoneNumber} />
+                </InfoGrid>
+              </>)}
 
-                    {/* Extra charges breakdown */}
-                    {po.extraChargesTotal > 0 && (
-                      <details style={{ marginTop: 8 }}>
-                        <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--sec)' }}>View Extra Charges</summary>
-                        <div className="dg" style={{ marginTop: 8, gap: 6 }}>
-                          {po.discomCharges > 0 && <div className="di"><div className="dl">Discom Charges</div><div className="dv">{formatCurrency(po.discomCharges)}</div></div>}
-                          {po.civilWork > 0 && <div className="di"><div className="dl">Civil Work</div><div className="dv">{formatCurrency(po.civilWork)}</div></div>}
-                          {po.upvcPipes > 0 && <div className="di"><div className="dl">UPVC Pipes</div><div className="dv">{formatCurrency(po.upvcPipes)}</div></div>}
-                          {po.additionalRelay > 0 && <div className="di"><div className="dl">Additional Relay</div><div className="dv">{formatCurrency(po.additionalRelay)}</div></div>}
-                          {po.elevatedStructure > 0 && <div className="di"><div className="dl">Elevated Structure</div><div className="dv">{formatCurrency(po.elevatedStructure)}</div></div>}
-                          {po.additionalBom > 0 && <div className="di"><div className="dl">Additional BOM</div><div className="dv">{formatCurrency(po.additionalBom)}</div></div>}
-                          {po.otherCharges > 0 && <div className="di"><div className="dl">Others</div><div className="dv">{formatCurrency(po.otherCharges)}</div></div>}
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                ))
-              ) : (
-                <EmptyState icon="receipt_long" title="No purchase orders" message="POs linked to this customer's lead will appear here automatically." />
+              {c.feedback && (<>
+                <SectionTitle>Customer Feedback</SectionTitle>
+                <div style={{ background: 'rgba(26,58,122,.04)', borderRadius: 10, padding: 14 }}>
+                  <p style={{ margin: 0, fontSize: '.88rem' }}>{c.feedback}</p>
+                </div>
+              </>)}
+
+              {!c.firstServiceDate && !c.nextServiceDate && !c.serviceHistory && !c.feedback && (
+                <EmptyState icon="build_circle" title="No O&M data" message="Service schedule and maintenance history will appear here once added." />
+              )}
+
+              {/* Service reminder button */}
+              {c.nextServiceDate && c.phone && (
+                <div style={{ marginTop: 16 }}>
+                  <button className="btn bo" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>send</span> Send Service Reminder via WhatsApp
+                  </button>
+                </div>
               )}
             </div>
           )}
+        </div>
+
+        {/* Bottom action bar */}
+        <div style={{ padding: '12px 24px', borderTop: '1px solid var(--bor)', display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap', background: 'var(--bg2)' }}>
+          <button className="btn bsm bo" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
+            <span className="material-icons-round" style={{ fontSize: 15 }}>description</span> Completion Report
+          </button>
+          <button className="btn bsm bo" onClick={() => shareCompletionReportWhatsApp(c, leadPOs, installations, leads)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+            <span className="material-icons-round" style={{ fontSize: 15 }}>share</span> Share Report
+          </button>
         </div>
       </div>
     </div>
