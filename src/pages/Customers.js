@@ -148,6 +148,10 @@ export default function Customers() {
 
 /* ============ CUSTOMER MODAL (ADD / EDIT) ============ */
 function CustomerModal({ data, id, onSave, onClose }) {
+  const { leads } = useData();
+  // Find linked lead to pre-populate payment fields from lead stage
+  const ll = leads.find(l => l.phone === data.phone && l.name === data.name) || leads.find(l => l.phone === data.phone);
+
   const [tab, setTab] = useState('info');
   const [f, setF] = useState({
     // Basic Info
@@ -159,10 +163,12 @@ function CustomerModal({ data, id, onSave, onClose }) {
     powerPhase: data.powerPhase || 'Single Phase',
     kwRequired: data.kwRequired || '', status: data.status || 'Active',
     customerServiceNumber: data.customerServiceNumber || '',
-    // Payment
+    // Payment — auto-populate from lead if not already set on customer
     paymentType: data.paymentType || 'Cash',
-    agreedPrice: data.agreedPrice || 0, bosAmount: data.bosAmount || 0, totalPrice: data.totalPrice || 0,
-    advanceAmount: data.advanceAmount || 0, secondPayment: data.secondPayment || 0,
+    agreedPrice: data.agreedPrice || toNumber(ll?.expectedValue) || 0,
+    bosAmount: data.bosAmount || 0, totalPrice: data.totalPrice || 0,
+    advanceAmount: data.advanceAmount || toNumber(ll?.advanceLeadAmount) || 0,
+    secondPayment: data.secondPayment || 0,
     thirdPayment: data.thirdPayment || 0, finalPayment: data.finalPayment || 0,
     bankName: data.bankName || '',
     quotationProjectValue: data.quotationProjectValue || 0,
@@ -269,23 +275,74 @@ function CustomerModal({ data, id, onSave, onClose }) {
           </>)}
 
           {/* Tab 2: Payment Details */}
-          {tab === 'payment' && (<>
-            <div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div>
-            {f.paymentType === 'Cash' && (<>
-              <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '12px 0 8px' }}>Pricing</div>
-              <div className="fr3"><div className="fg"><label>Agreed Price (₹)</label><input type="number" className="fi" value={f.agreedPrice} onChange={e => set('agreedPrice', e.target.value)} /></div><div className="fg"><label>BOS Amount (₹)</label><input type="number" className="fi" value={f.bosAmount} onChange={e => set('bosAmount', e.target.value)} /></div><div className="fg"><label>Total Price (₹)</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
-              <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '12px 0 8px' }}>Payment Tracking</div>
-              <div className="fr"><div className="fg"><label>Advance (₹)</label><input type="number" className="fi" value={f.advanceAmount} onChange={e => set('advanceAmount', e.target.value)} /></div><div className="fg"><label>2nd Payment (₹)</label><input type="number" className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} /></div></div>
-              <div className="fr"><div className="fg"><label>3rd Payment (₹)</label><input type="number" className="fi" value={f.thirdPayment} onChange={e => set('thirdPayment', e.target.value)} /></div><div className="fg"><label>Final Payment (₹)</label><input type="number" className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} /></div></div>
-            </>)}
-            {f.paymentType === 'Finance' && (<>
-              <div className="fg"><label>Bank Name</label><input className="fi" value={f.bankName} onChange={e => set('bankName', e.target.value)} /></div>
-              <div className="fr"><div className="fg"><label>Quotation Project Value (₹)</label><input type="number" className="fi" value={f.quotationProjectValue} onChange={e => set('quotationProjectValue', e.target.value)} /></div><div className="fg"><label>Total Price (₹)</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
-              <div className="fr"><div className="fg"><label>Advance Received Date</label><input type="date" className="fi" value={f.advanceReceivedDate} onChange={e => set('advanceReceivedDate', e.target.value)} /></div><div className="fg"><label>Advance Received Amount (₹)</label><input type="number" className="fi" value={f.advanceReceivedAmount} onChange={e => set('advanceReceivedAmount', e.target.value)} /></div></div>
-              <div className="fr"><div className="fg"><label>Final Amount Date</label><input type="date" className="fi" value={f.finalAmountDate} onChange={e => set('finalAmountDate', e.target.value)} /></div><div className="fg"><label>Final Amount (₹)</label><input type="number" className="fi" value={f.finalAmount} onChange={e => set('finalAmount', e.target.value)} /></div></div>
-              <div className="fg"><label>BOS Amount Status</label><select className="fi" value={f.bosAmountStatus} onChange={e => set('bosAmountStatus', e.target.value)}><option>Included</option><option>Pending</option><option>Paid</option></select></div>
-            </>)}
-          </>)}
+          {tab === 'payment' && (() => {
+            const cashPaid = toNumber(f.advanceAmount) + toNumber(f.secondPayment) + toNumber(f.thirdPayment) + toNumber(f.finalPayment);
+            const finPaid = toNumber(f.advanceReceivedAmount) + toNumber(f.finalAmount);
+            const paid = f.paymentType === 'Finance' ? finPaid : cashPaid;
+            const balance = toNumber(f.totalPrice) - paid;
+            return (<>
+              {/* Lead data banner */}
+              {ll && (
+                <div style={{ background: 'linear-gradient(135deg,rgba(59,130,246,.1),rgba(99,102,241,.1))', border: '1px solid rgba(59,130,246,.3)', borderRadius: 10, padding: '10px 14px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  <span className="material-icons-round" style={{ fontSize: 18, color: '#3b82f6' }}>link</span>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 700, fontSize: '.8rem', color: '#3b82f6' }}>Linked Lead: {ll.name}</div>
+                    <div style={{ fontSize: '.75rem', color: 'var(--muted)' }}>
+                      Expected Value: <strong>{formatCurrency(ll.expectedValue)}</strong>
+                      {ll.advancePaid === 'Yes' && <> &nbsp;|&nbsp; Advance Paid: <strong>{formatCurrency(ll.advanceLeadAmount)}</strong></>}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Live balance summary */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
+                <div style={{ background: 'rgba(26,58,122,.06)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--pri)' }}>{formatCurrency(f.totalPrice)}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginTop: 3 }}>Total Price</div>
+                </div>
+                <div style={{ background: 'rgba(39,174,96,.08)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--ok)' }}>{formatCurrency(paid)}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginTop: 3 }}>Total Paid</div>
+                </div>
+                <div style={{ background: balance > 0 ? 'rgba(231,76,60,.08)' : 'rgba(39,174,96,.08)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
+                  <div style={{ fontWeight: 700, fontSize: '1rem', color: balance > 0 ? 'var(--err)' : 'var(--ok)' }}>{formatCurrency(Math.abs(balance))}</div>
+                  <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginTop: 3 }}>{balance > 0 ? 'Balance Due' : balance < 0 ? 'Overpaid' : 'Fully Paid'}</div>
+                </div>
+              </div>
+
+              <div className="fg"><label>Payment Type</label><select className="fi" value={f.paymentType} onChange={e => set('paymentType', e.target.value)}><option>Cash</option><option>Finance</option></select></div>
+              {f.paymentType === 'Cash' && (<>
+                <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '12px 0 8px' }}>Pricing</div>
+                <div className="fr3">
+                  <div className="fg">
+                    <label>Agreed Price (₹)</label>
+                    <input type="number" className="fi" value={f.agreedPrice} onChange={e => set('agreedPrice', e.target.value)} />
+                    {ll?.expectedValue > 0 && toNumber(f.agreedPrice) === 0 && <span style={{ fontSize: '.72rem', color: '#3b82f6', marginTop: 3, display: 'block' }}>Lead value: {formatCurrency(ll.expectedValue)}</span>}
+                  </div>
+                  <div className="fg"><label>BOS Amount (₹)</label><input type="number" className="fi" value={f.bosAmount} onChange={e => set('bosAmount', e.target.value)} /></div>
+                  <div className="fg"><label>Total Price (₹)</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div>
+                </div>
+                <div style={{ fontWeight: 700, fontSize: '.85rem', margin: '12px 0 8px' }}>Payment Tracking</div>
+                <div className="fr">
+                  <div className="fg">
+                    <label>Advance (₹)</label>
+                    <input type="number" className="fi" value={f.advanceAmount} onChange={e => set('advanceAmount', e.target.value)} />
+                    {ll?.advancePaid === 'Yes' && ll?.advanceLeadAmount > 0 && <span style={{ fontSize: '.72rem', color: '#10b981', marginTop: 3, display: 'block' }}>From lead: {formatCurrency(ll.advanceLeadAmount)}</span>}
+                  </div>
+                  <div className="fg"><label>2nd Payment (₹)</label><input type="number" className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} /></div>
+                </div>
+                <div className="fr"><div className="fg"><label>3rd Payment (₹)</label><input type="number" className="fi" value={f.thirdPayment} onChange={e => set('thirdPayment', e.target.value)} /></div><div className="fg"><label>Final Payment (₹)</label><input type="number" className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} /></div></div>
+              </>)}
+              {f.paymentType === 'Finance' && (<>
+                <div className="fg"><label>Bank Name</label><input className="fi" value={f.bankName} onChange={e => set('bankName', e.target.value)} /></div>
+                <div className="fr"><div className="fg"><label>Quotation Project Value (₹)</label><input type="number" className="fi" value={f.quotationProjectValue} onChange={e => set('quotationProjectValue', e.target.value)} /></div><div className="fg"><label>Total Price (₹)</label><input type="number" className="fi" value={f.totalPrice} onChange={e => set('totalPrice', e.target.value)} /></div></div>
+                <div className="fr"><div className="fg"><label>Advance Received Date</label><input type="date" className="fi" value={f.advanceReceivedDate} onChange={e => set('advanceReceivedDate', e.target.value)} /></div><div className="fg"><label>Advance Received Amount (₹)</label><input type="number" className="fi" value={f.advanceReceivedAmount} onChange={e => set('advanceReceivedAmount', e.target.value)} /></div></div>
+                <div className="fr"><div className="fg"><label>Final Amount Date</label><input type="date" className="fi" value={f.finalAmountDate} onChange={e => set('finalAmountDate', e.target.value)} /></div><div className="fg"><label>Final Amount (₹)</label><input type="number" className="fi" value={f.finalAmount} onChange={e => set('finalAmount', e.target.value)} /></div></div>
+                <div className="fg"><label>BOS Amount Status</label><select className="fi" value={f.bosAmountStatus} onChange={e => set('bosAmountStatus', e.target.value)}><option>Included</option><option>Pending</option><option>Paid</option></select></div>
+              </>)}
+            </>);
+          })()}
 
           {/* Tab 3: Material Dispatch Details */}
           {tab === 'dispatch' && (<>
