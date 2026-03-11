@@ -32,7 +32,7 @@ const DEFAULT_BOM_MATERIALS = [
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads, users } = useData();
+  const { leads, users, influencers } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -113,6 +113,17 @@ export default function Leads() {
           status: 'Pending'
         });
         toast('Sign-up reminder auto-created');
+      }
+      // Auto-create influencer when referred by "Other" person (new referrer)
+      if (cleaned.referredByType === 'Other' && cleaned.referredByName) {
+        const exists = influencers.find(inf => inf.name.toLowerCase() === cleaned.referredByName.toLowerCase());
+        if (!exists) {
+          await addDocument('influencers', {
+            name: cleaned.referredByName, phone: '', type: 'Individual', status: 'Active',
+            notes: `Auto-created from lead referral by ${cleaned.name}`
+          });
+          toast(cleaned.referredByName + ' added as Influencer automatically');
+        }
       }
       // Auto-create customer on first conversion (advance payment tracked separately in Customer)
       if (cleaned.status === 'Converted' && prevStatus !== 'Converted') {
@@ -306,14 +317,17 @@ function LeadModal({ data, id, onSave, onClose }) {
           )}
           {form.leadReference === 'Referral' && (
             <div className="fr">
-              <div className="fg"><label>Referred By</label><select className="fi" value={form.referredByType} onChange={e => { set('referredByType', e.target.value); set('referredById', ''); set('referredByName', ''); }}><option value="">-- Select Type --</option><option>Retailer</option><option>Influencer</option><option>Lead</option><option>Client</option></select></div>
-              <div className="fg"><label>Select {form.referredByType || 'Referrer'}</label><select className="fi" value={form.referredById} onChange={e => {
-                const val = e.target.value;
-                set('referredById', val);
-                const list = form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : form.referredByType === 'Lead' ? leads : form.referredByType === 'Client' ? customers : [];
-                const found = list.find(r => r.id === val);
-                set('referredByName', found ? found.name : '');
-              }}><option value="">-- Select --</option>{(form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : form.referredByType === 'Lead' ? leads.filter(l => l.id !== id) : form.referredByType === 'Client' ? customers : []).filter(r => form.referredByType === 'Lead' || form.referredByType === 'Client' || r.status === 'Active').map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+              <div className="fg"><label>Referred By</label><select className="fi" value={form.referredByType} onChange={e => { set('referredByType', e.target.value); set('referredById', ''); set('referredByName', ''); }}><option value="">-- Select Type --</option><option>Retailer</option><option>Influencer</option><option>Lead</option><option>Client</option><option>Other</option></select></div>
+              {form.referredByType === 'Other'
+                ? <div className="fg"><label>Referrer Name <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Will be auto-added as Influencer</span></label><input className="fi" value={form.referredByName} onChange={e => set('referredByName', e.target.value)} placeholder="Enter referrer's full name" /></div>
+                : <div className="fg"><label>Select {form.referredByType || 'Referrer'}</label><select className="fi" value={form.referredById} onChange={e => {
+                    const val = e.target.value;
+                    set('referredById', val);
+                    const list = form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : form.referredByType === 'Lead' ? leads : form.referredByType === 'Client' ? customers : [];
+                    const found = list.find(r => r.id === val);
+                    set('referredByName', found ? found.name : '');
+                  }}><option value="">-- Select --</option>{(form.referredByType === 'Retailer' ? retailers : form.referredByType === 'Influencer' ? influencers : form.referredByType === 'Lead' ? leads.filter(l => l.id !== id) : form.referredByType === 'Client' ? customers : []).filter(r => form.referredByType === 'Lead' || form.referredByType === 'Client' || r.status === 'Active').map(r => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+              }
             </div>
           )}
           <div className="fr"><div className="fg"><label>Last Follow-up</label><input type="date" className="fi" value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>

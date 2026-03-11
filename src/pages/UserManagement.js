@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, addDoc } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { DESIGNATIONS, getRoleFromDesignation, hasAccess } from '../services/helpers';
@@ -130,6 +130,56 @@ export default function UserManagement() {
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
   };
 
+  // Strip leading initials like "C.K.", "CH.", "P.", "R.", "V.", "SD." from names
+  const stripInitials = (name) => name.replace(/^([A-Z]{1,3}\.)+\s*/i, '').trim();
+
+  const handleCleanNames = async () => {
+    const teamSnap = await getDocs(collection(db, 'team'));
+    const toUpdate = teamSnap.docs
+      .map(d => ({ id: d.id, name: d.data().name || '' }))
+      .filter(t => stripInitials(t.name) !== t.name);
+    if (toUpdate.length === 0) { toast('No names with initials found', 'er'); return; }
+    const preview = toUpdate.map(t => `${t.name} → ${stripInitials(t.name)}`).join('\n');
+    if (!window.confirm(`Remove initials from ${toUpdate.length} name(s)?\n\n${preview}`)) return;
+    try {
+      for (const t of toUpdate) {
+        const clean = stripInitials(t.name);
+        await updateDoc(doc(db, 'team', t.id), { name: clean });
+      }
+      // Also update user display names
+      const userSnap = await getDocs(collection(db, 'users'));
+      for (const u of userSnap.docs) {
+        const dn = u.data().displayName || '';
+        const clean = stripInitials(dn);
+        if (clean !== dn) await updateDoc(doc(db, 'users', u.id), { displayName: clean });
+      }
+      await fetchUsers();
+      toast(`${toUpdate.length} name(s) cleaned successfully`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+  };
+
+  const handleAddYashwanth = async () => {
+    const teamSnap = await getDocs(collection(db, 'team'));
+    const exists = teamSnap.docs.find(d => (d.data().name || '').toLowerCase().includes('yashwanth'));
+    if (exists) { toast('Yashwanth already exists in Team', 'er'); return; }
+    if (!window.confirm('Add Yashwanth as a new active team member and create a user account?')) return;
+    try {
+      const teamRef = await addDoc(collection(db, 'team'), {
+        name: 'Yashwanth', role: 'Engineer', designation: 'Engineer',
+        status: 'Active', phone: '', email: '', attendance: 0,
+        joiningDate: new Date().toISOString().slice(0, 10)
+      });
+      await setDoc(doc(db, 'users', 'team_' + teamRef.id), {
+        displayName: 'Yashwanth', email: '', phone: '',
+        designation: 'Operations Manager', role: 'manager',
+        approved: true, teamId: teamRef.id,
+        createdAt: new Date().toISOString(), createdVia: 'manual_add'
+      });
+      await fetchUsers();
+      toast('Yashwanth added to Team and Users');
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+  };
+
   const handleEditSave = async (uid, data) => {
     try {
       const newRole = data.designation ? getRoleFromDesignation(data.designation) : undefined;
@@ -205,6 +255,12 @@ export default function UserManagement() {
           </button>
           <button className="btn" onClick={handleBulkSetManager} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Set all approved users to Manager role">
             <span className="material-icons-round" style={{ fontSize: 16 }}>admin_panel_settings</span> Set All to Manager
+          </button>
+          <button className="btn" onClick={handleCleanNames} style={{ padding: '6px 16px', fontSize: '.84rem', background: 'linear-gradient(135deg,#f59e0b,#f97316)', color: '#fff' }} title="Strip initials like C.K., P., R. from team member names">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>auto_fix_high</span> Clean Names
+          </button>
+          <button className="btn" onClick={handleAddYashwanth} style={{ padding: '6px 16px', fontSize: '.84rem', background: 'linear-gradient(135deg,#8b5cf6,#6366f1)', color: '#fff' }} title="Add Yashwanth to Team and Users">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>person_add</span> Add Yashwanth
           </button>
           <button className="btn" onClick={fetchUsers} style={{ padding: '6px 16px', fontSize: '.84rem' }}>
             <span className="material-icons-round" style={{ fontSize: 16 }}>refresh</span> Refresh
