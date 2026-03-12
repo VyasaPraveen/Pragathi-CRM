@@ -100,6 +100,7 @@ ${po.referenceNumber ? `<p><strong>Note-</strong> : All Technical specifications
 <p style="margin-top:30px">With Regards,</p>
 <div class="sig-section">
 <div class="sig-block"><div class="sig-line">${po.customerName || l.name || '___'}<br/>${po.customerAddress || l.address || ''}</div></div>
+<div class="sig-block"><div class="sig-line">Authorized Signature<br/>Pragathi Power Solutions</div></div>
 </div>
 <div class="footer">Ref: ${po.poNumber} | Pragathi Power Solutions \u2014 Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
 </body></html>`;
@@ -123,91 +124,81 @@ export function downloadPO(po, lead) {
 export function buildBOMHtml(po, lead) {
   const items = po.items || [];
   const l = lead || {};
-  return `<html><head><title>Delivery Challan - ${po.poNumber}</title>
+  const e = escapeHtml;
+  return `<html><head><title>Bill of Materials - ${e(po.poNumber || '')}</title>
 <style>
 body{font-family:Arial,sans-serif;padding:20px 30px;font-size:12px;color:#000;line-height:1.5}
 .hdr{text-align:center;border-bottom:2px solid #000;padding-bottom:10px;margin-bottom:6px}
-.hdr h2{margin:0;font-size:16px;letter-spacing:1px}
 .hdr p{margin:2px 0;font-size:11px}
 .gst-row{display:flex;justify-content:space-between;font-size:11px;font-weight:600;margin-bottom:10px}
+.addr-line{text-align:center;font-size:11px;margin-bottom:10px;line-height:1.6}
 .title{text-align:center;font-size:15px;font-weight:700;margin:14px 0;text-decoration:underline}
 .info-row{display:flex;justify-content:space-between;margin-bottom:12px;font-size:12px}
-.lead-info{background:#f8f9fa;border:1px solid #ddd;padding:8px 12px;margin-bottom:12px;font-size:11px;line-height:1.6}
-.lead-info strong{min-width:80px;display:inline-block}
 table{width:100%;border-collapse:collapse;margin:10px 0}
 th,td{border:1px solid #000;padding:5px 8px;text-align:left;font-size:11px}
 th{background:#f0f0f0;font-weight:700}
-.transport{margin-top:16px;font-size:12px}
-.transport td{border:none;padding:4px 10px 4px 0}
-.decl{margin-top:16px;font-size:11px}
-.sig-row{display:flex;justify-content:space-between;margin-top:40px}
+.scope-th{text-align:center}
+.scope-td{text-align:center;font-size:13px}
+.decl{margin-top:20px;font-size:11px;line-height:1.6}
+.sig-row{display:flex;justify-content:space-between;margin-top:50px}
 .sig-box{text-align:center;min-width:180px;font-size:11px}
-.sig-box .line{border-top:1px solid #000;margin-top:50px;padding-top:4px}
-.approvals{display:flex;justify-content:space-between;margin-top:40px;font-size:10px;text-align:center}
-.approvals div{border-top:1px solid #000;padding-top:4px;min-width:150px}
-@media print{body{padding:10px 15px}.lead-info{background:#f8f9fa !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.sig-box .line{border-top:1px solid #000;margin-top:60px;padding-top:4px}
+.approvals{display:flex;justify-content:space-between;margin-top:50px;font-size:10px;text-align:center}
+.approvals div{border-top:1px solid #000;padding-top:4px;min-width:140px}
+@media print{body{padding:10px 15px}}
 </style>
 </head><body>
 <div class="hdr">
 <img src="/logo.png" alt="Pragathi Power Solutions" style="max-height:60px;object-fit:contain" onerror="this.style.display='none'" />
-<p>19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-517501, Mob: 9701426440, E-Mail: ppstirupathi@gmail.com</p>
 </div>
 <div class="gst-row">
 <span>GST : 37AAOFP6349K2ZG</span>
 <span>9700073796</span>
 </div>
-<div class="title">DELIVERY CHALLAN</div>
+<div class="addr-line">19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-1, Mob: 9701461156 E-Mail: ppstirupathi@gmail.com</div>
+<div class="title">Bill of Materials</div>
 <div class="info-row">
-<div><strong>Customer / Vendor Details:</strong><br/>${po.customerName || l.name || '___'}<br/>${po.customerAddress || l.address || ''}<br/>Ph: ${po.customerPhone || l.phone || ''}</div>
-<div style="text-align:right"><strong>DC.NO / D.C.Date :</strong><br/>${po.poNumber || '___'} / ${po.poDate || '___'}</div>
-</div>
-<div class="lead-info">
-<strong>Lead Status:</strong> ${l.status || '-'} &nbsp;|&nbsp;
-<strong>Priority:</strong> ${l.priority || '-'} &nbsp;|&nbsp;
-<strong>kW:</strong> ${po.kwRequired || l.kwRequired || '-'} &nbsp;|&nbsp;
-<strong>City:</strong> ${l.city || '-'}${l.district ? ', ' + l.district : ''} &nbsp;|&nbsp;
-<strong>Pincode:</strong> ${l.pincode || '-'}
-${l.monthlyBill ? ' &nbsp;|&nbsp; <strong>Monthly Bill:</strong> ' + l.monthlyBill + ' Units' : ''}
-${l.expectedValue ? ' &nbsp;|&nbsp; <strong>Value:</strong> \u20b9' + Number(l.expectedValue).toLocaleString('en-IN') : ''}
-<br/>
-<strong>Site Visit:</strong> ${l.siteVisit || 'No'}${l.siteVisitDate ? ' (' + l.siteVisitDate + ')' : ''} &nbsp;|&nbsp;
-<strong>Quotation:</strong> ${l.quotationSent || 'No'} &nbsp;|&nbsp;
-<strong>Advance:</strong> ${l.advancePaid || 'No'}
-${l.existingConnection ? ' &nbsp;|&nbsp; <strong>Connection:</strong> ' + l.existingConnection : ''}
-${l.roofType ? ' &nbsp;|&nbsp; <strong>Roof:</strong> ' + l.roofType : ''}
-${l.structureType ? ' &nbsp;|&nbsp; <strong>Structure:</strong> ' + l.structureType : ''}
-${l.sanctionedLoad ? ' &nbsp;|&nbsp; <strong>Load:</strong> ' + l.sanctionedLoad + ' kW' : ''}
-${l.meterNumber ? ' &nbsp;|&nbsp; <strong>Meter:</strong> ' + l.meterNumber : ''}
-${l.consumerNumber ? ' &nbsp;|&nbsp; <strong>Consumer:</strong> ' + l.consumerNumber : ''}
-${l.availableSpace ? ' &nbsp;|&nbsp; <strong>Space:</strong> ' + l.availableSpace : ''}
-${l.assignedTo ? '<br/><strong>Assigned:</strong> ' + l.assignedTo : ''}
-${l.salesExecutive ? ' &nbsp;|&nbsp; <strong>Sales Exec:</strong> ' + l.salesExecutive : ''}
-${l.leadReference ? ' &nbsp;|&nbsp; <strong>Source:</strong> ' + l.leadReference : ''}
-${l.referredByName ? ' &nbsp;|&nbsp; <strong>Referred By:</strong> ' + l.referredByName : ''}
+<div><strong>Customer / Vendor Details:</strong><br/>${e(po.customerName || l.name || '___')}<br/>${e(po.customerAddress || l.address || '')}<br/>Ph: ${e(po.customerPhone || l.phone || '')}</div>
+<div style="text-align:right"><strong>PO NO / Date :</strong><br/>${e(po.poNumber || '___')} / ${e(po.poDate || '___')}</div>
 </div>
 <table>
-<thead><tr><th>Sl. No</th><th>Description of Material</th><th>Make</th><th>Model / Rating</th><th>Quantity</th><th>Remarks</th></tr></thead>
+<thead>
+<tr>
+<th rowspan="2" style="width:40px">Sl. No</th>
+<th rowspan="2">Description of Material</th>
+<th rowspan="2" style="width:50px">UOM</th>
+<th rowspan="2">Make</th>
+<th rowspan="2">Model / Rating</th>
+<th rowspan="2" style="width:55px">Quantity</th>
+<th colspan="2" class="scope-th">Scope</th>
+</tr>
+<tr><th class="scope-th" style="width:60px">Pragathi</th><th class="scope-th" style="width:60px">Customer</th></tr>
+</thead>
 <tbody>
-${items.map((item, i) => `<tr><td>${i + 1}</td><td>${item.materialName || ''}</td><td>${item.make || ''}</td><td>${item.specification || ''}</td><td>${item.quantity || ''}</td><td>${item.remarks || ''}</td></tr>`).join('')}
-<tr style="font-weight:700"><td></td><td>Total Quantity</td><td></td><td></td><td>${items.reduce((s, it) => s + Number(it.quantity || 0), 0)}</td><td></td></tr>
+${items.map((item, i) => `<tr>
+<td>${i + 1}</td>
+<td>${e(item.materialName || '')}</td>
+<td>${e(item.unit || 'Nos')}</td>
+<td>${e(item.make || '')}</td>
+<td>${e(item.specification || '')}</td>
+<td>${item.quantity || ''}</td>
+<td class="scope-td">${item.scopePragathi ? '✓' : ''}</td>
+<td class="scope-td">${item.scopeCustomer ? '✓' : ''}</td>
+</tr>`).join('')}
+<tr style="font-weight:700"><td></td><td colspan="4" style="text-align:right">Total Quantity</td><td>${items.reduce((s, it) => s + Number(it.quantity || 0), 0)}</td><td></td><td></td></tr>
 </tbody>
 </table>
-<div class="transport">
-<strong>Transportation Details</strong>
-<table><tr><td>Vehicle No:</td><td style="min-width:120px">___________</td><td>Driver Name:</td><td style="min-width:120px">___________</td><td>LR No (if any):</td><td style="min-width:100px">___________</td></tr></table>
-</div>
 <div class="decl">
-<strong>Declaration:</strong><br/>
-We hereby confirm that the above-mentioned materials are delivered in good condition at the customer site.
+We hereby agreed and confirm that the above-Bill of Materials &amp; Scope of Works
 </div>
 <div class="sig-row">
-<div class="sig-box">Date:<div class="line">Delivered By (Name &amp; Signature)</div></div>
-<div class="sig-box"><div class="line">Received By (Customer Name &amp; Signature)</div></div>
+<div class="sig-box"><div class="line">Customer Signature</div></div>
+<div class="sig-box"><div class="line">Pragathi Sales Representative</div></div>
 </div>
 <div class="approvals">
-<div>Finance Clearance</div>
-<div>Material Availability Confirmation</div>
-<div>Material Loading Authorization</div>
+<div>Procurement</div>
+<div>Finance Dept</div>
+<div>Management</div>
 </div>
 </body></html>`;
 }

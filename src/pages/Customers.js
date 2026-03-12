@@ -148,9 +148,21 @@ export default function Customers() {
 
 /* ============ CUSTOMER MODAL (ADD / EDIT) ============ */
 function CustomerModal({ data, id, onSave, onClose }) {
-  const { leads } = useData();
+  const { leads, installations, leadPOs, users } = useData();
+  const { toast } = useToast();
   // Find linked lead to pre-populate payment fields from lead stage
   const ll = leads.find(l => l.phone === data.phone && l.name === data.name) || leads.find(l => l.phone === data.phone);
+  const linkedInst = installations.find(i => i.customerName === data.name && i.phone === data.phone) || installations.find(i => i.customerName === data.name);
+  // Find linked BOM/PO
+  const customerPOs = leadPOs.filter(po => (ll && po.leadId === ll.id) || (po.customerName === data.name && po.customerPhone === data.phone));
+  const linkedPO = customerPOs.find(p => p.status === 'Approved') || customerPOs[0];
+  // Parse BOM items for material consumption
+  const bomItems = linkedPO?.items || [];
+  const findItem = (keyword) => bomItems.find(i => (i.materialName || '').toLowerCase().includes(keyword.toLowerCase()));
+  const acItem  = findItem('AC Cable') || findItem('AC cable');
+  const dcItem  = findItem('DC Cable') || findItem('DC cable');
+  const earthItem = findItem('Earth') || findItem('earth');
+  const pipeItem  = findItem('Conduit') || findItem('UPVC') || findItem('PVC Pipe');
 
   const [tab, setTab] = useState('info');
   const [f, setF] = useState({
@@ -227,6 +239,53 @@ function CustomerModal({ data, id, onSave, onClose }) {
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
+  const di = linkedInst || {};
+  const [instF, setInstF] = useState({
+    // Site & roof — from existing installation, else from linked lead
+    siteVisitStatus: di.siteVisitStatus || (ll?.siteVisit === 'Yes' ? 'Visited' : 'Not Visited'),
+    roofType:      di.roofType      || ll?.roofType      || 'RCC',
+    floors:        di.floors        || ll?.floors        || 1,
+    structureType: di.structureType || ll?.structureType || 'Flat',
+    startDate: di.startDate || '', totalDays: di.totalDays || '', teamLeader: di.teamLeader || '',
+    numPeople: di.numPeople || '', materialDispatched: di.materialDispatched || 'No', progress: di.progress || 0,
+    qualityInspection: di.qualityInspection || 'Pending', guaranteeCard: di.guaranteeCard || 'No',
+    customerReference: di.customerReference || 'No',
+    referenceLeadName: di.referenceLeadName || '', referencePhoneNumber: di.referencePhoneNumber || '',
+    discomFeasibility: di.discomFeasibility || 'Pending', discomFeasibilityDate: di.discomFeasibilityDate || '',
+    docSubmission: di.docSubmission || 'Pending', docSubmissionDate: di.docSubmissionDate || '',
+    discomInspection: di.discomInspection || 'Pending', discomInspectionDate: di.discomInspectionDate || '',
+    meterChange: di.meterChange || 'Pending', meterChangeDate: di.meterChangeDate || '',
+    flaggingStatus: di.flaggingStatus || 'Pending', flaggingDate: di.flaggingDate || '',
+    subsidyStatus: di.subsidyStatus || 'Not Applied', subsidyDate: di.subsidyDate || '',
+    // Material consumption — from existing installation, else from BOM items
+    acCableQty:     di.acCableQty     || acItem?.quantity      || '',
+    acCableSize:    di.acCableSize    || acItem?.specification  || '',
+    dcCableQty:     di.dcCableQty     || dcItem?.quantity      || '',
+    dcCableSize:    di.dcCableSize    || dcItem?.specification  || '',
+    earthCable:     di.earthCable     || earthItem?.quantity    || '',
+    earthCableSize: di.earthCableSize || earthItem?.specification || '',
+    upvcPipes:      di.upvcPipes      || pipeItem?.quantity     || '',
+    upvcPipeSize:   di.upvcPipeSize   || pipeItem?.specification || '',
+    firstServiceDate: di.firstServiceDate || '', nextServiceDate: di.nextServiceDate || '',
+    handSketch: di.handSketch || linkedPO?.handSketch || linkedPO?.sketchWithSignature || '',
+    installationReport: di.installationReport || '',
+  });
+  const setI = (k, v) => setInstF(p => ({ ...p, [k]: v }));
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    // Save installation data to installations collection
+    try {
+      const instData = { ...instF, progress: Math.min(100, Math.max(0, toNumber(instF.progress))), floors: toNumber(instF.floors), customerName: data.name || f.name, phone: data.phone || f.phone };
+      if (linkedInst?.id) {
+        await updateDocument('installations', linkedInst.id, instData);
+      } else if (instData.customerName) {
+        await addDocument('installations', instData);
+      }
+    } catch (err) { toast('Installation save failed: ' + err.message, 'er'); }
+    onSave(f, id);
+  };
+
   const EDIT_TABS = [
     { key: 'info',         label: 'Customer Info', icon: 'person',          color: '#3b82f6' },
     { key: 'payment',      label: 'Payment',       icon: 'payments',        color: '#10b981' },
@@ -251,7 +310,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
 
   return (
     <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
-      <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
+      <form onSubmit={handleSubmit}>
         {/* Tab bar */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, padding: '4px 0' }}>
           {EDIT_TABS.map(t => (
@@ -355,8 +414,63 @@ function CustomerModal({ data, id, onSave, onClose }) {
           {tab === 'installation' && (<>
             <div className="fr"><div className="fg"><label>Installation Status</label><select className="fi" value={f.installationStatus} onChange={e => set('installationStatus', e.target.value)}><option>Pending</option><option>In Progress</option><option>Completed</option><option>On Hold</option></select></div><div className="fg"><label>Advance Paid Date</label><input type="date" className="fi" value={f.advancePaidDate} onChange={e => set('advancePaidDate', e.target.value)} /></div></div>
             <div className="fg"><label>Installation Picture URL</label><input className="fi" type="url" value={f.installationPicUrl} onChange={e => set('installationPicUrl', e.target.value)} placeholder="https://..." /></div>
-            {f.installationPicUrl && <img src={f.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 180, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)', marginTop: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
-            {f.linkedInstallationId && <div className="fg" style={{ marginTop: 12 }}><label>Linked Installation ID</label><input className="fi" value={f.linkedInstallationId} disabled /></div>}
+            {f.installationPicUrl && <img src={f.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)', marginTop: 6 }} onError={e => { e.target.style.display = 'none'; }} />}
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 12, marginBottom: 8 }}>Site & Roof</div>
+            <div className="fr">
+              <div className="fg"><label>Site Visit Status</label><select className="fi" value={instF.siteVisitStatus} onChange={e => setI('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div>
+              <div className="fg"><label>Roof Type</label><select className="fi" value={instF.roofType} onChange={e => setI('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div>
+            </div>
+            <div className="fr">
+              <div className="fg"><label>Floors</label><input type="number" className="fi" value={instF.floors} onChange={e => setI('floors', e.target.value)} /></div>
+              <div className="fg"><label>Structure</label><select className="fi" value={instF.structureType} onChange={e => setI('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div>
+            </div>
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 8, marginBottom: 8 }}>Schedule & Team</div>
+            <div className="fr3">
+              <div className="fg"><label>Start Date</label><input type="date" className="fi" value={instF.startDate} onChange={e => setI('startDate', e.target.value)} /></div>
+              <div className="fg"><label>Total Days</label><input type="number" className="fi" value={instF.totalDays} onChange={e => setI('totalDays', e.target.value)} /></div>
+              <div className="fg"><label>Team Leader</label><select className="fi" value={instF.teamLeader} onChange={e => setI('teamLeader', e.target.value)}><option value="">-- Select --</option>{users.filter(u => u.displayName).map(u => <option key={u.id} value={u.displayName}>{u.displayName}</option>)}</select></div>
+            </div>
+            <div className="fr3">
+              <div className="fg"><label>Team Size</label><input type="number" className="fi" value={instF.numPeople} onChange={e => setI('numPeople', e.target.value)} /></div>
+              <div className="fg"><label>Material Dispatched</label><select className="fi" value={instF.materialDispatched} onChange={e => setI('materialDispatched', e.target.value)}><option>No</option><option>Yes</option></select></div>
+              <div className="fg"><label>Guarantee Card</label><select className="fi" value={instF.guaranteeCard} onChange={e => setI('guaranteeCard', e.target.value)}><option>No</option><option>Yes</option></select></div>
+            </div>
+            <div className="fr"><div className="fg"><label>Quality Inspection</label><select className="fi" value={instF.qualityInspection} onChange={e => setI('qualityInspection', e.target.value)}><option>Pending</option><option>Done</option><option>Approved</option></select></div></div>
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 8, marginBottom: 8 }}>DISCOM & Subsidy</div>
+            {[
+              { label: 'Feasibility Status', key: 'discomFeasibility', dateKey: 'discomFeasibilityDate', opts: ['Pending','Done','Approved'] },
+              { label: 'Doc Submission',      key: 'docSubmission',     dateKey: 'docSubmissionDate',     opts: ['Pending','Done','Approved'] },
+              { label: 'DISCOM Inspection',   key: 'discomInspection',  dateKey: 'discomInspectionDate',  opts: ['Pending','Done','Approved'] },
+              { label: 'Meter Change',        key: 'meterChange',       dateKey: 'meterChangeDate',       opts: ['Pending','Done'] },
+              { label: 'Flagging',            key: 'flaggingStatus',    dateKey: 'flaggingDate',          opts: ['Pending','Done'] },
+              { label: 'Subsidy',             key: 'subsidyStatus',     dateKey: 'subsidyDate',           opts: ['Not Applied','Pending','Approved','Released'] },
+            ].map(row => (
+              <div className="fr" key={row.key}>
+                <div className="fg"><label>{row.label}</label><select className="fi" value={instF[row.key]} onChange={e => setI(row.key, e.target.value)}>{row.opts.map(o => <option key={o}>{o}</option>)}</select></div>
+                <div className="fg"><label>Date</label><input type="date" className="fi" value={instF[row.dateKey]} onChange={e => setI(row.dateKey, e.target.value)} /></div>
+              </div>
+            ))}
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 8, marginBottom: 8 }}>Material Consumption</div>
+            <div className="fr"><div className="fg"><label>AC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.acCableQty} onChange={e => setI('acCableQty', e.target.value)} /></div><div className="fg"><label>AC Cable Size (mm)</label><input className="fi" value={instF.acCableSize} onChange={e => setI('acCableSize', e.target.value)} placeholder="e.g. 4mm" /></div></div>
+            <div className="fr"><div className="fg"><label>DC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.dcCableQty} onChange={e => setI('dcCableQty', e.target.value)} /></div><div className="fg"><label>DC Cable Size (mm)</label><input className="fi" value={instF.dcCableSize} onChange={e => setI('dcCableSize', e.target.value)} placeholder="e.g. 6mm" /></div></div>
+            <div className="fr"><div className="fg"><label>Earth Cable (mtrs)</label><input type="number" className="fi" value={instF.earthCable} onChange={e => setI('earthCable', e.target.value)} /></div><div className="fg"><label>Earth Cable Size (mm)</label><input className="fi" value={instF.earthCableSize} onChange={e => setI('earthCableSize', e.target.value)} placeholder="e.g. 4mm" /></div></div>
+            <div className="fr"><div className="fg"><label>UPVC Pipes (pcs)</label><input type="number" className="fi" value={instF.upvcPipes} onChange={e => setI('upvcPipes', e.target.value)} /></div><div className="fg"><label>UPVC Pipe Size (mm)</label><input className="fi" value={instF.upvcPipeSize} onChange={e => setI('upvcPipeSize', e.target.value)} placeholder="e.g. 25mm" /></div></div>
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 8, marginBottom: 8 }}>Service Dates</div>
+            <div className="fr"><div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={instF.firstServiceDate} onChange={e => setI('firstServiceDate', e.target.value)} /></div><div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={instF.nextServiceDate} onChange={e => setI('nextServiceDate', e.target.value)} /></div></div>
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 8, marginBottom: 8 }}>Documents</div>
+            <div className="fg"><label>Hand Sketch URL (with Signature)</label><input className="fi" type="url" value={instF.handSketch} onChange={e => setI('handSketch', e.target.value)} placeholder="https://..." /></div>
+            {instF.handSketch && <img src={instF.handSketch} alt="Hand Sketch" style={{ width: '100%', maxHeight: 140, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)', marginBottom: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
+            <div className="fg"><label>Installation Report / Notes</label><textarea className="fi" value={instF.installationReport} onChange={e => setI('installationReport', e.target.value)} rows="3" placeholder="Enter installation report details..." /></div>
+
+            <div style={{ fontWeight: 700, fontSize: '.82rem', color: '#8b5cf6', borderTop: '1px solid var(--bor)', paddingTop: 12, marginTop: 8, marginBottom: 8 }}>Customer Reference</div>
+            <div className="fg"><label>Has Reference?</label><select className="fi" value={instF.customerReference} onChange={e => setI('customerReference', e.target.value)}><option>No</option><option>Yes</option></select></div>
+            {instF.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={instF.referenceLeadName} onChange={e => setI('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={instF.referencePhoneNumber} onChange={e => setI('referencePhoneNumber', e.target.value)} /></div></div>}
           </>)}
 
           {/* Tab 5: Quality Inspection */}
@@ -422,26 +536,30 @@ function CustomerModal({ data, id, onSave, onClose }) {
 /* ============ CUSTOMER DETAIL MODAL (10 TABS) ============ */
 function CustomerDetailModal({ customer, onClose, onEdit }) {
   const [tab, setTab] = useState('info');
-  const [instModal, setInstModal] = useState(false);
-  const { leadPOs, leads, installations } = useData();
+  const { leadPOs, leads, installations, users } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const canEdit = hasAccess(role, 'coordinator');
 
-  const handleInstSave = async (data, id) => {
-    try {
-      data.progress = Math.min(100, Math.max(0, toNumber(data.progress)));
-      data.floors = toNumber(data.floors);
-      if (id) {
-        await updateDocument('installations', id, data);
-        toast('Installation updated');
-      } else {
-        await addDocument('installations', { ...data, customerName: customer.name, phone: customer.phone });
-        toast('Installation record created');
-      }
-      setInstModal(false);
-    } catch (e) { toast(e.message, 'er'); }
+  const blankInst = { customerName: customer.name, phone: customer.phone, address: customer.address || '',
+    siteVisitStatus: 'Not Visited', roofType: 'RCC', floors: 1, structureType: 'Flat',
+    startDate: '', totalDays: '', teamLeader: '', numPeople: '', materialDispatched: 'No', progress: 0,
+    qualityInspection: 'Pending', guaranteeCard: 'No', customerReference: 'No',
+    referenceLeadName: '', referencePhoneNumber: '',
+    discomFeasibility: 'Pending', discomFeasibilityDate: '',
+    docSubmission: 'Pending', docSubmissionDate: '',
+    discomInspection: 'Pending', discomInspectionDate: '',
+    meterChange: 'Pending', meterChangeDate: '',
+    flaggingStatus: 'Pending', flaggingDate: '',
+    subsidyStatus: 'Not Applied', subsidyDate: '',
+    acCableQty: '', acCableSize: '', dcCableQty: '', dcCableSize: '',
+    earthCable: '', earthCableSize: '', upvcPipes: '', upvcPipeSize: '',
+    firstServiceDate: '', nextServiceDate: '',
+    handSketch: '', installationReport: '',
   };
+  const [instF, setInstF] = useState(blankInst);
+  const [instSaving, setInstSaving] = useState(false);
+  const setIF = (k, v) => setInstF(p => ({ ...p, [k]: v }));
 
   const c = customer;
   const linkedLead = leads.find(l => l.phone === c.phone && l.name === c.name) || leads.find(l => l.phone === c.phone);
@@ -450,6 +568,28 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     (po.customerName === c.name && po.customerPhone === c.phone)
   );
   const inst = installations.find(i => i.customerName === c.name && i.phone === c.phone) || installations.find(i => i.customerName === c.name);
+
+  // Sync instF when inst loads/changes from Firestore
+  React.useEffect(() => {
+    if (inst) setInstF({ ...blankInst, ...inst });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [inst?.id]);
+
+  const handleInstSave = async (e) => {
+    e?.preventDefault();
+    setInstSaving(true);
+    try {
+      const data = { ...instF, progress: Math.min(100, Math.max(0, toNumber(instF.progress))), floors: toNumber(instF.floors) };
+      if (inst?.id) {
+        await updateDocument('installations', inst.id, data);
+        toast('Installation updated');
+      } else {
+        await addDocument('installations', { ...data, customerName: c.name, phone: c.phone });
+        toast('Installation record created');
+      }
+    } catch (err) { toast(err.message, 'er'); }
+    setInstSaving(false);
+  };
 
   const paid = c.paymentType === 'Finance'
     ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
@@ -624,9 +764,9 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
                     {(po.items || []).length > 0 && (
                       <details open>
                         <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--pri)', marginBottom: 8 }}>BOM Items ({po.items.length})</summary>
-                        <div className="tw"><table><thead><tr><th>#</th><th>Material</th><th>Make</th><th>Spec</th><th>Qty</th><th>Unit</th><th>Amount</th></tr></thead><tbody>
+                        <div className="tw"><table><thead><tr><th>#</th><th>Description of Material</th><th>UOM</th><th>Make</th><th>Model / Rating</th><th>Qty</th><th>Amount</th><th>Scope</th></tr></thead><tbody>
                           {po.items.map((item, i) => (
-                            <tr key={i}><td>{i + 1}</td><td>{item.materialName}</td><td style={{ fontSize: '.8rem' }}>{item.make || '-'}</td><td style={{ fontSize: '.8rem', color: 'var(--muted)' }}>{item.specification || '-'}</td><td>{item.quantity}</td><td>{item.unit || '-'}</td><td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td></tr>
+                            <tr key={i}><td>{i + 1}</td><td>{item.materialName}</td><td>{item.unit || 'Nos'}</td><td style={{ fontSize: '.8rem' }}>{item.make || '-'}</td><td style={{ fontSize: '.8rem', color: 'var(--muted)' }}>{item.specification || '-'}</td><td>{item.quantity}</td><td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td><td style={{ fontSize: '.8rem' }}>{[item.scopePragathi && 'Pragathi', item.scopeCustomer && 'Customer'].filter(Boolean).join(', ') || '-'}</td></tr>
                           ))}
                         </tbody></table></div>
                       </details>
@@ -640,124 +780,77 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
 
           {/* ===== TAB 4: INSTALLATION DETAILS ===== */}
           {tab === 'installation' && (
-            <div>
-              {/* Header actions */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div className="di" style={{ margin: 0 }}><div className="dl" style={{ marginBottom: 2 }}>Status</div><div className="dv"><StatusBadge status={c.installationStatus || 'Pending'} /></div></div>
-                  {c.advancePaidDate && <div className="di" style={{ margin: 0 }}><div className="dl" style={{ marginBottom: 2 }}>Advance Paid</div><div className="dv">{formatDate(c.advancePaidDate)}</div></div>}
-                </div>
-                {canEdit && (
-                  <button className="btn bp bsm" onClick={() => setInstModal(true)}>
-                    <span className="material-icons-round" style={{ fontSize: 16 }}>{inst ? 'edit' : 'add'}</span>
-                    {inst ? 'Edit Installation' : 'Create Installation Record'}
-                  </button>
-                )}
+            <form onSubmit={handleInstSave}>
+              <SectionTitle>Site & Roof</SectionTitle>
+              <div className="fr">
+                <div className="fg"><label>Site Visit Status</label><select className="fi" value={instF.siteVisitStatus} onChange={e => setIF('siteVisitStatus', e.target.value)} disabled={!canEdit}><option>Not Visited</option><option>Visited</option></select></div>
+                <div className="fg"><label>Roof Type</label><select className="fi" value={instF.roofType} onChange={e => setIF('roofType', e.target.value)} disabled={!canEdit}><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div>
+              </div>
+              <div className="fr">
+                <div className="fg"><label>Floors</label><input type="number" className="fi" value={instF.floors} onChange={e => setIF('floors', e.target.value)} disabled={!canEdit} /></div>
+                <div className="fg"><label>Structure</label><select className="fi" value={instF.structureType} onChange={e => setIF('structureType', e.target.value)} disabled={!canEdit}><option>Flat</option><option>Sloped</option></select></div>
               </div>
 
-              {inst ? (<>
-                {/* Progress */}
-                <div style={{ marginBottom: 20 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{ fontWeight: 700, fontSize: '.88rem' }}>Installation Progress</span>
-                    <span style={{ fontWeight: 700, fontSize: '1.1rem', color: 'var(--pri)' }}>{inst.progress || 0}%</span>
-                  </div>
-                  <div style={{ height: 12, borderRadius: 8, background: 'var(--bor)', overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${inst.progress || 0}%`, background: 'linear-gradient(90deg,#667eea,#764ba2)', borderRadius: 8, transition: 'width .4s' }} />
-                  </div>
+              <SectionTitle>Schedule & Team</SectionTitle>
+              <div className="fr3">
+                <div className="fg"><label>Start Date</label><input type="date" className="fi" value={instF.startDate} onChange={e => setIF('startDate', e.target.value)} disabled={!canEdit} /></div>
+                <div className="fg"><label>Total Days</label><input type="number" className="fi" value={instF.totalDays} onChange={e => setIF('totalDays', e.target.value)} disabled={!canEdit} /></div>
+                <div className="fg"><label>Team Leader</label><select className="fi" value={instF.teamLeader} onChange={e => setIF('teamLeader', e.target.value)} disabled={!canEdit}><option value="">-- Select --</option>{users.filter(u => u.displayName).map(u => <option key={u.id} value={u.displayName}>{u.displayName}</option>)}</select></div>
+              </div>
+              <div className="fr3">
+                <div className="fg"><label>Team Size</label><input type="number" className="fi" value={instF.numPeople} onChange={e => setIF('numPeople', e.target.value)} disabled={!canEdit} /></div>
+                <div className="fg"><label>Material Dispatched</label><select className="fi" value={instF.materialDispatched} onChange={e => setIF('materialDispatched', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></div>
+                <div className="fg"><label>Guarantee Card</label><select className="fi" value={instF.guaranteeCard} onChange={e => setIF('guaranteeCard', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></div>
+              </div>
+              <div className="fr">
+                <div className="fg"><label>Quality Inspection</label><select className="fi" value={instF.qualityInspection} onChange={e => setIF('qualityInspection', e.target.value)} disabled={!canEdit}><option>Pending</option><option>Done</option><option>Approved</option></select></div>
+              </div>
+
+              <SectionTitle>DISCOM & Subsidy</SectionTitle>
+              {[
+                { label: 'Feasibility Status', key: 'discomFeasibility', dateKey: 'discomFeasibilityDate', opts: ['Pending','Done','Approved'] },
+                { label: 'Doc Submission',      key: 'docSubmission',     dateKey: 'docSubmissionDate',     opts: ['Pending','Done','Approved'] },
+                { label: 'DISCOM Inspection',   key: 'discomInspection',  dateKey: 'discomInspectionDate',  opts: ['Pending','Done','Approved'] },
+                { label: 'Meter Change',        key: 'meterChange',       dateKey: 'meterChangeDate',       opts: ['Pending','Done'] },
+                { label: 'Flagging',            key: 'flaggingStatus',    dateKey: 'flaggingDate',          opts: ['Pending','Done'] },
+                { label: 'Subsidy',             key: 'subsidyStatus',     dateKey: 'subsidyDate',           opts: ['Not Applied','Pending','Approved','Released'] },
+              ].map(row => (
+                <div className="fr" key={row.key}>
+                  <div className="fg"><label>{row.label}</label><select className="fi" value={instF[row.key]} onChange={e => setIF(row.key, e.target.value)} disabled={!canEdit}>{row.opts.map(o => <option key={o}>{o}</option>)}</select></div>
+                  <div className="fg"><label>Date</label><input type="date" className="fi" value={instF[row.dateKey]} onChange={e => setIF(row.dateKey, e.target.value)} disabled={!canEdit} /></div>
                 </div>
+              ))}
 
-                {/* Team & Schedule */}
-                <SectionTitle>Team & Schedule</SectionTitle>
-                <InfoGrid>
-                  <InfoItem label="Team Leader" value={inst.teamLeader} />
-                  <InfoItem label="Team Size" value={inst.numPeople} />
-                  <InfoItem label="Start Date" value={formatDate(inst.startDate)} />
-                  <InfoItem label="Total Days" value={inst.totalDays} />
-                </InfoGrid>
+              <SectionTitle>Material Consumption</SectionTitle>
+              <div className="fr"><div className="fg"><label>AC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.acCableQty} onChange={e => setIF('acCableQty', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>AC Cable Size (mm)</label><input className="fi" value={instF.acCableSize} onChange={e => setIF('acCableSize', e.target.value)} placeholder="e.g. 4mm" disabled={!canEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>DC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.dcCableQty} onChange={e => setIF('dcCableQty', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>DC Cable Size (mm)</label><input className="fi" value={instF.dcCableSize} onChange={e => setIF('dcCableSize', e.target.value)} placeholder="e.g. 6mm" disabled={!canEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>Earth Cable (mtrs)</label><input type="number" className="fi" value={instF.earthCable} onChange={e => setIF('earthCable', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>Earth Cable Size (mm)</label><input className="fi" value={instF.earthCableSize} onChange={e => setIF('earthCableSize', e.target.value)} placeholder="e.g. 4mm" disabled={!canEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>UPVC Pipes (pcs)</label><input type="number" className="fi" value={instF.upvcPipes} onChange={e => setIF('upvcPipes', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>UPVC Pipe Size (mm)</label><input className="fi" value={instF.upvcPipeSize} onChange={e => setIF('upvcPipeSize', e.target.value)} placeholder="e.g. 25mm" disabled={!canEdit} /></div></div>
 
-                {/* Site & Roof */}
-                <SectionTitle>Site & Roof Details</SectionTitle>
-                <InfoGrid>
-                  <div className="di"><div className="dl">Site Visit</div><div className="dv"><span className={`st ${inst.siteVisitStatus === 'Visited' ? 'st-g' : 'st-x'}`}>{inst.siteVisitStatus || 'Not Visited'}</span></div></div>
-                  <InfoItem label="Roof Type" value={inst.roofType} />
-                  <InfoItem label="Floors" value={inst.floors} />
-                  <InfoItem label="Structure" value={inst.structureType} />
-                </InfoGrid>
+              <SectionTitle>Service Dates</SectionTitle>
+              <div className="fr">
+                <div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={instF.firstServiceDate} onChange={e => setIF('firstServiceDate', e.target.value)} disabled={!canEdit} /></div>
+                <div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={instF.nextServiceDate} onChange={e => setIF('nextServiceDate', e.target.value)} disabled={!canEdit} /></div>
+              </div>
 
-                {/* Material & Quality */}
-                <SectionTitle>Material & Quality</SectionTitle>
-                <InfoGrid>
-                  <div className="di"><div className="dl">Material Dispatched</div><div className="dv"><span className={`st ${inst.materialDispatched === 'Yes' ? 'st-g' : 'st-o'}`}>{inst.materialDispatched === 'Yes' ? 'Dispatched' : 'Pending'}</span></div></div>
-                  <div className="di"><div className="dl">Quality Inspection</div><div className="dv"><StatusBadge status={inst.qualityInspection || 'Pending'} /></div></div>
-                  <div className="di"><div className="dl">Guarantee Card</div><div className="dv"><span className={`st ${inst.guaranteeCard === 'Yes' ? 'st-g' : 'st-x'}`}>{inst.guaranteeCard === 'Yes' ? 'Issued' : 'Not Issued'}</span></div></div>
-                </InfoGrid>
+              <SectionTitle>Documents</SectionTitle>
+              <div className="fg"><label>Hand Sketch URL (with Signature)</label><input className="fi" type="url" value={instF.handSketch} onChange={e => setIF('handSketch', e.target.value)} placeholder="https://..." disabled={!canEdit} /></div>
+              {instF.handSketch && <img src={instF.handSketch} alt="Hand Sketch" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)', marginBottom: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
+              <div className="fg"><label>Installation Report / Notes</label><textarea className="fi" value={instF.installationReport} onChange={e => setIF('installationReport', e.target.value)} rows="4" placeholder="Enter installation report details..." disabled={!canEdit} /></div>
 
-                {/* DISCOM & Subsidy */}
-                <SectionTitle>DISCOM & Subsidy Process</SectionTitle>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(200px,1fr))', gap: 10, marginBottom: 16 }}>
-                  {[
-                    { label: 'Feasibility', status: inst.discomFeasibility, date: inst.discomFeasibilityDate },
-                    { label: 'Doc Submission', status: inst.docSubmission, date: inst.docSubmissionDate },
-                    { label: 'DISCOM Inspection', status: inst.discomInspection, date: inst.discomInspectionDate },
-                    { label: 'Meter Change', status: inst.meterChange, date: inst.meterChangeDate },
-                    { label: 'Flagging', status: inst.flaggingStatus, date: inst.flaggingDate },
-                    { label: 'Subsidy', status: inst.subsidyStatus, date: inst.subsidyDate },
-                  ].map(row => (
-                    <div key={row.label} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', background: '#fafbfc' }}>
-                      <div style={{ fontSize: '.72rem', color: 'var(--muted)', marginBottom: 4, textTransform: 'uppercase', fontWeight: 600 }}>{row.label}</div>
-                      <StatusBadge status={row.status || 'Pending'} />
-                      {row.date && <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: 4 }}>{formatDate(row.date)}</div>}
-                    </div>
-                  ))}
-                </div>
+              <SectionTitle>Customer Reference</SectionTitle>
+              <div className="fg"><label>Has Reference?</label><select className="fi" value={instF.customerReference} onChange={e => setIF('customerReference', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></div>
+              {instF.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={instF.referenceLeadName} onChange={e => setIF('referenceLeadName', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={instF.referencePhoneNumber} onChange={e => setIF('referencePhoneNumber', e.target.value)} disabled={!canEdit} /></div></div>}
 
-                {/* Material Consumption */}
-                <SectionTitle>Material Consumption</SectionTitle>
-                <InfoGrid>
-                  {inst.acCableQty && <InfoItem label="AC Cable" value={`${inst.acCableQty} mtrs${inst.acCableSize ? ' (' + inst.acCableSize + ')' : ''}`} />}
-                  {inst.dcCableQty && <InfoItem label="DC Cable" value={`${inst.dcCableQty} mtrs${inst.dcCableSize ? ' (' + inst.dcCableSize + ')' : ''}`} />}
-                  {inst.earthCable && <InfoItem label="Earth Cable" value={`${inst.earthCable} mtrs${inst.earthCableSize ? ' (' + inst.earthCableSize + ')' : ''}`} />}
-                  {inst.upvcPipes && <InfoItem label="UPVC Pipes" value={`${inst.upvcPipes} pcs${inst.upvcPipeSize ? ' (' + inst.upvcPipeSize + ')' : ''}`} />}
-                  {!inst.acCableQty && !inst.dcCableQty && !inst.earthCable && !inst.upvcPipes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dv" style={{ color: 'var(--muted)' }}>No material consumption data entered</div></div>}
-                </InfoGrid>
-
-                {/* Service Dates */}
-                <SectionTitle>Service Dates</SectionTitle>
-                <InfoGrid>
-                  <InfoItem label="1st Service Date" value={formatDate(inst.firstServiceDate)} />
-                  <InfoItem label="Next Service Date" value={formatDate(inst.nextServiceDate)} />
-                </InfoGrid>
-
-                {/* Hand Sketch */}
-                {inst.handSketch && (<>
-                  <SectionTitle>Hand Sketch</SectionTitle>
-                  <img src={inst.handSketch} alt="Hand Sketch" style={{ maxWidth: '100%', maxHeight: 280, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
-                </>)}
-
-                {/* Installation Report */}
-                {inst.installationReport && (<>
-                  <SectionTitle>Installation Report</SectionTitle>
-                  <div style={{ background: '#fafbfc', borderRadius: 10, padding: 14, border: '1px solid var(--bor)', fontSize: '.88rem', lineHeight: 1.7, whiteSpace: 'pre-wrap' }}>{inst.installationReport}</div>
-                </>)}
-
-                {/* Installation Picture (from customer) */}
-                {c.installationPicUrl && (<>
-                  <SectionTitle>Installation Picture</SectionTitle>
-                  <img src={c.installationPicUrl} alt="Installation" style={{ width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--bor)' }} onError={e => { e.target.style.display = 'none'; }} />
-                </>)}
-
-              </>) : (
-                <div style={{ textAlign: 'center', padding: '40px 20px' }}>
-                  <span className="material-icons-round" style={{ fontSize: 48, color: 'var(--muted)', opacity: .4 }}>construction</span>
-                  <p style={{ color: 'var(--muted)', margin: '12px 0 16px' }}>No installation record linked to this customer yet.</p>
-                  {canEdit && <button className="btn bp" onClick={() => setInstModal(true)}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create Installation Record</button>}
+              {canEdit && (
+                <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
+                  <button type="submit" className="btn bp" disabled={instSaving}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>{inst?.id ? 'save' : 'add'}</span>
+                    {instSaving ? 'Saving...' : inst?.id ? 'Save Installation' : 'Create Installation Record'}
+                  </button>
                 </div>
               )}
-
-              {/* Installation modal */}
-              {instModal && <InstallationInlineModal data={inst || { customerName: c.name, phone: c.phone, address: c.address }} id={inst?.id} onSave={handleInstSave} onClose={() => setInstModal(false)} />}
-            </div>
+            </form>
           )}
 
           {/* ===== TAB 5: QUALITY INSPECTION ===== */}
@@ -1039,25 +1132,26 @@ function InstallationInlineModal({ data, id, onSave, onClose }) {
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   const ITABS = [
-    { key: 'basic', label: 'Basic', icon: 'construction' },
-    { key: 'discom', label: 'DISCOM & Subsidy', icon: 'account_balance' },
-    { key: 'materials', label: 'Materials', icon: 'cable' },
-    { key: 'docs', label: 'Documents', icon: 'description' },
+    { key: 'basic',      label: 'Basic Info',       icon: 'construction',    color: '#8b5cf6' },
+    { key: 'discom',     label: 'DISCOM & Subsidy', icon: 'account_balance', color: '#d97706' },
+    { key: 'materials',  label: 'Materials',        icon: 'cable',           color: '#06b6d4' },
+    { key: 'docs',       label: 'Documents',        icon: 'description',     color: '#f43f5e' },
   ];
 
-  const ts = (key) => ({
-    padding: '9px 13px', fontWeight: 600, fontSize: '.78rem',
-    color: tab === key ? 'var(--pri)' : 'var(--muted)',
-    borderBottom: tab === key ? '2px solid var(--pri)' : '2px solid transparent',
-    marginBottom: '-2px', display: 'flex', alignItems: 'center', gap: 4,
-    background: 'none', border: 'none', borderBottomStyle: 'solid', cursor: 'pointer', whiteSpace: 'nowrap'
+  const ts = (key, color) => ({
+    padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
+    color: tab === key ? '#fff' : color,
+    background: tab === key ? color : `${color}1a`,
+    border: `1.5px solid ${tab === key ? color : `${color}55`}`,
+    display: 'flex', alignItems: 'center', gap: 5,
+    cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .15s',
   });
 
   return (
     <Modal title={id ? 'Edit Installation Record' : 'Create Installation Record'} onClose={onClose} wide>
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
-        <div style={{ display: 'flex', gap: 0, borderBottom: '2px solid var(--bor)', marginBottom: 16, overflowX: 'auto' }}>
-          {ITABS.map(t => <button key={t.key} type="button" onClick={() => setTab(t.key)} style={ts(t.key)}><span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}</button>)}
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
+          {ITABS.map(t => <button key={t.key} type="button" onClick={() => setTab(t.key)} style={ts(t.key, t.color)}><span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}</button>)}
         </div>
         <div className="mb">
           {/* Basic Tab */}
@@ -1205,9 +1299,9 @@ ${po ? `
 <!-- BOM -->
 <div class="section">
 <h2>Bill of Materials (BOM)</h2>
-<table><thead><tr><th>#</th><th>Material</th><th>Specification</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th></tr></thead><tbody>
-${(po.items || []).map((item, i) => `<tr><td>${i + 1}</td><td>${e(item.materialName)}</td><td>${e(item.specification) || '-'}</td><td>${item.quantity}</td><td>${e(item.unit) || '-'}</td><td>${Number(item.rate).toLocaleString('en-IN')}</td><td>${Number(item.amount).toLocaleString('en-IN')}</td></tr>`).join('')}
-<tr style="font-weight:700"><td colspan="5" style="text-align:right">BOM Total</td><td colspan="2">${fmtCur(po.totalValue)}</td></tr>
+<table><thead><tr><th>#</th><th>Description of Material</th><th>UOM</th><th>Make</th><th>Model / Rating</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Scope</th></tr></thead><tbody>
+${(po.items || []).map((item, i) => `<tr><td>${i + 1}</td><td>${e(item.materialName)}</td><td>${e(item.unit) || 'Nos'}</td><td>${e(item.make) || '-'}</td><td>${e(item.specification) || '-'}</td><td>${item.quantity}</td><td>${Number(item.rate).toLocaleString('en-IN')}</td><td>${Number(item.amount).toLocaleString('en-IN')}</td><td>${[item.scopePragathi && 'Pragathi', item.scopeCustomer && 'Customer'].filter(Boolean).join(', ') || '-'}</td></tr>`).join('')}
+<tr style="font-weight:700"><td colspan="7" style="text-align:right">BOM Total</td><td colspan="2">${fmtCur(po.totalValue)}</td></tr>
 </tbody></table>
 ${extraItems.length > 0 ? `<h3>Extra Charges</h3><table class="info-tbl">${extraItems.map(ei => `<tr><td class="lbl">${ei.label}</td><td>${fmtCur(ei.val)}</td></tr>`).join('')}<tr style="font-weight:700"><td class="lbl">Extra Charges Total</td><td>${fmtCur(po.extraChargesTotal)}</td></tr></table>` : ''}
 <p style="margin-top:8px"><strong>Price After Subsidy:</strong> ${fmtCur(po.agreedPrice || po.totalValue)}</p>

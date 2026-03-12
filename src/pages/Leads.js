@@ -13,21 +13,40 @@ const sts = ['Interested', 'Not Interested', 'Converted', 'Not Converted'];
 const priorities = ['Hot', 'Warm', 'Cold'];
 const PAGE_SIZE = 20;
 
-const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', unit: 'Nos', specification: '', remarks: '', rate: '', amount: 0 };
+const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
 
 const DEFAULT_BOM_MATERIALS = [
-  'Solar PV Module',
-  'Grid Tie Inverter (1KW - 1 Ph)', 'Grid Tie Inverter (2KW - 1 Ph)',
-  'Grid Tie Inverter (3KW - 1 Ph)', 'Grid Tie Inverter (4KW - 1 Ph)',
-  'Grid Tie Inverter (5KW - 1 Ph)', 'Grid Tie Inverter (5KW - 3 Ph)',
-  'Grid Tie Inverter (6KW - 3 Ph)', 'Grid Tie Inverter (8KW - 3 Ph)',
-  'Grid Tie Inverter (10KW - 3 Ph)',
-  'Junction Box / ACDB', 'Junction Box / DCDB',
-  'Earthing Kit', 'Lightning Arrestor', 'MC4 Connectors',
-  'DC Cable', 'AC Cable', 'Earthing Cable',
-  'Module Mounting Structure', 'Mounting Structure Bolts & Nuts',
-  'Mounting Module Bolts & Nuts',
-  'Other Accessories (UPVC Pipes / Earth PIT Caps / Earth Chemical)'
+  { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (2KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (3KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (4KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (6KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (8KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (10KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Others', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Junction Box / ACDB', unit: 'Nos', make: '' },
+  { materialName: 'Junction Box / DCDB', unit: 'Nos', make: '' },
+  { materialName: 'Earthing Rods', unit: 'Nos', make: '' },
+  { materialName: 'Earth Chemical Bags', unit: 'Nos', make: '' },
+  { materialName: 'Earth Chambers', unit: 'Nos', make: '' },
+  { materialName: 'MC4 Connectors', unit: 'Nos', make: '' },
+  { materialName: 'DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Earthing Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOD DIP/Other' },
+  { materialName: 'If Any Elevated MMS (Mention Height)', unit: 'Nos', make: 'HOD DIP/Other' },
+  { materialName: 'Additional AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Additional DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Additional Earth Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'UPVC Pipes & Fittings', unit: 'Mtrs', make: 'Finolex/Others' },
+  { materialName: 'Civil Works', unit: 'Nos', make: 'Finolex/Others' },
+  { materialName: 'Additional Relay', unit: 'Nos', make: '' },
+  { materialName: 'DISCOM Charges', unit: 'Rs.', make: '' },
+  { materialName: 'Ladder (Height)', unit: 'Nos', make: '' },
+  { materialName: 'MCS - Cleaning System', unit: 'Nos', make: '' },
 ];
 
 /* ============ MAIN LEADS LIST ============ */
@@ -723,19 +742,19 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                         <summary style={{ cursor: 'pointer', fontSize: '.84rem', fontWeight: 600, color: 'var(--pri)' }}>View BOM Items</summary>
                         <div className="tw" style={{ marginTop: 8 }}>
                           <table>
-                            <thead><tr><th>#</th><th>Material</th><th>Make</th><th>Model / Rating</th><th>Qty</th><th>Unit</th><th>Rate</th><th>Amount</th><th>Remarks</th></tr></thead>
+                            <thead><tr><th>#</th><th>Description of Material</th><th>UOM</th><th>Make</th><th>Model / Rating</th><th>Qty</th><th>Rate</th><th>Amount</th><th>Scope</th></tr></thead>
                             <tbody>
                               {po.items.map((item, i) => (
                                 <tr key={i}>
                                   <td>{i + 1}</td>
                                   <td>{item.materialName}</td>
+                                  <td>{item.unit || 'Nos'}</td>
                                   <td style={{ fontSize: '.82rem' }}>{item.make || '-'}</td>
                                   <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{item.specification || '-'}</td>
                                   <td>{item.quantity}</td>
-                                  <td>{item.unit || '-'}</td>
                                   <td>{formatCurrency(item.rate)}</td>
                                   <td style={{ fontWeight: 600 }}>{formatCurrency(item.amount)}</td>
-                                  <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{item.remarks || '-'}</td>
+                                  <td style={{ fontSize: '.82rem' }}>{[item.scopePragathi && 'Pragathi', item.scopeCustomer && 'Customer'].filter(Boolean).join(', ') || '-'}</td>
                                 </tr>
                               ))}
                             </tbody>
@@ -803,7 +822,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   const [items, setItems] = useState(
     (po.items && po.items.length)
       ? po.items.map(it => ({ ...EMPTY_BOM_ITEM, ...it }))
-      : DEFAULT_BOM_MATERIALS.map(m => ({ ...EMPTY_BOM_ITEM, materialName: m }))
+      : DEFAULT_BOM_MATERIALS.map(m => ({ ...EMPTY_BOM_ITEM, ...m }))
   );
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
@@ -825,7 +844,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
 
   /* Combined material suggestions: defaults + saved template materials */
   const allMaterials = [...new Set([
-    ...DEFAULT_BOM_MATERIALS,
+    ...DEFAULT_BOM_MATERIALS.map(m => m.materialName),
     ...bomTemplates.flatMap(t => (t.items || []).map(it => it.materialName).filter(Boolean))
   ])];
 
@@ -883,7 +902,8 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               quantity: toNumber(it.quantity),
               unit: it.unit || '',
               specification: it.specification || '',
-              remarks: it.remarks || '',
+              scopePragathi: !!it.scopePragathi,
+              scopeCustomer: !!it.scopeCustomer,
               rate: toNumber(it.rate),
               amount: toNumber(it.quantity) * toNumber(it.rate)
             })),
@@ -943,17 +963,25 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               {items.map((item, i) => (
                 <div key={i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                    <div className="fg" style={{ flex: 3, marginBottom: 0 }}>{i === 0 && <label>Material</label>}<input className="fi" value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" placeholder="Material name" /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label>Qty</label>}<input type="number" className="fi" value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></div>
-                    <div className="fg" style={{ flex: 0.8, marginBottom: 0 }}>{i === 0 && <label>Unit</label>}<input className="fi" value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label>Rate</label>}<input type="number" className="fi" value={item.rate} onChange={e => setItem(i, 'rate', e.target.value)} /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label>Amount</label>}<input className="fi" value={formatCurrency(toNumber(item.quantity) * toNumber(item.rate))} disabled /></div>
+                    <div className="fg" style={{ flex: 3, marginBottom: 0 }}>{i === 0 && <label>Description of Material</label>}<input className="fi" value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" placeholder="Material name" /></div>
+                    <div className="fg" style={{ flex: 0.6, marginBottom: 0 }}>{i === 0 && <label>UOM</label>}<input className="fi" value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></div>
+                    <div className="fg" style={{ flex: 1.2, marginBottom: 0 }}>{i === 0 && <label>Make</label>}<input className="fi" value={item.make} onChange={e => setItem(i, 'make', e.target.value)} placeholder="Brand / Make" /></div>
+                    <div className="fg" style={{ flex: 1.2, marginBottom: 0 }}>{i === 0 && <label>Model / Rating</label>}<input className="fi" value={item.specification} onChange={e => setItem(i, 'specification', e.target.value)} placeholder="Model / Rating" /></div>
+                    <div className="fg" style={{ flex: 0.7, marginBottom: 0 }}>{i === 0 && <label>Qty</label>}<input type="number" className="fi" value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></div>
                     {items.length > 1 && <button type="button" className="btn bsm bo" onClick={() => removeItem(i)} style={{ color: 'var(--err)', marginBottom: 0 }}><span className="material-icons-round" style={{ fontSize: 16 }}>close</span></button>}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Make</label>}<input className="fi" style={{ fontSize: '.85rem' }} value={item.make} onChange={e => setItem(i, 'make', e.target.value)} placeholder="Brand / Make" /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Model / Rating</label>}<input className="fi" style={{ fontSize: '.85rem' }} value={item.specification} onChange={e => setItem(i, 'specification', e.target.value)} placeholder="Model / Rating" /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Remarks</label>}<input className="fi" style={{ fontSize: '.85rem' }} value={item.remarks} onChange={e => setItem(i, 'remarks', e.target.value)} placeholder="Remarks" /></div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
+                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Rate</label>}<input type="number" className="fi" style={{ fontSize: '.85rem' }} value={item.rate} onChange={e => setItem(i, 'rate', e.target.value)} placeholder="Rate" /></div>
+                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Amount</label>}<input className="fi" style={{ fontSize: '.85rem' }} value={formatCurrency(toNumber(item.quantity) * toNumber(item.rate))} disabled /></div>
+                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flex: 1.2, paddingTop: i === 0 ? 18 : 0 }}>
+                      {i === 0 && <label style={{ fontSize: '.76rem', position: 'absolute', marginTop: -34 }}>Scope</label>}
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.82rem', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={!!item.scopePragathi} onChange={e => setItem(i, 'scopePragathi', e.target.checked)} /> Pragathi
+                      </label>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.82rem', cursor: 'pointer' }}>
+                        <input type="checkbox" checked={!!item.scopeCustomer} onChange={e => setItem(i, 'scopeCustomer', e.target.checked)} /> Customer
+                      </label>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -1031,14 +1059,13 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
 
 function generatePONumber(existingPOs) {
   const now = new Date();
-  const prefix = 'PO-' + now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0');
-  const sameMonth = existingPOs.filter(p => (p.poNumber || '').startsWith(prefix));
-  const maxNum = sameMonth.reduce((max, p) => {
-    const parts = (p.poNumber || '').split('-');
-    const num = parseInt(parts[2]) || 0;
-    return Math.max(max, num);
-  }, 0);
-  return prefix + '-' + String(maxNum + 1).padStart(3, '0');
+  const dateStr = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  const allNums = existingPOs.map(p => {
+    const match = (p.poNumber || '').match(/PO-PPSPO-(\d+)/);
+    return match ? parseInt(match[1]) : 0;
+  });
+  const maxNum = allNums.length > 0 ? Math.max(...allNums) : 0;
+  return 'PO-PPSPO-' + String(maxNum + 1).padStart(4, '0') + '/' + dateStr;
 }
 
 function generateQuotation(lead) {

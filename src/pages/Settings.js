@@ -5,6 +5,40 @@ import { hasAccess } from '../services/helpers';
 import { db } from '../services/firebase';
 import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
 
+const NEW_BOM_MATERIALS = [
+  { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (2KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (3KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (4KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (6KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (8KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Grid Tie Inverter (10KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Others', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Junction Box / ACDB', unit: 'Nos', make: '' },
+  { materialName: 'Junction Box / DCDB', unit: 'Nos', make: '' },
+  { materialName: 'Earthing Rods', unit: 'Nos', make: '' },
+  { materialName: 'Earth Chemical Bags', unit: 'Nos', make: '' },
+  { materialName: 'Earth Chambers', unit: 'Nos', make: '' },
+  { materialName: 'MC4 Connectors', unit: 'Nos', make: '' },
+  { materialName: 'DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Earthing Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOD DIP/Other' },
+  { materialName: 'If Any Elevated MMS (Mention Height)', unit: 'Nos', make: 'HOD DIP/Other' },
+  { materialName: 'Additional AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Additional DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'Additional Earth Cable', unit: 'Mtrs', make: 'Polycab/Others' },
+  { materialName: 'UPVC Pipes & Fittings', unit: 'Mtrs', make: 'Finolex/Others' },
+  { materialName: 'Civil Works', unit: 'Nos', make: 'Finolex/Others' },
+  { materialName: 'Additional Relay', unit: 'Nos', make: '' },
+  { materialName: 'DISCOM Charges', unit: 'Rs.', make: '' },
+  { materialName: 'Ladder (Height)', unit: 'Nos', make: '' },
+  { materialName: 'MCS - Cleaning System', unit: 'Nos', make: '' },
+];
+
 // Module permissions that admin can toggle per user
 const PERMISSION_MODULES = [
   { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
@@ -85,6 +119,138 @@ export default function Settings() {
   // Bulk apply: apply selected user's permissions to multiple users
   const [bulkMode, setBulkMode] = useState(false);
   const [bulkSelected, setBulkSelected] = useState([]);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateResult, setMigrateResult] = useState(null);
+
+  /* Migrate all existing leadPOs: update items to new BOM template + PO number format */
+  const migrateBOMData = async () => {
+    if (!window.confirm('This will update ALL existing POs with:\n\n1. New BOM items (matching PPS template)\n2. New PO number format (PO-PPSPO-XXXX/date)\n\nExisting quantities, rates & amounts will be preserved where material names match.\n\nProceed?')) return;
+    setMigrating(true);
+    setMigrateResult(null);
+    try {
+      const snap = await getDocs(collection(db, 'leadPOs'));
+      const allPOs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      let updated = 0;
+
+      for (let idx = 0; idx < allPOs.length; idx++) {
+        const po = allPOs[idx];
+        const oldItems = po.items || [];
+        const updates = {};
+
+        // Migrate items: map old items into new template, preserving data where names match
+        const newItems = NEW_BOM_MATERIALS.map(tpl => {
+          const existing = oldItems.find(old =>
+            (old.materialName || '').toLowerCase().trim() === tpl.materialName.toLowerCase().trim() ||
+            (old.materialName || '').toLowerCase().includes(tpl.materialName.toLowerCase().split('(')[0].trim()) ||
+            tpl.materialName.toLowerCase().includes((old.materialName || '').toLowerCase().split('(')[0].trim())
+          );
+          if (existing) {
+            return {
+              materialName: tpl.materialName,
+              unit: tpl.unit || existing.unit || 'Nos',
+              make: existing.make || tpl.make || '',
+              specification: existing.specification || '',
+              quantity: existing.quantity || 0,
+              rate: existing.rate || 0,
+              amount: existing.amount || 0,
+              scopePragathi: existing.scopePragathi || false,
+              scopeCustomer: existing.scopeCustomer || false,
+            };
+          }
+          return {
+            materialName: tpl.materialName,
+            unit: tpl.unit,
+            make: tpl.make,
+            specification: '',
+            quantity: 0,
+            rate: 0,
+            amount: 0,
+            scopePragathi: false,
+            scopeCustomer: false,
+          };
+        });
+
+        // Also add any old items that don't match any new template item (preserve custom items)
+        oldItems.forEach(old => {
+          const alreadyMapped = newItems.find(ni =>
+            ni.materialName.toLowerCase().trim() === (old.materialName || '').toLowerCase().trim()
+          );
+          if (!alreadyMapped && old.materialName) {
+            newItems.push({
+              materialName: old.materialName,
+              unit: old.unit || 'Nos',
+              make: old.make || '',
+              specification: old.specification || '',
+              quantity: old.quantity || 0,
+              rate: old.rate || 0,
+              amount: old.amount || 0,
+              scopePragathi: old.scopePragathi || false,
+              scopeCustomer: old.scopeCustomer || false,
+            });
+          }
+        });
+
+        updates.items = newItems;
+
+        // Migrate PO number if old format
+        if (po.poNumber && !po.poNumber.startsWith('PO-PPSPO-')) {
+          const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
+          updates.poNumber = 'PO-PPSPO-' + String(idx + 1).padStart(4, '0') + '/' + dateStr;
+        }
+
+        await updateDoc(doc(db, 'leadPOs', po.id), updates);
+        updated++;
+      }
+
+      // Also migrate purchaseOrders collection
+      const poSnap = await getDocs(collection(db, 'purchaseOrders'));
+      const allPurchaseOrders = poSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      for (let idx = 0; idx < allPurchaseOrders.length; idx++) {
+        const po = allPurchaseOrders[idx];
+        const oldItems = po.items || [];
+        const updates = {};
+
+        const newItems = NEW_BOM_MATERIALS.map(tpl => {
+          const existing = oldItems.find(old =>
+            (old.materialName || '').toLowerCase().trim() === tpl.materialName.toLowerCase().trim() ||
+            (old.materialName || '').toLowerCase().includes(tpl.materialName.toLowerCase().split('(')[0].trim()) ||
+            tpl.materialName.toLowerCase().includes((old.materialName || '').toLowerCase().split('(')[0].trim())
+          );
+          if (existing) {
+            return {
+              materialName: tpl.materialName, unit: tpl.unit || existing.unit || 'Nos',
+              make: existing.make || tpl.make || '', specification: existing.specification || '',
+              quantity: existing.quantity || 0, rate: existing.rate || 0, amount: existing.amount || 0,
+              scopePragathi: existing.scopePragathi || false, scopeCustomer: existing.scopeCustomer || false,
+            };
+          }
+          return { materialName: tpl.materialName, unit: tpl.unit, make: tpl.make, specification: '', quantity: 0, rate: 0, amount: 0, scopePragathi: false, scopeCustomer: false };
+        });
+
+        oldItems.forEach(old => {
+          const alreadyMapped = newItems.find(ni => ni.materialName.toLowerCase().trim() === (old.materialName || '').toLowerCase().trim());
+          if (!alreadyMapped && old.materialName) {
+            newItems.push({ materialName: old.materialName, unit: old.unit || 'Nos', make: old.make || '', specification: old.specification || '', quantity: old.quantity || 0, rate: old.rate || 0, amount: old.amount || 0, scopePragathi: old.scopePragathi || false, scopeCustomer: old.scopeCustomer || false });
+          }
+        });
+
+        updates.items = newItems;
+        if (po.poNumber && !po.poNumber.startsWith('PO-PPSPO-')) {
+          const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
+          updates.poNumber = 'PO-PPSPO-' + String(allPOs.length + idx + 1).padStart(4, '0') + '/' + dateStr;
+        }
+        await updateDoc(doc(db, 'purchaseOrders', po.id), updates);
+        updated++;
+      }
+
+      setMigrateResult({ success: true, count: updated });
+      toast(`Migration complete! Updated ${updated} PO(s)`);
+    } catch (err) {
+      setMigrateResult({ success: false, error: err.message });
+      toast('Migration failed: ' + err.message, 'er');
+    }
+    setMigrating(false);
+  };
 
   const toggleBulkUser = (uid) => {
     setBulkSelected(prev => prev.includes(uid) ? prev.filter(id => id !== uid) : [...prev, uid]);
@@ -230,6 +396,29 @@ export default function Settings() {
                     </div>
                   )}
                 </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* BOM Data Migration — admin only */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>sync</span>BOM Data Migration</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              Update all existing Purchase Orders (Leads & Customers) to use the new PPS BOM Template format with updated items, UOM, Make defaults, Scope fields, and new PO number format (<strong>PO-PPSPO-0001/YYYY-MM-DD</strong>).
+            </p>
+            <button className="btn bp" onClick={migrateBOMData} disabled={migrating} style={{ padding: '10px 24px', fontSize: '.88rem' }}>
+              {migrating ? <><span className="ssm"></span> Migrating...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>update</span> Migrate All POs to New BOM Template</>}
+            </button>
+            {migrateResult && (
+              <div style={{ marginTop: 12, padding: '10px 14px', borderRadius: 8, background: migrateResult.success ? 'rgba(39,174,96,.08)' : 'rgba(231,76,60,.08)', border: migrateResult.success ? '1px solid rgba(39,174,96,.3)' : '1px solid rgba(231,76,60,.3)', fontSize: '.84rem' }}>
+                {migrateResult.success
+                  ? <><span className="material-icons-round" style={{ fontSize: 16, verticalAlign: 'middle', color: '#27ae60', marginRight: 6 }}>check_circle</span>Successfully migrated {migrateResult.count} PO(s) to new BOM template</>
+                  : <><span className="material-icons-round" style={{ fontSize: 16, verticalAlign: 'middle', color: '#e74c3c', marginRight: 6 }}>error</span>Error: {migrateResult.error}</>
+                }
               </div>
             )}
           </div>
