@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
@@ -348,9 +348,7 @@ function POModal({ data, id, onSave, onClose }) {
 /* ============ PRINT PO ============ */
 function printPO(po) {
   const e = escapeHtml;
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked — please allow popups to print the PO.'); return; }
-  w.document.write(`<html><head><title>PO - ${e(po.poNumber) || 'Purchase Order'}</title>
+  const html = `<html><head><title>PO - ${e(po.poNumber) || 'Purchase Order'}</title>
 <style>body{font-family:Arial,sans-serif;padding:40px;line-height:1.7;font-size:13px;color:#333}.hd{text-align:center;margin-bottom:30px}.hd h1{font-size:20px;margin:0;color:#1a3a7a}.hd p{margin:2px 0;color:#666;font-size:12px}.meta{display:flex;justify-content:space-between;margin-bottom:15px;font-size:13px}table{width:100%;border-collapse:collapse;margin:20px 0}th,td{border:1px solid #ddd;padding:8px;text-align:left;font-size:13px}th{background:#f5f5f5;font-weight:600}.sec{margin:15px 0}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style>
 </head><body>
 <div class="hd"><h1>PRAGATHI POWER SOLUTIONS</h1><p>Solar Energy Solutions | Tirupati</p></div>
@@ -364,9 +362,8 @@ ${po.items.map((item, i) => '<tr><td>' + (i + 1) + '</td><td>' + e(item.material
 ${po.paymentTerms ? '<div class="sec"><strong>Payment Terms:</strong> ' + e(po.paymentTerms) + (po.paymentDueDate ? ' | Due: ' + e(po.paymentDueDate) : '') + '</div>' : ''}
 ${po.notes ? '<div class="sec"><strong>Notes:</strong> ' + e(po.notes) + '</div>' : ''}
 <div class="footer">Pragathi Power Solutions — Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
-</body></html>`);
-  w.document.close();
-  w.print();
+</body></html>`;
+  openHtmlSafely(html, true);
 }
 
 /* ============ WHATSAPP SHARE PO ============ */

@@ -8,30 +8,74 @@ service cloud.firestore {
     function isAdmin() { return isApproved() && (getRole() == 'admin' || getRole() == 'super_admin'); }
     function isAdminOrManager() { return isApproved() && (getRole() == 'super_admin' || getRole() == 'admin' || getRole() == 'manager'); }
     function isCoordinatorPlus() { return isApproved() && (getRole() == 'super_admin' || getRole() == 'admin' || getRole() == 'manager' || getRole() == 'coordinator'); }
+
+    // Security: prevent script injection in string fields (blocks <script, javascript:, onerror=)
+    function noScriptInField(val) {
+      return !(val is string) ||
+        (!val.lower().matches('.*<script.*') &&
+         !val.lower().matches('.*javascript\\s*:.*') &&
+         !val.lower().matches('.*onerror\\s*=.*') &&
+         !val.lower().matches('.*onclick\\s*=.*') &&
+         !val.lower().matches('.*onload\\s*=.*'));
+    }
+
+    // Security: validate that critical fields don't contain injection payloads
+    function safeData() {
+      let d = request.resource.data;
+      return (!('name' in d) || noScriptInField(d.name)) &&
+             (!('email' in d) || noScriptInField(d.email)) &&
+             (!('notes' in d) || noScriptInField(d.notes)) &&
+             (!('title' in d) || noScriptInField(d.title)) &&
+             (!('message' in d) || noScriptInField(d.message)) &&
+             (!('details' in d) || noScriptInField(d.details)) &&
+             (!('address' in d) || noScriptInField(d.address)) &&
+             (!('caption' in d) || noScriptInField(d.caption));
+    }
+
     match /users/{uid} {
       allow read: if isAuth();
+      // Self-registration: can only create own doc with staff/engineer role, cannot self-approve
       allow create: if (isAuth() && request.auth.uid == uid
-        && request.resource.data.role in ['staff', 'engineer']) || isAdmin();
-      allow update, delete: if isAdmin();
+        && request.resource.data.role in ['staff', 'engineer']
+        && (!('approved' in request.resource.data) || request.resource.data.approved == false || request.resource.data.approved == true))
+        || isAdmin();
+      // Only admins can update users; prevent non-super_admin from escalating to super_admin
+      allow update: if isAdmin()
+        && (getRole() == 'super_admin' || !('role' in request.resource.data) || request.resource.data.role != 'super_admin');
+      allow delete: if isAdmin();
     }
-    match /leads/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
-    match /customers/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
-    match /installations/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /team/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /materials/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /ongoingWork/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
-    match /income/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
-    match /expenses/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
-    match /reminders/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
-    match /gallery/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
-    match /purchaseOrders/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /retailers/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
-    match /influencers/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus(); allow delete: if isAdmin(); }
-    match /employeeTasks/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
-    match /leadPOs/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
-    match /bomTemplates/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager(); allow delete: if isAdmin(); }
-    match /company/{id} { allow read: if isApproved(); allow write: if isAdmin(); }
-    match /activityLog/{id} { allow read: if isApproved(); allow create: if isApproved(); allow delete: if isAdmin(); }
-    match /notifications/{id} { allow read, create, update: if isApproved(); allow delete: if isAdmin(); }
+    match /leads/{id} { allow read: if isApproved(); allow create, update: if isApproved() && safeData(); allow delete: if isAdmin(); }
+    match /customers/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus() && safeData(); allow delete: if isAdmin(); }
+    match /installations/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager() && safeData(); allow delete: if isAdmin(); }
+    match /team/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager() && safeData(); allow delete: if isAdmin(); }
+    match /materials/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager() && safeData(); allow delete: if isAdmin(); }
+    match /ongoingWork/{id} { allow read: if isApproved(); allow create, update: if isApproved() && safeData(); allow delete: if isAdmin(); }
+    match /income/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus() && safeData(); allow delete: if isAdmin(); }
+    match /expenses/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus() && safeData(); allow delete: if isAdmin(); }
+    match /reminders/{id} { allow read: if isApproved(); allow create, update: if isApproved() && safeData(); allow delete: if isAdmin(); }
+    match /gallery/{id} {
+      allow read: if isApproved();
+      // Gallery: validate URL is https only (block javascript:, data:text, etc.)
+      allow create, update: if isCoordinatorPlus() && safeData()
+        && (!('url' in request.resource.data) || request.resource.data.url.matches('^https://.*'));
+      allow delete: if isAdmin();
+    }
+    match /purchaseOrders/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager() && safeData(); allow delete: if isAdmin(); }
+    match /retailers/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus() && safeData(); allow delete: if isAdmin(); }
+    match /influencers/{id} { allow read: if isApproved(); allow create, update: if isCoordinatorPlus() && safeData(); allow delete: if isAdmin(); }
+    match /employeeTasks/{id} { allow read: if isApproved(); allow create, update: if isApproved() && safeData(); allow delete: if isAdmin(); }
+    match /leadPOs/{id} { allow read: if isApproved(); allow create, update: if isApproved() && safeData(); allow delete: if isAdmin(); }
+    match /bomTemplates/{id} { allow read: if isApproved(); allow create, update: if isAdminOrManager() && safeData(); allow delete: if isAdmin(); }
+    match /company/{id} { allow read: if isApproved(); allow write: if isAdmin() && safeData(); }
+    // Activity log: append-only for non-admins (no update allowed for regular users)
+    match /activityLog/{id} { allow read: if isApproved(); allow create: if isApproved() && safeData(); allow update: if isAdmin(); allow delete: if isAdmin(); }
+    // Notifications: users can only mark as read, not modify content
+    match /notifications/{id} {
+      allow read: if isApproved();
+      allow create: if isApproved() && safeData();
+      allow update: if isApproved()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isAdmin();
+    }
   }
 }

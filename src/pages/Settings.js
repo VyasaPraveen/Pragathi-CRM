@@ -77,7 +77,7 @@ export default function Settings() {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.approved).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
       setUsers(list);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch((err) => { console.error('Failed to load users:', err.message); setLoading(false); });
   }, [isAdmin]);
 
   // When a user is selected, load their permissions

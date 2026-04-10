@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { Modal, EmptyState } from '../components/SharedUI';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, isSafeUrl } from '../services/helpers';
 
 // Q4 fix: added full CRUD via URL input (was read-only with placeholder boxes)
 export default function Gallery() {
@@ -41,7 +41,7 @@ export default function Gallery() {
             <div className="gg">
               {gallery.map(g => (
                 <div className="gi" key={g.id} style={{ position: 'relative' }}>
-                  <img src={g.url} alt={g.caption || ''} />
+                  {isSafeUrl(g.url) && <img src={g.url} alt={g.caption || ''} />}
                   {g.caption && <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,.6)', color: '#fff', padding: '6px 10px', fontSize: '.78rem' }}>{g.caption}</div>}
                   {canEdit && <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4 }}>
                     <button className="btn bsm" onClick={() => setModal({ data: g, id: g.id })} style={{ background: 'rgba(0,0,0,.5)', color: '#fff', borderRadius: '50%', width: 28, height: 28, padding: 0 }}><span className="material-icons-round" style={{ fontSize: 14 }}>edit</span></button>
@@ -63,13 +63,19 @@ export default function Gallery() {
 function GalleryModal({ data, id, onSave, onClose }) {
   const [f, setF] = useState({ url: data.url || '', caption: data.caption || '' });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (f.url && !isSafeUrl(f.url)) { alert('Invalid URL. Only https:// URLs are allowed.'); return; }
+    onSave(f, id);
+  };
   return (
     <Modal title={id ? 'Edit Photo' : 'Add Photo'} onClose={onClose}>
-      <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
+      <form onSubmit={handleSubmit}>
         <div className="mb">
           <div className="fg"><label>Image URL *</label><input className="fi" type="url" value={f.url} onChange={e => set('url', e.target.value)} placeholder="https://..." required /></div>
           <div className="fg"><label>Caption</label><input className="fi" value={f.caption} onChange={e => set('caption', e.target.value)} placeholder="Brief description" /></div>
-          {f.url && <div style={{ marginTop: 10, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--bor)' }}><img src={f.url} alt="Preview" style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }} onError={e => e.target.style.display = 'none'} /></div>}
+          {f.url && isSafeUrl(f.url) && <div style={{ marginTop: 10, borderRadius: 8, overflow: 'hidden', border: '1px solid var(--bor)' }}><img src={f.url} alt="Preview" style={{ width: '100%', maxHeight: 200, objectFit: 'cover' }} onError={e => e.target.style.display = 'none'} /></div>}
+          {f.url && !isSafeUrl(f.url) && <p style={{ color: 'var(--err)', fontSize: '.82rem', marginTop: 6 }}>Only https:// image URLs are allowed.</p>}
         </div>
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
       </form>

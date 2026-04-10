@@ -173,7 +173,7 @@ export default function UserManagement() {
 
   const handleEditSave = async (uid, data) => {
     try {
-      const newRole = data.designation ? getRoleFromDesignation(data.designation) : undefined;
+      const newRole = data.designation ? getRoleFromDesignation(data.designation) : 'staff';
       const update = { ...data };
       if (newRole) update.role = newRole;
       await updateDoc(doc(db, 'users', uid), update);

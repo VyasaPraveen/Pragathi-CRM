@@ -107,6 +107,28 @@ export function makeCall(phone) {
   window.open('tel:+91' + (cleaned.length === 10 ? cleaned : cleaned.slice(-10)), '_self');
 }
 
+// Security: validate URL is safe (blocks javascript:, data:text/html, vbscript:, etc.)
+export function isSafeUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = url.trim().toLowerCase();
+  const blocked = ['javascript', 'vbscript'];
+  if (blocked.some(proto => trimmed.startsWith(proto + ':'))) return false;
+  if (trimmed.startsWith('data:') && !trimmed.startsWith('data:image/')) return false;
+  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol); }
+  catch { return false; }
+}
+
+// Security: safe HTML print — uses Blob URL instead of document.write to prevent DOM injection
+export function openHtmlSafely(html, shouldPrint = false) {
+  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, '_blank');
+  if (!w) { alert('Popup blocked — please allow popups.'); URL.revokeObjectURL(url); return; }
+  w.addEventListener('afterprint', () => URL.revokeObjectURL(url));
+  if (shouldPrint) w.addEventListener('load', () => w.print());
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 // Q5 fix: dynamic days-in-month instead of hardcoded 30
 export function getDaysInMonth(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();

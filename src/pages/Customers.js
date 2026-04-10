@@ -2,10 +2,10 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
-import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
+import { printBOM, downloadBOM } from '../services/poUtils';
 
 const PAGE_SIZE = 20;
 const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
@@ -51,6 +51,8 @@ export default function Customers() {
       ];
       const cleaned = { ...data };
       numericFields.forEach(f => { cleaned[f] = toNumber(cleaned[f]); });
+      const moneyFields = ['agreedPrice', 'bosAmount', 'totalPrice', 'advanceAmount', 'secondPayment', 'thirdPayment', 'finalPayment', 'quotationProjectValue', 'advanceReceivedAmount', 'finalAmount', 'subsidyAmount'];
+      for (const mf of moneyFields) { if (cleaned[mf] < 0) { toast('Amount fields cannot be negative', 'er'); return; } }
 
       if (id) {
         const prevCustomer = customers.find(c => c.id === id);
@@ -1098,112 +1100,6 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
   );
 }
 
-/* ============ INSTALLATION INLINE MODAL (from Customer view) ============ */
-function InstallationInlineModal({ data, id, onSave, onClose }) {
-  const d = data || {};
-  const [f, setF] = useState({
-    customerName: d.customerName || '', phone: d.phone || '', address: d.address || '',
-    siteVisitStatus: d.siteVisitStatus || 'Not Visited',
-    roofType: d.roofType || 'RCC', floors: d.floors || 1, structureType: d.structureType || 'Flat',
-    startDate: d.startDate || '', totalDays: d.totalDays || '', teamLeader: d.teamLeader || '',
-    numPeople: d.numPeople || '', materialDispatched: d.materialDispatched || 'No',
-    progress: d.progress || 0,
-    qualityInspection: d.qualityInspection || 'Pending', guaranteeCard: d.guaranteeCard || 'No',
-    customerReference: d.customerReference || 'No',
-    referenceLeadName: d.referenceLeadName || '', referencePhoneNumber: d.referencePhoneNumber || '',
-    // DISCOM & Subsidy
-    discomFeasibility: d.discomFeasibility || 'Pending', discomFeasibilityDate: d.discomFeasibilityDate || '',
-    docSubmission: d.docSubmission || 'Pending', docSubmissionDate: d.docSubmissionDate || '',
-    discomInspection: d.discomInspection || 'Pending', discomInspectionDate: d.discomInspectionDate || '',
-    meterChange: d.meterChange || 'Pending', meterChangeDate: d.meterChangeDate || '',
-    flaggingStatus: d.flaggingStatus || 'Pending', flaggingDate: d.flaggingDate || '',
-    subsidyStatus: d.subsidyStatus || 'Not Applied', subsidyDate: d.subsidyDate || '',
-    // Material Consumption
-    acCableQty: d.acCableQty || '', acCableSize: d.acCableSize || '',
-    dcCableQty: d.dcCableQty || '', dcCableSize: d.dcCableSize || '',
-    earthCable: d.earthCable || '', earthCableSize: d.earthCableSize || '',
-    upvcPipes: d.upvcPipes || '', upvcPipeSize: d.upvcPipeSize || '',
-    // Service
-    firstServiceDate: d.firstServiceDate || '', nextServiceDate: d.nextServiceDate || '',
-    // Documents
-    handSketch: d.handSketch || '', installationReport: d.installationReport || '',
-  });
-  const [tab, setTab] = useState('basic');
-  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
-
-  const ITABS = [
-    { key: 'basic',      label: 'Basic Info',       icon: 'construction',    color: '#8b5cf6' },
-    { key: 'discom',     label: 'DISCOM & Subsidy', icon: 'account_balance', color: '#d97706' },
-    { key: 'materials',  label: 'Materials',        icon: 'cable',           color: '#06b6d4' },
-    { key: 'docs',       label: 'Documents',        icon: 'description',     color: '#f43f5e' },
-  ];
-
-  const ts = (key, color) => ({
-    padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
-    color: tab === key ? '#fff' : color,
-    background: tab === key ? color : `${color}1a`,
-    border: `1.5px solid ${tab === key ? color : `${color}55`}`,
-    display: 'flex', alignItems: 'center', gap: 5,
-    cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .15s',
-  });
-
-  return (
-    <Modal title={id ? 'Edit Installation Record' : 'Create Installation Record'} onClose={onClose} wide>
-      <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 18 }}>
-          {ITABS.map(t => <button key={t.key} type="button" onClick={() => setTab(t.key)} style={ts(t.key, t.color)}><span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}</button>)}
-        </div>
-        <div className="mb">
-          {/* Basic Tab */}
-          {tab === 'basic' && (<>
-            <div className="fr"><div className="fg"><label>Customer Name</label><input className="fi" value={f.customerName} onChange={e => set('customerName', e.target.value)} /></div><div className="fg"><label>Phone</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} /></div></div>
-            <div className="fr"><div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div><div className="fg"><label>Site Visit Status</label><select className="fi" value={f.siteVisitStatus} onChange={e => set('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div></div>
-            <div className="fr3"><div className="fg"><label>Roof Type</label><select className="fi" value={f.roofType} onChange={e => set('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option></select></div><div className="fg"><label>Floors</label><input type="number" className="fi" value={f.floors} onChange={e => set('floors', e.target.value)} /></div><div className="fg"><label>Structure</label><select className="fi" value={f.structureType} onChange={e => set('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div></div>
-            <div className="fr3"><div className="fg"><label>Start Date</label><input type="date" className="fi" value={f.startDate} onChange={e => set('startDate', e.target.value)} /></div><div className="fg"><label>Total Days</label><input type="number" className="fi" value={f.totalDays} onChange={e => set('totalDays', e.target.value)} /></div><div className="fg"><label>Team Leader</label><input className="fi" value={f.teamLeader} onChange={e => set('teamLeader', e.target.value)} /></div></div>
-            <div className="fr3"><div className="fg"><label>Team Size</label><input type="number" className="fi" value={f.numPeople} onChange={e => set('numPeople', e.target.value)} /></div><div className="fg"><label>Material Dispatched</label><select className="fi" value={f.materialDispatched} onChange={e => set('materialDispatched', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Progress %</label><input type="number" className="fi" value={f.progress} min="0" max="100" onChange={e => set('progress', e.target.value)} /></div></div>
-            <div className="fr"><div className="fg"><label>Quality Inspection</label><select className="fi" value={f.qualityInspection} onChange={e => set('qualityInspection', e.target.value)}><option>Pending</option><option>Done</option><option>Approved</option></select></div><div className="fg"><label>Guarantee Card</label><select className="fi" value={f.guaranteeCard} onChange={e => set('guaranteeCard', e.target.value)}><option>No</option><option>Yes</option></select></div></div>
-            <div className="fr"><div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={f.firstServiceDate} onChange={e => set('firstServiceDate', e.target.value)} /></div><div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={f.nextServiceDate} onChange={e => set('nextServiceDate', e.target.value)} /></div></div>
-            <div className="fg"><label>Customer Reference?</label><select className="fi" value={f.customerReference} onChange={e => set('customerReference', e.target.value)}><option>No</option><option>Yes</option></select></div>
-            {f.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>}
-          </>)}
-          {/* DISCOM & Subsidy Tab */}
-          {tab === 'discom' && (<>
-            <div style={{ fontWeight: 700, fontSize: '.85rem', marginBottom: 10 }}>DISCOM & Subsidy Tracking</div>
-            {[
-              { label: 'Feasibility Status', key: 'discomFeasibility', dateKey: 'discomFeasibilityDate', opts: ['Pending','Done','Approved'] },
-              { label: 'Doc Submission', key: 'docSubmission', dateKey: 'docSubmissionDate', opts: ['Pending','Done','Approved'] },
-              { label: 'DISCOM Inspection', key: 'discomInspection', dateKey: 'discomInspectionDate', opts: ['Pending','Done','Approved'] },
-              { label: 'Meter Change', key: 'meterChange', dateKey: 'meterChangeDate', opts: ['Pending','Done'] },
-              { label: 'Flagging', key: 'flaggingStatus', dateKey: 'flaggingDate', opts: ['Pending','Done'] },
-              { label: 'Subsidy', key: 'subsidyStatus', dateKey: 'subsidyDate', opts: ['Not Applied','Pending','Approved','Released'] },
-            ].map(row => (
-              <div className="fr" key={row.key}>
-                <div className="fg"><label>{row.label}</label><select className="fi" value={f[row.key]} onChange={e => set(row.key, e.target.value)}>{row.opts.map(o => <option key={o}>{o}</option>)}</select></div>
-                <div className="fg"><label>Date</label><input type="date" className="fi" value={f[row.dateKey]} onChange={e => set(row.dateKey, e.target.value)} /></div>
-              </div>
-            ))}
-          </>)}
-          {/* Materials Tab */}
-          {tab === 'materials' && (<>
-            <div style={{ fontWeight: 700, fontSize: '.85rem', marginBottom: 10 }}>Material Consumption</div>
-            <div className="fr"><div className="fg"><label>AC Cable Qty (mtrs)</label><input type="number" className="fi" value={f.acCableQty} onChange={e => set('acCableQty', e.target.value)} /></div><div className="fg"><label>AC Cable Size (mm)</label><input className="fi" value={f.acCableSize} onChange={e => set('acCableSize', e.target.value)} placeholder="e.g. 4mm" /></div></div>
-            <div className="fr"><div className="fg"><label>DC Cable Qty (mtrs)</label><input type="number" className="fi" value={f.dcCableQty} onChange={e => set('dcCableQty', e.target.value)} /></div><div className="fg"><label>DC Cable Size (mm)</label><input className="fi" value={f.dcCableSize} onChange={e => set('dcCableSize', e.target.value)} placeholder="e.g. 6mm" /></div></div>
-            <div className="fr"><div className="fg"><label>Earth Cable (mtrs)</label><input type="number" className="fi" value={f.earthCable} onChange={e => set('earthCable', e.target.value)} /></div><div className="fg"><label>Earth Cable Size (mm)</label><input className="fi" value={f.earthCableSize} onChange={e => set('earthCableSize', e.target.value)} placeholder="e.g. 4mm" /></div></div>
-            <div className="fr"><div className="fg"><label>UPVC Pipes (pcs)</label><input type="number" className="fi" value={f.upvcPipes} onChange={e => set('upvcPipes', e.target.value)} /></div><div className="fg"><label>UPVC Pipe Size (mm)</label><input className="fi" value={f.upvcPipeSize} onChange={e => set('upvcPipeSize', e.target.value)} placeholder="e.g. 25mm" /></div></div>
-          </>)}
-          {/* Documents Tab */}
-          {tab === 'docs' && (<>
-            <div className="fg"><label>Hand Sketch URL</label><input className="fi" type="url" value={f.handSketch} onChange={e => set('handSketch', e.target.value)} placeholder="https://..." /></div>
-            {f.handSketch && <img src={f.handSketch} alt="Hand Sketch" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)', marginTop: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
-            <div className="fg" style={{ marginTop: 10 }}><label>Installation Report / Notes</label><textarea className="fi" value={f.installationReport} onChange={e => set('installationReport', e.target.value)} rows="4" placeholder="Enter installation report details..." /></div>
-          </>)}
-        </div>
-        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Create'}</button></div>
-      </form>
-    </Modal>
-  );
-}
-
 /* ============ COMPLETION REPORT PRINT ============ */
 function printCompletionReport(customer, leadPOs, installations, leads) {
   /* Find linked lead by phone match */
@@ -1232,9 +1128,7 @@ function printCompletionReport(customer, leadPOs, installations, leads) {
   const fmtCur = (v) => '₹' + Number(v || 0).toLocaleString('en-IN');
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-';
   const e = escapeHtml;
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked — please allow popups to print the report.'); return; }
-  w.document.write(`<html><head><title>Completion Report - ${e(customer.name)}</title>
+  const html = `<html><head><title>Completion Report - ${e(customer.name)}</title>
 <style>
 body{font-family:Arial,sans-serif;padding:30px 40px;line-height:1.6;font-size:13px;color:#333}
 .hd{display:flex;align-items:center;gap:16px;border-bottom:2px solid #1a3a7a;padding-bottom:14px;margin-bottom:20px}
@@ -1311,8 +1205,8 @@ ${extraItems.length > 0 ? `<h3>Extra Charges</h3><table class="info-tbl">${extra
 <!-- Hand Sketch -->
 <div class="section">
 <h2>Hand Sketch</h2>
-${(po && po.handSketch) || (inst && inst.handSketch) ? `<img class="sketch-img" src="${(po && po.handSketch) || inst.handSketch}" alt="Hand Sketch" onerror="this.style.display='none'" />` : '<p style="color:#999">No hand sketch available.</p>'}
-${(po && po.sketchWithSignature) || (inst && inst.sketchWithSignature) ? `<p style="margin-top:8px"><strong>Sketch with Signature:</strong></p><img class="sketch-img" src="${(po && po.sketchWithSignature) || (inst && inst.sketchWithSignature)}" alt="Signed Sketch" onerror="this.style.display='none'" />` : ''}
+${(po && po.handSketch) || (inst && inst.handSketch) ? `<img class="sketch-img" src="${e((po && po.handSketch) || inst.handSketch)}" alt="Hand Sketch" />` : '<p style="color:#999">No hand sketch available.</p>'}
+${(po && po.sketchWithSignature) || (inst && inst.sketchWithSignature) ? `<p style="margin-top:8px"><strong>Sketch with Signature:</strong></p><img class="sketch-img" src="${e((po && po.sketchWithSignature) || (inst && inst.sketchWithSignature))}" alt="Signed Sketch" />` : ''}
 </div>
 
 <!-- Quality Inspection Report -->
@@ -1388,9 +1282,8 @@ ${!customer.feedback && !(po && po.notes) && !(inst && inst.installationReport) 
 <p>This is a system-generated Completion Report. No manual edits allowed post-generation.</p>
 <p>Pragathi Power Solutions — Generated on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</p>
 </div>
-</body></html>`);
-  w.document.close();
-  w.print();
+</body></html>`;
+  openHtmlSafely(html, true);
 }
 
 /* ============ COMPLETION REPORT WHATSAPP ============ */

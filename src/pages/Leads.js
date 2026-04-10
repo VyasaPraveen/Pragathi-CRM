@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 
@@ -148,7 +148,7 @@ export default function Leads() {
       }
       // Auto-create influencer when referred by "Other" person (new referrer)
       if (cleaned.referredByType === 'Other' && cleaned.referredByName) {
-        const exists = influencers.find(inf => inf.name.toLowerCase() === cleaned.referredByName.toLowerCase());
+        const exists = influencers.find(inf => (inf.name || '').toLowerCase() === (cleaned.referredByName || '').toLowerCase());
         if (!exists) {
           await addDocument('influencers', {
             name: cleaned.referredByName, phone: '', type: 'Individual', status: 'Active',
@@ -274,10 +274,10 @@ function LeadModal({ data, id, onSave, onClose }) {
         const json = await res.json();
         if (json[0]?.Status === 'Success' && json[0]?.PostOffice?.length) {
           const offices = json[0].PostOffice;
-          set('district', offices[0].District);
+          if (offices[0]) set('district', offices[0].District);
           const cities = [...new Set(offices.map(o => o.Name))];
           setCityOptions(cities);
-          if (!form.city) set('city', cities[0]);
+          if (!form.city && cities.length > 0) set('city', cities[0]);
         } else {
           setCityOptions([]);
         }
@@ -1166,18 +1166,12 @@ ${(l.customerServiceNumber || l.meterNumber) ? '<tr><td>Customer Service No</td>
 </div>
 <div class="footer">Pragathi Power Solutions | 19-3-12/J, Tiruchanoor Road, Tirupati-517501 | 9701426440 | ppstirupathi@gmail.com</div>
 </body></html>`;
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked — please allow popups.'); return; }
-  w.document.write(html);
-  w.document.close();
-  w.print();
+  openHtmlSafely(html, true);
 }
 
 function printLeadSummary(lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked — please allow popups to print.'); return; }
   const e = escapeHtml;
-  w.document.write(`<html><head><title>Lead - ${e(lead.name)}</title>
+  const html = `<html><head><title>Lead - ${e(lead.name)}</title>
 <style>body{font-family:Arial,sans-serif;padding:40px;line-height:1.6;color:#333}h1{font-size:20px;margin-bottom:5px;color:#1a3a7a}.sub{color:#666;font-size:13px;margin-bottom:20px}table{width:100%;border-collapse:collapse;margin:15px 0}th,td{text-align:left;padding:8px 12px;border-bottom:1px solid #eee;font-size:13px}th{color:#666;font-weight:600;width:35%}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style>
 </head><body>
 <h1>Lead Summary: ${e(lead.name)}</h1>
@@ -1207,17 +1201,14 @@ ${lead.siteVisit === 'Yes' && lead.roofType ? `<tr><th>Site Visit</th><td>Done${
 ${lead.notes ? `<tr><th>Notes</th><td>${e(lead.notes)}</td></tr>` : ''}
 </table>
 <div class="footer">Pragathi Power Solutions — Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
-</body></html>`);
-  w.document.close();
-  w.print();
+</body></html>`;
+  openHtmlSafely(html, true);
 }
 
 function printFollowUpHistory(lead) {
   const history = lead.followUpHistory || [];
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked — please allow popups to print.'); return; }
   const e = escapeHtml;
-  w.document.write(`<html><head><title>Follow-up History - ${e(lead.name)}</title>
+  const html = `<html><head><title>Follow-up History - ${e(lead.name)}</title>
 <style>body{font-family:Arial,sans-serif;padding:40px;line-height:1.6;color:#333}h1{font-size:18px;margin-bottom:5px;color:#1a3a7a}.sub{color:#666;font-size:13px;margin-bottom:20px}.cur{background:#f0f8f0;padding:12px 16px;border-radius:8px;margin-bottom:20px;font-size:13px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:8px 12px;text-align:left;font-size:13px}th{background:#f5f5f5;font-weight:600}.footer{margin-top:30px;font-size:11px;color:#999;text-align:center}@media print{body{padding:20px}}</style>
 </head><body>
 <h1>Follow-up History: ${e(lead.name)}</h1>
@@ -1227,9 +1218,8 @@ ${history.length > 0 ? `<table><thead><tr><th>#</th><th>Date</th><th>Status</th>
 ${history.map((h, i) => `<tr><td>${i + 1}</td><td>${e(h.date || '-')}</td><td>${e(h.status || '-')}</td><td>${e(h.notes || '-')}</td><td>${e(h.by || '-')}</td></tr>`).join('')}
 </tbody></table>` : '<p style="color:#999">No follow-up history recorded yet.</p>'}
 <div class="footer">Pragathi Power Solutions — Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
-</body></html>`);
-  w.document.close();
-  w.print();
+</body></html>`;
+  openHtmlSafely(html, true);
 }
 
 /* PO/BOM print/download/share functions moved to ../services/poUtils.js */

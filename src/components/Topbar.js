@@ -68,13 +68,13 @@ export default function Topbar({ onMenuClick }) {
   }, [showPanel]);
 
   const markAsRead = async (id) => {
-    try { await updateDocument('notifications', id, { read: true }); } catch {}
+    try { await updateDocument('notifications', id, { read: true }); } catch (e) { console.warn('Failed to mark notification read:', e.message); }
   };
 
   const markAllRead = async () => {
-    for (const n of myNotifications.filter(n => !n.read)) {
-      try { await updateDocument('notifications', n.id, { read: true }); } catch {}
-    }
+    await Promise.all(myNotifications.filter(n => !n.read).map(n =>
+      updateDocument('notifications', n.id, { read: true }).catch(e => console.warn('Failed to mark notification read:', e.message))
+    ));
   };
 
   return (

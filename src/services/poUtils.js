@@ -86,39 +86,43 @@ ${l.notes ? `<span style="grid-column:1/-1"><strong>Notes:</strong> ${e(l.notes)
 <p><strong>Company Scope</strong>&emsp;: ${e(po.companyScope || 'System Supply and Installation as per BOM.')}</p>
 <p><strong>Customer Scope</strong>&emsp;: ${e(po.customerScope || 'Civil works, UPVC Pipes, Additional cable if required more than 20 metres and Grid Synchronization Charges and Coordination with APSPDCL.')}</p>
 <p><strong>Final agreed price</strong>&emsp;: Rs. ${agreedPrice > 0 ? agreedPrice.toLocaleString('en-IN') : '_______________'} Including GST.</p>
-${po.referenceNumber ? `<p><strong>Note-</strong> : All Technical specifications should be inline with your Reference No: ${po.referenceNumber}.</p>` : ''}
+${po.referenceNumber ? `<p><strong>Note-</strong> : All Technical specifications should be inline with your Reference No: ${e(po.referenceNumber)}.</p>` : ''}
 <br/>
 <p><strong>Other Terms &amp; Conditions</strong></p>
 <table class="terms-tbl">
 <tr><td>Taxes</td><td>:</td><td>GST included.</td></tr>
 <tr><td>Freight</td><td>:</td><td>Included in the above said prices.</td></tr>
-<tr><td>Guarantee/Warranty</td><td>:</td><td>${po.warrantyTerms || 'Solar Inverter \u2013 5 Yrs, Solar Modules- 5 Yrs +20 Yrs'}</td></tr>
-<tr><td>Delivery Lead Time</td><td>:</td><td>${po.deliveryTerms || '3-4 Weeks from the receipt of LOI /PO.'}</td></tr>
-<tr><td>Installation Lead Time</td><td>:</td><td>${po.installationTerms || 'Within 10 days from the date of material received.'}</td></tr>
-<tr><td>Pay-term</td><td>:</td><td>${po.paymentTerms || '80% Advance along with PO, 20% Before dispatching the materials against PI.'}</td></tr>
+<tr><td>Guarantee/Warranty</td><td>:</td><td>${e(po.warrantyTerms || 'Solar Inverter \u2013 5 Yrs, Solar Modules- 5 Yrs +20 Yrs')}</td></tr>
+<tr><td>Delivery Lead Time</td><td>:</td><td>${e(po.deliveryTerms || '3-4 Weeks from the receipt of LOI /PO.')}</td></tr>
+<tr><td>Installation Lead Time</td><td>:</td><td>${e(po.installationTerms || 'Within 10 days from the date of material received.')}</td></tr>
+<tr><td>Pay-term</td><td>:</td><td>${e(po.paymentTerms || '80% Advance along with PO, 20% Before dispatching the materials against PI.')}</td></tr>
 </table>
 <p style="margin-top:30px">With Regards,</p>
 <div class="sig-section">
-<div class="sig-block"><div class="sig-line">${po.customerName || l.name || '___'}<br/>${po.customerAddress || l.address || ''}</div></div>
+<div class="sig-block"><div class="sig-line">${e(po.customerName || l.name || '___')}<br/>${e(po.customerAddress || l.address || '')}</div></div>
 <div class="sig-block"><div class="sig-line">Authorized Signature<br/>Pragathi Power Solutions</div></div>
 </div>
 <div class="footer">Ref: ${po.poNumber} | Pragathi Power Solutions \u2014 Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
 </body></html>`;
 }
 
+// Safe HTML renderer: uses Blob URL instead of document.write to prevent DOM injection
+function openHtmlSafely(html, shouldPrint = false) {
+  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const w = window.open(url, '_blank');
+  if (!w) { alert('Popup blocked \u2014 please allow popups.'); URL.revokeObjectURL(url); return; }
+  w.addEventListener('afterprint', () => URL.revokeObjectURL(url));
+  if (shouldPrint) w.addEventListener('load', () => w.print());
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
 export function printPO(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups to print.'); return; }
-  w.document.write(buildPOHtml(po, lead));
-  w.document.close();
-  w.print();
+  openHtmlSafely(buildPOHtml(po, lead), true);
 }
 
 export function downloadPO(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups.'); return; }
-  w.document.write(buildPOHtml(po, lead));
-  w.document.close();
+  openHtmlSafely(buildPOHtml(po, lead), false);
 }
 
 export function buildBOMHtml(po, lead) {
@@ -204,18 +208,11 @@ We hereby agreed and confirm that the above-Bill of Materials &amp; Scope of Wor
 }
 
 export function printBOM(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups to print.'); return; }
-  w.document.write(buildBOMHtml(po, lead));
-  w.document.close();
-  w.print();
+  openHtmlSafely(buildBOMHtml(po, lead), true);
 }
 
 export function downloadBOM(po, lead) {
-  const w = window.open('', '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups.'); return; }
-  w.document.write(buildBOMHtml(po, lead));
-  w.document.close();
+  openHtmlSafely(buildBOMHtml(po, lead), false);
 }
 
 export function sharePOWhatsApp(po) {

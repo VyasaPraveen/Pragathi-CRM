@@ -17,10 +17,32 @@ export function listenCollection(col, cb, ob = 'createdAt', dir = 'desc') {
   }, err => cb([], err));
 }
 
+// Security: strip dangerous HTML/script patterns from all string fields before Firestore write
+function sanitizeString(str) {
+  return str
+    .trim()
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')  // strip <script> tags
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')  // strip <iframe> tags
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '') // strip <object> tags
+    .replace(/<embed[^>]*>/gi, '')                                       // strip <embed> tags
+    .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')                        // strip inline event handlers (onerror=, onclick=, etc.)
+    .replace(/javascript\s*:/gi, '')                                     // strip javascript: URIs
+    .replace(/data\s*:\s*text\/html/gi, '')                              // strip data:text/html URIs
+    .replace(/vbscript\s*:/gi, '');                                      // strip vbscript: URIs
+}
+
 function trimStrings(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
-    out[k] = typeof v === 'string' ? v.trim() : v;
+    if (typeof v === 'string') {
+      out[k] = sanitizeString(v);
+    } else if (Array.isArray(v)) {
+      out[k] = v.map(item => (typeof item === 'object' && item !== null) ? trimStrings(item) : (typeof item === 'string' ? sanitizeString(item) : item));
+    } else if (typeof v === 'object' && v !== null && typeof v.toDate !== 'function') {
+      out[k] = trimStrings(v);  // recurse into nested objects (but not Firestore Timestamps)
+    } else {
+      out[k] = v;
+    }
   }
   return out;
 }
