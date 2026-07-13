@@ -8,8 +8,10 @@ import {
   isStageComplete, isFieldSatisfied,
 } from '../services/workflow';
 
-// Compress an uploaded image to a small JPEG data URL (keeps Firestore docs well under 1MB)
-function compressImage(file, maxDim = 1000, quality = 0.7) {
+// Compress an uploaded image to a small JPEG data URL, lowering quality until it
+// fits a per-photo budget so several photos stay well under Firestore's 1MB doc limit.
+const PHOTO_MAX_CHARS = 250000; // ~185KB of base64 per photo
+function compressImage(file, maxDim = 1000) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -23,7 +25,13 @@ function compressImage(file, maxDim = 1000, quality = 0.7) {
         const canvas = document.createElement('canvas');
         canvas.width = width; canvas.height = height;
         canvas.getContext('2d').drawImage(img, 0, 0, width, height);
-        resolve(canvas.toDataURL('image/jpeg', quality));
+        let quality = 0.7;
+        let out = canvas.toDataURL('image/jpeg', quality);
+        while (out.length > PHOTO_MAX_CHARS && quality > 0.35) {
+          quality -= 0.1;
+          out = canvas.toDataURL('image/jpeg', quality);
+        }
+        resolve(out);
       };
       img.onerror = reject;
       img.src = e.target.result;
@@ -61,12 +69,14 @@ export default function WorkflowTab({ customer, canEdit }) {
   const [uploading, setUploading] = useState(false);
   const [openCompleted, setOpenCompleted] = useState(null);
 
-  // Re-seed the form whenever the active stage changes (e.g. after completing one)
+  // Re-seed the form only when the active stage KEY changes (e.g. after completing
+  // one). Keying on the derived stage — not workflow.currentStage — avoids wiping
+  // in-progress keystrokes when the first "Save Progress" sets currentStage.
+  const currentKey = current ? current.key : null;
   useEffect(() => {
-    const cur = getWorkflowView(customer).find(s => s.status === 'current');
-    setForm(prefill(cur, customer));
+    setForm(prefill(current, customer));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [customer.id, customer.workflow?.currentStage]);
+  }, [customer.id, currentKey]);
 
   const setField = (k, v) => setForm(p => ({ ...p, [k]: v }));
 

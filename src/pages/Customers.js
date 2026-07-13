@@ -16,24 +16,15 @@ const phases = ['Single Phase', 'Three Phase'];
 // Customer tabs unlock in step with the 18-stage workflow (sequential gating).
 // The number is the minimum "stages completed" required before the tab opens.
 const TAB_MIN_STAGE = {
-  workflow: 0, info: 0, subsidy: 4, payment: 5, dispatch: 6,
+  workflow: 0, info: 0, subsidy: 5, payment: 5, dispatch: 6,
   installation: 8, quality: 9, warranty: 9, sync: 10, firstbill: 14, om: 15,
 };
 
-// How far a customer has actually progressed = the higher of the recorded workflow
-// completion and a floor derived from existing data — so legacy records that already
-// hold real payment/installation data are never locked out of their own tabs.
+// Fully strict gating: tab access is driven PURELY by how many workflow stages
+// are completed. Existing field data does NOT unlock tabs — every customer (new
+// or existing) must be advanced through the Workflow tab to open later stages.
 function workflowGateLevel(customer) {
-  const c = customer || {};
-  const has = v => toNumber(v) > 0;
-  let n = completedCount(c); // includes the 4 auto stages
-  if (has(c.advanceAmount) || has(c.advanceReceivedAmount) || has(c.totalPrice) || has(c.agreedPrice) || has(c.quotationProjectValue)) n = Math.max(n, 6);
-  if (c.dispatchDate || c.dispatchedBy || c.vehicleNumber) n = Math.max(n, 8);
-  if (c.installationPicUrl || c.installationStatus === 'In Progress') n = Math.max(n, 10);
-  if (c.installationStatus === 'Completed') n = Math.max(n, 12);
-  if (has(c.finalPayment) || has(c.finalAmount)) n = Math.max(n, 14);
-  if (c.status === 'Completed') n = Math.max(n, 18);
-  return n;
+  return completedCount(customer || {});
 }
 
 export default function Customers() {
