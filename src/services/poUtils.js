@@ -216,9 +216,12 @@ export function downloadBOM(po, lead) {
 }
 
 export function sharePOWhatsApp(po) {
-  const items = (po.items || []).map((item, i) =>
-    (i + 1) + '. ' + item.materialName + (item.specification ? ' (' + item.specification + ')' : '') + ' - Qty: ' + item.quantity + (item.unit ? ' ' + item.unit : '') + ' - \u20b9' + Number(item.amount).toLocaleString('en-IN')
-  ).join('\n');
+  const items = (po.items || []).map((item, i) => {
+    // Lead-PO items carry make/model but no rate/amount \u2014 only append the price when it's a real number
+    const amt = Number(item.amount);
+    const amtStr = !isNaN(amt) && amt > 0 ? ' - \u20b9' + amt.toLocaleString('en-IN') : '';
+    return (i + 1) + '. ' + item.materialName + (item.specification ? ' (' + item.specification + ')' : '') + ' - Qty: ' + (item.quantity || '-') + (item.unit ? ' ' + item.unit : '') + amtStr;
+  }).join('\n');
 
   const extraLines = [
     { label: 'Discom Charges', val: Number(po.discomCharges || 0) },
@@ -250,8 +253,9 @@ export function sharePOWhatsApp(po) {
     '\n\n_Pragathi Power Solutions_';
 
   if (po.customerPhone) {
-    const phone = po.customerPhone.replace(/\D/g, '');
-    window.open('https://wa.me/91' + phone + '?text=' + encodeURIComponent(msg), '_blank');
+    const phone = String(po.customerPhone).replace(/\D/g, '');
+    const num = phone.length === 10 ? '91' + phone : phone;
+    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
   } else {
     window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
   }

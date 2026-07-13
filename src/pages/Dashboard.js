@@ -168,7 +168,9 @@ export default function Dashboard() {
 
   // Overdue follow-ups
   const overdueFollowUps = useMemo(() => {
-    const today = new Date().toISOString().slice(0, 10);
+    // Local date (IST), not UTC — avoids misbucketing between IST midnight and 05:30
+    const n = new Date();
+    const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
     return leads
       .filter(l => l.nextFollowUpDate && l.nextFollowUpDate <= today && l.status !== 'Converted' && l.status !== 'Not Interested')
       .sort((a, b) => (a.nextFollowUpDate || '').localeCompare(b.nextFollowUpDate || ''))

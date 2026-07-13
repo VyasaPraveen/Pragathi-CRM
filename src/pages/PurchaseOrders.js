@@ -1,14 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+// Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
+import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
 const PAGE_SIZE = 20;
 const EMPTY_ITEM = { materialName: '', quantity: '', unit: 'Nos', specification: '', remarks: '', rate: '', amount: 0 };
+
+// Stable per-row keys so add/remove doesn't shuffle React DOM/focus (not persisted to Firestore)
+let itemKeyCounter = 0;
+const nextItemKey = () => 'it_' + (itemKeyCounter++);
 
 const DEFAULT_BOM_MATERIALS = [
   'Solar Module 545W', 'Solar On Grid Inverter', 'ACDB (AC Distribution Box)',
@@ -33,18 +39,23 @@ export default function PurchaseOrders() {
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
   const canEdit = hasAccess(role, 'manager');
 
-  // Merge both collections with a source tag
-  const allPOs = [
-    ...purchaseOrders.map(po => ({ ...po, _source: 'standalone' })),
-    ...leadPOs.map(po => {
-      const lead = leads.find(l => l.id === po.leadId);
-      return { ...po, _source: 'lead', _leadName: lead ? lead.name : po.customerName || 'Unknown Lead' };
-    })
-  ].sort((a, b) => {
-    const da = a.poDate || a.createdAt || '';
-    const db2 = b.poDate || b.createdAt || '';
-    return db2 > da ? 1 : da > db2 ? -1 : 0;
-  });
+  // Merge both collections with a source tag (memoized so typing in search doesn't re-merge/re-sort)
+  const allPOs = useMemo(() => {
+    // Normalize mixed date types (poDate string vs createdAt Timestamp) to a comparable number
+    const ts = (po) => {
+      if (po.poDate) { const t = Date.parse(po.poDate); if (!isNaN(t)) return t; }
+      if (po.createdAt && typeof po.createdAt.toDate === 'function') return po.createdAt.toDate().getTime();
+      if (po.createdAt) { const t = Date.parse(po.createdAt); if (!isNaN(t)) return t; }
+      return 0;
+    };
+    return [
+      ...purchaseOrders.map(po => ({ ...po, _source: 'standalone' })),
+      ...leadPOs.map(po => {
+        const lead = leads.find(l => l.id === po.leadId);
+        return { ...po, _source: 'lead', _leadName: lead ? lead.name : po.customerName || 'Unknown Lead' };
+      })
+    ].sort((a, b) => ts(b) - ts(a));
+  }, [purchaseOrders, leadPOs, leads]);
 
   const allStatuses = [...new Set([...poStatuses, 'Unapproved', 'Recommended', 'Approved'])];
 
@@ -144,8 +155,8 @@ export default function PurchaseOrders() {
               <td><StatusBadge status={po.status} /></td>
               <td><div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn bsm bo" onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
-                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printPO(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
-                <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
+                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po, leads.find(l => l.id === po.leadId))} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
+                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? sharePOWhatsApp(po) : shareLeadPO(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
                 {canEdit && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
                 {hasAccess(role, 'admin') && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => handleDelete(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
@@ -207,10 +218,18 @@ function POModal({ data, id, onSave, onClose }) {
   });
   const [items, setItems] = useState(
     (data.items && data.items.length)
-      ? data.items.map(it => ({ ...EMPTY_ITEM, ...it }))
-      : [{ ...EMPTY_ITEM }]
+      ? data.items.map(it => ({ ...EMPTY_ITEM, ...it, _key: nextItemKey() }))
+      : [{ ...EMPTY_ITEM, _key: nextItemKey() }]
   );
+  const [saving, setSaving] = useState(false);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    try { await onSave({ ...f, items, totalValue }, id); } finally { setSaving(false); }
+  };
 
   const setItem = (idx, key, val) => {
     setItems(prev => {
@@ -222,7 +241,7 @@ function POModal({ data, id, onSave, onClose }) {
       return copy;
     });
   };
-  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM }]);
+  const addItem = () => setItems(prev => [...prev, { ...EMPTY_ITEM, _key: nextItemKey() }]);
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
   const totalValue = items.reduce((s, it) => s + toNumber(it.amount), 0);
 
@@ -243,7 +262,7 @@ function POModal({ data, id, onSave, onClose }) {
       unit: it.unit || 'Nos',
       specification: it.specification || '',
       remarks: it.remarks || '',
-      rate: '', amount: 0
+      rate: '', amount: 0, _key: nextItemKey()
     })));
     toast('Template "' + tpl.name + '" loaded');
   };
@@ -276,7 +295,7 @@ function POModal({ data, id, onSave, onClose }) {
 
   return (
     <Modal title={id ? 'Edit Purchase Order' : 'New Purchase Order'} onClose={onClose} wide>
-      <form onSubmit={e => { e.preventDefault(); onSave({ ...f, items, totalValue }, id); }}>
+      <form onSubmit={submit}>
         <div className="mb">
           <div className="fr"><div className="fg"><label>PO Number</label><input className="fi" value={f.poNumber} onChange={e => set('poNumber', e.target.value)} placeholder="Auto or manual" /></div><div className="fg"><label>PO Date *</label><input type="date" className="fi" value={f.poDate} onChange={e => set('poDate', e.target.value)} required /></div></div>
           <div className="fr"><div className="fg"><label>Vendor Name *</label><input className="fi" value={f.vendorName} onChange={e => set('vendorName', e.target.value)} required /></div><div className="fg"><label>Vendor Phone</label><input className="fi" value={f.vendorPhone} onChange={e => set('vendorPhone', e.target.value)} /></div></div>
@@ -315,7 +334,7 @@ function POModal({ data, id, onSave, onClose }) {
 
             {/* BOM Items */}
             {items.map((item, i) => (
-              <div key={i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
+              <div key={item._key || i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
                 <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
                   <div className="fg" style={{ flex: 3, marginBottom: 0 }}>{i === 0 && <label>Material</label>}<input className="fi" value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" placeholder="Material name" /></div>
                   <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label>Qty</label>}<input type="number" className="fi" value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></div>
@@ -339,7 +358,7 @@ function POModal({ data, id, onSave, onClose }) {
           <div className="fg"><label>Payment Due Date</label><input type="date" className="fi" value={f.paymentDueDate} onChange={e => set('paymentDueDate', e.target.value)} /></div>
           <div className="fg"><label>Notes</label><textarea className="fi" value={f.notes} onChange={e => set('notes', e.target.value)} rows="3" /></div>
         </div>
-        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Create'} PO</button></div>
+        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : ((id ? 'Update' : 'Create') + ' PO')}</button></div>
       </form>
     </Modal>
   );

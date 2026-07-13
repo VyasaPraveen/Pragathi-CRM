@@ -34,11 +34,20 @@ service cloud.firestore {
 
     match /users/{uid} {
       allow read: if isAuth();
-      // Self-registration: can only create own doc with staff/engineer role, cannot self-approve
-      allow create: if (isAuth() && request.auth.uid == uid
-        && request.resource.data.role in ['staff', 'engineer']
-        && (!('approved' in request.resource.data) || request.resource.data.approved == false || request.resource.data.approved == true))
-        || isAdmin();
+      // Self-registration: can only create own doc with staff/engineer role.
+      // approved may be true ONLY when verified against a real team member
+      // (matching teamId whose stored phone equals the submitted phone) — this
+      // prevents arbitrary users from self-approving while keeping team auto-onboarding.
+      allow create: if isAdmin()
+        || (isAuth() && request.auth.uid == uid
+            && request.resource.data.role in ['staff', 'engineer']
+            && (
+              (!('approved' in request.resource.data) || request.resource.data.approved == false)
+              || (request.resource.data.approved == true
+                  && 'teamId' in request.resource.data
+                  && exists(/databases/$(database)/documents/team/$(request.resource.data.teamId))
+                  && get(/databases/$(database)/documents/team/$(request.resource.data.teamId)).data.phone == request.resource.data.phone)
+            ));
       // Only admins can update users; prevent non-super_admin from escalating to super_admin
       allow update: if isAdmin()
         && (getRole() == 'super_admin' || !('role' in request.resource.data) || request.resource.data.role != 'super_admin');

@@ -15,6 +15,10 @@ const PAGE_SIZE = 20;
 
 const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
 
+// Stable per-row keys so add/remove doesn't shuffle React DOM/focus (not persisted to Firestore)
+let bomKeyCounter = 0;
+const nextBomKey = () => 'bom_' + (bomKeyCounter++);
+
 const DEFAULT_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
   { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
@@ -51,7 +55,7 @@ const DEFAULT_BOM_MATERIALS = [
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads, users, influencers } = useData();
+  const { leads, customers, users, influencers } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -118,6 +122,7 @@ export default function Leads() {
         // Auto-create customer if lead is created directly as Converted
         if (cleaned.status === 'Converted') {
           await addDocument('customers', {
+            leadId: newId,
             name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
             email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
             city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
@@ -127,6 +132,29 @@ export default function Leads() {
             status: 'Active'
           });
           toast(cleaned.name + ' auto-added to Customers!');
+        }
+        // Auto-create reminder for Expected Sign-Up Date on new lead
+        if (cleaned.expectedSignUpDate) {
+          await addDocument('reminders', {
+            type: 'Follow-up',
+            customer: cleaned.name,
+            phone: cleaned.phone || '',
+            date: cleaned.expectedSignUpDate,
+            message: 'Expected sign-up date for ' + cleaned.name + '. Follow up to confirm conversion.',
+            status: 'Pending'
+          });
+          toast('Sign-up reminder auto-created');
+        }
+        // Auto-create influencer when referred by "Other" person on new lead
+        if (cleaned.referredByType === 'Other' && cleaned.referredByName) {
+          const exists = influencers.find(inf => (inf.name || '').toLowerCase() === (cleaned.referredByName || '').toLowerCase());
+          if (!exists) {
+            await addDocument('influencers', {
+              name: cleaned.referredByName, phone: '', type: 'Individual', status: 'Active',
+              notes: `Auto-created from lead referral by ${cleaned.name}`
+            });
+            toast(cleaned.referredByName + ' added as Influencer automatically');
+          }
         }
         // Auto-open lead detail on PO tab for the new lead
         setModal(null);
@@ -157,9 +185,12 @@ export default function Leads() {
           toast(cleaned.referredByName + ' added as Influencer automatically');
         }
       }
-      // Auto-create customer on first conversion (advance payment tracked separately in Customer)
-      if (cleaned.status === 'Converted' && prevStatus !== 'Converted') {
+      // Auto-create customer on first conversion (advance payment tracked separately in Customer).
+      // Guard against duplicates: skip if a customer already exists for this lead (by leadId or name+phone).
+      const existingCustomer = customers.find(c => c.leadId === id || (c.phone === cleaned.phone && c.name === cleaned.name));
+      if (cleaned.status === 'Converted' && prevStatus !== 'Converted' && !existingCustomer) {
         await addDocument('customers', {
+          leadId: id,
           name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
           email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
           city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
@@ -262,6 +293,7 @@ function LeadModal({ data, id, onSave, onClose }) {
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const { toast } = useToast();
   const [cityOptions, setCityOptions] = useState([]);
+  const [saving, setSaving] = useState(false);
 
   const handlePincodeChange = async (val) => {
     set('pincode', val);
@@ -301,8 +333,9 @@ function LeadModal({ data, id, onSave, onClose }) {
 
   return (
     <Modal title={id ? 'Edit Lead' : 'Add New Lead'} onClose={onClose} wide>
-      <form onSubmit={e => {
+      <form onSubmit={async e => {
         e.preventDefault();
+        if (saving) return;
         if (!id && !form.city.trim()) { toast('City is required for new leads', 'er'); return; }
         if (duplicatePhone && !window.confirm(`Phone ${form.phone} already exists for lead "${duplicatePhone.name}". Save anyway?`)) return;
         // Validation: Required KW must be <= Sanctioned Load
@@ -319,7 +352,9 @@ function LeadModal({ data, id, onSave, onClose }) {
           alert(`⚠️ Not possible for installation!\nRequired space for ${kw} kW system: ${minSpace} sq.ft\nAvailable space entered: ${space} sq.ft\nRequired space is less than minimum for installation.`);
           return;
         }
-        onSave(form, id, prevStatus, data.expectedSignUpDate || '');
+        setSaving(true);
+        try { await onSave(form, id, prevStatus, data.expectedSignUpDate || ''); }
+        finally { setSaving(false); }
       }}>
         <div className="mb">
           <div className="fr"><div className="fg"><label>Full Name *</label><input className="fi" value={form.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={form.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
@@ -387,7 +422,7 @@ function LeadModal({ data, id, onSave, onClose }) {
           <div className="fg"><label>Notes</label><textarea className="fi" value={form.notes} onChange={e => set('notes', e.target.value)} rows="3" placeholder="Follow-up notes..." /></div>
           <div className="fg"><label>Lead Status</label><select className="fi" value={form.status} onChange={e => set('status', e.target.value)}>{sts.map(o => <option key={o}>{o}</option>)}</select></div>
         </div>
-        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'} Lead</button></div>
+        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : ((id ? 'Update' : 'Add') + ' Lead')}</button></div>
       </form>
     </Modal>
   );
@@ -821,10 +856,11 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   });
   const [items, setItems] = useState(
     (po.items && po.items.length)
-      ? po.items.map(it => ({ ...EMPTY_BOM_ITEM, ...it }))
-      : DEFAULT_BOM_MATERIALS.map(m => ({ ...EMPTY_BOM_ITEM, ...m }))
+      ? po.items.map(it => ({ ...EMPTY_BOM_ITEM, ...it, _key: nextBomKey() }))
+      : DEFAULT_BOM_MATERIALS.map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))
   );
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const [poSaving, setPoSaving] = useState(false);
 
   const setItem = (idx, key, val) => {
     setItems(prev => {
@@ -836,7 +872,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
       return copy;
     });
   };
-  const addItem = () => setItems(prev => [...prev, { ...EMPTY_BOM_ITEM }]);
+  const addItem = () => setItems(prev => [...prev, { ...EMPTY_BOM_ITEM, _key: nextBomKey() }]);
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
   const totalValue = items.reduce((s, it) => s + toNumber(it.amount), 0);
   const extraChargesTotal = toNumber(f.discomCharges) + toNumber(f.civilWork) + toNumber(f.upvcPipes) + toNumber(f.additionalRelay) + toNumber(f.elevatedStructure) + toNumber(f.additionalBom) + toNumber(f.otherCharges);
@@ -859,7 +895,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
       unit: it.unit || 'Nos',
       specification: it.specification || '',
       remarks: it.remarks || '',
-      rate: '', amount: 0
+      rate: '', amount: 0, _key: nextBomKey()
     })));
     toast('Template "' + tpl.name + '" loaded');
   };
@@ -891,8 +927,9 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
           <h3>{poId ? 'Edit Purchase Order' : 'Create Purchase Order'}</h3>
           <button className="mx" onClick={onClose}><span className="material-icons-round">close</span></button>
         </div>
-        <form onSubmit={e => {
+        <form onSubmit={async e => {
           e.preventDefault();
+          if (poSaving) return;
           const cleaned = {
             ...f,
             companyScope: f.companyScope || autoScope,
@@ -918,7 +955,9 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
             extraChargesTotal,
             agreedPrice: toNumber(f.agreedPrice) || totalValue
           };
-          onSave(cleaned, poId);
+          setPoSaving(true);
+          try { await onSave(cleaned, poId); }
+          finally { setPoSaving(false); }
         }}>
           <div className="mb" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
             <div className="fr">
@@ -961,7 +1000,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               </div>
 
               {items.map((item, i) => (
-                <div key={i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
+                <div key={item._key || i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
                     <div className="fg" style={{ flex: 3, marginBottom: 0 }}>{i === 0 && <label>Description of Material</label>}<input className="fi" value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" placeholder="Material name" /></div>
                     <div className="fg" style={{ flex: 0.6, marginBottom: 0 }}>{i === 0 && <label>UOM</label>}<input className="fi" value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></div>
@@ -1047,7 +1086,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
           </div>
           <div className="mf">
             <button type="button" className="btn bo" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn bp">{poId ? 'Update' : 'Create'} PO</button>
+            <button type="submit" className="btn bp" disabled={poSaving}>{poSaving ? 'Saving...' : ((poId ? 'Update' : 'Create') + ' PO')}</button>
           </div>
         </form>
       </div>
@@ -1120,7 +1159,7 @@ Ph: ${e(l.phone || '___________')}${l.email ? '<br/>Email: ' + e(l.email) : ''}
 <table>
 <thead><tr><th>Sl.</th><th>Description</th><th>Specification</th><th>Qty</th></tr></thead>
 <tbody>
-<tr><td>1</td><td>Solar Modules</td><td>545 Wp / 550 Wp Mono PERC (Tier-1)</td><td>${kw !== '___' ? Math.ceil(Number(kw) * 1000 / 545) : '___'}</td></tr>
+<tr><td>1</td><td>Solar Modules</td><td>545 Wp / 550 Wp Mono PERC (Tier-1)</td><td>${(!isNaN(Number(kw)) && Number(kw) > 0) ? Math.ceil(Number(kw) * 1000 / 545) : '___'}</td></tr>
 <tr><td>2</td><td>Solar Inverter</td><td>${kw} kW On-Grid String Inverter</td><td>1</td></tr>
 <tr><td>3</td><td>Module Mounting Structure</td><td>Hot-Dip Galvanized / Anodized Aluminum</td><td>1 Set</td></tr>
 <tr><td>4</td><td>DC Cables</td><td>4 sq.mm / 6 sq.mm Solar DC Cable</td><td>As Required</td></tr>
@@ -1252,8 +1291,9 @@ function shareLeadWhatsApp(lead) {
     '\n\n_Pragathi Power Solutions_';
 
   if (lead.phone) {
-    const phone = lead.phone.replace(/\D/g, '');
-    window.open('https://wa.me/91' + phone + '?text=' + encodeURIComponent(msg), '_blank');
+    const phone = String(lead.phone).replace(/\D/g, '');
+    const num = phone.length === 10 ? '91' + phone : phone;
+    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
   } else {
     window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
   }
@@ -1276,8 +1316,9 @@ function shareFollowUpWhatsApp(lead) {
     '\n\n_Pragathi Power Solutions_';
 
   if (lead.phone) {
-    const phone = lead.phone.replace(/\D/g, '');
-    window.open('https://wa.me/91' + phone + '?text=' + encodeURIComponent(msg), '_blank');
+    const phone = String(lead.phone).replace(/\D/g, '');
+    const num = phone.length === 10 ? '91' + phone : phone;
+    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
   } else {
     window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
   }

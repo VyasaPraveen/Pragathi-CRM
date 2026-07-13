@@ -2,6 +2,22 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { DESIGNATIONS } from '../services/helpers';
 
+// Map Firebase auth error codes to generic, non-enumerable messages
+const authErrorMessage = (err) => {
+  switch (err?.code || '') {
+    case 'auth/invalid-email': return 'Please enter a valid email address.';
+    case 'auth/user-disabled': return 'This account has been disabled. Please contact your administrator.';
+    case 'auth/user-not-found':
+    case 'auth/wrong-password':
+    case 'auth/invalid-credential': return 'Incorrect email or password.';
+    case 'auth/too-many-requests': return 'Too many attempts. Please try again in a few minutes.';
+    case 'auth/network-request-failed': return 'Network error. Please check your connection and try again.';
+    case 'auth/email-already-in-use': return 'An account with this email already exists.';
+    case 'auth/weak-password': return 'Password is too weak. Use at least 8 characters.';
+    default: return 'Something went wrong. Please try again.';
+  }
+};
+
 export default function Login() {
   const { login, signup } = useAuth();
   const [mode, setMode] = useState('login'); // 'login' or 'signup'
@@ -34,7 +50,7 @@ export default function Login() {
       await login(email, password);
     } catch (err) {
       if (mounted.current) {
-        setError(err.message.replace('Firebase: ', ''));
+        setError(authErrorMessage(err));
         setLoading(false);
       }
     }
@@ -51,6 +67,14 @@ export default function Login() {
     }
     if (password !== confirmPassword) {
       setError('Passwords do not match');
+      return;
+    }
+    if (!name.trim() || name.trim().length < 2) {
+      setError('Please enter your full name');
+      return;
+    }
+    if (String(phone).replace(/\D/g, '').length < 10) {
+      setError('Please enter a valid 10-digit mobile number');
       return;
     }
 
@@ -74,7 +98,7 @@ export default function Login() {
       }
     } catch (err) {
       if (mounted.current) {
-        setError(err.message.replace('Firebase: ', ''));
+        setError(authErrorMessage(err));
         setLoading(false);
       }
     }

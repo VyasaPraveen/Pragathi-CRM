@@ -96,16 +96,23 @@ function RevenueModal({ type, data, id, onSave, onClose }) {
     date: (data && data.date) || new Date().toISOString().slice(0, 10),
     category: (data && data.category) || ''
   });
+  const [saving, setSaving] = useState(false);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const submit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    try { await onSave(type, f, id); } finally { setSaving(false); }
+  };
   return (
     <Modal title={`${id ? 'Edit' : 'Add'} ${type === 'income' ? 'Income' : 'Expense'}`} onClose={onClose}>
-      <form onSubmit={e => { e.preventDefault(); onSave(type, f, id); }}>
+      <form onSubmit={submit}>
         <div className="mb">
           <div className="fg"><label>Description *</label><input className="fi" value={f.desc} onChange={e => set('desc', e.target.value)} required /></div>
           <div className="fr"><div className="fg"><label>Amount *</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} required /></div><div className="fg"><label>Date</label><input type="date" className="fi" value={f.date} onChange={e => set('date', e.target.value)} /></div></div>
           <div className="fg"><label>Category</label><input className="fi" value={f.category} onChange={e => set('category', e.target.value)} placeholder={type === 'income' ? 'Customer Payment' : 'Materials / Salaries'} /></div>
         </div>
-        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
+        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : (id ? 'Update' : 'Add')}</button></div>
       </form>
     </Modal>
   );

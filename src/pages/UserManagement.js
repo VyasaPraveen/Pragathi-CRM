@@ -173,9 +173,10 @@ export default function UserManagement() {
 
   const handleEditSave = async (uid, data) => {
     try {
-      const newRole = data.designation ? getRoleFromDesignation(data.designation) : 'staff';
       const update = { ...data };
-      if (newRole) update.role = newRole;
+      // Only derive role when a designation is actually being changed, otherwise
+      // editing unrelated fields (phone, address) would wrongly demote the user.
+      if (data.designation) update.role = getRoleFromDesignation(data.designation);
       await updateDoc(doc(db, 'users', uid), update);
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, ...update } : u));
       setEditModal(null);

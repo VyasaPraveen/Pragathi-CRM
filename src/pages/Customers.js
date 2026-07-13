@@ -6,6 +6,8 @@ import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 import { printBOM, downloadBOM } from '../services/poUtils';
+import WorkflowTab from '../components/WorkflowTab';
+import { completedCount, TOTAL_STAGES } from '../services/workflow';
 
 const PAGE_SIZE = 20;
 const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
@@ -154,7 +156,9 @@ function CustomerModal({ data, id, onSave, onClose }) {
   const { toast } = useToast();
   // Find linked lead to pre-populate payment fields from lead stage
   const ll = leads.find(l => l.phone === data.phone && l.name === data.name) || leads.find(l => l.phone === data.phone);
-  const linkedInst = installations.find(i => i.customerName === data.name && i.phone === data.phone) || installations.find(i => i.customerName === data.name);
+  const linkedInst = (id && installations.find(i => i.customerId === id))
+    || installations.find(i => i.customerName === data.name && i.phone === data.phone)
+    || installations.find(i => i.customerName === data.name);
   // Find linked BOM/PO
   const customerPOs = leadPOs.filter(po => (ll && po.leadId === ll.id) || (po.customerName === data.name && po.customerPhone === data.phone));
   const linkedPO = customerPOs.find(p => p.status === 'Approved') || customerPOs[0];
@@ -240,6 +244,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
     feedback: data.feedback || '',
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const [saving, setSaving] = useState(false);
 
   const di = linkedInst || {};
   const [instF, setInstF] = useState({
@@ -276,16 +281,18 @@ function CustomerModal({ data, id, onSave, onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (saving) return;
+    setSaving(true);
     // Save installation data to installations collection
     try {
       const instData = { ...instF, progress: Math.min(100, Math.max(0, toNumber(instF.progress))), floors: toNumber(instF.floors), customerName: data.name || f.name, phone: data.phone || f.phone };
       if (linkedInst?.id) {
         await updateDocument('installations', linkedInst.id, instData);
       } else if (instData.customerName) {
-        await addDocument('installations', instData);
+        await addDocument('installations', { ...instData, customerId: id || '' });
       }
     } catch (err) { toast('Installation save failed: ' + err.message, 'er'); }
-    onSave(f, id);
+    try { await onSave(f, id); } finally { setSaving(false); }
   };
 
   const EDIT_TABS = [
@@ -529,7 +536,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
           </>)}
         </div>
 
-        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp">{id ? 'Update' : 'Add'}</button></div>
+        <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : (id ? 'Update' : 'Add')}</button></div>
       </form>
     </Modal>
   );
@@ -569,7 +576,9 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     (linkedLead && po.leadId === linkedLead.id) ||
     (po.customerName === c.name && po.customerPhone === c.phone)
   );
-  const inst = installations.find(i => i.customerName === c.name && i.phone === c.phone) || installations.find(i => i.customerName === c.name);
+  const inst = installations.find(i => i.customerId && i.customerId === c.id)
+    || installations.find(i => i.customerName === c.name && i.phone === c.phone)
+    || installations.find(i => i.customerName === c.name);
 
   // Sync instF when inst loads/changes from Firestore
   React.useEffect(() => {
@@ -586,7 +595,7 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
         await updateDocument('installations', inst.id, data);
         toast('Installation updated');
       } else {
-        await addDocument('installations', { ...data, customerName: c.name, phone: c.phone });
+        await addDocument('installations', { ...data, customerId: c.id, customerName: c.name, phone: c.phone });
         toast('Installation record created');
       }
     } catch (err) { toast(err.message, 'er'); }
@@ -599,6 +608,7 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
   const balance = toNumber(c.totalPrice) - paid;
 
   const TABS = [
+    { key: 'workflow',     label: 'Workflow',         icon: 'account_tree',   color: '#7c3aed' },
     { key: 'info',         label: 'Customer Info',    icon: 'person',         color: '#3b82f6' },
     { key: 'payment',      label: 'Payment Details',  icon: 'payments',       color: '#10b981' },
     { key: 'dispatch',     label: 'Material Dispatch',icon: 'local_shipping', color: '#f59e0b' },
@@ -657,11 +667,19 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
           {TABS.map(t => (
             <button key={t.key} onClick={() => setTab(t.key)} style={tabStyle(t.key, t.color)}>
               <span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}
+              {t.key === 'workflow' && (
+                <span style={{ fontSize: '.68rem', fontWeight: 700, background: tab === t.key ? 'rgba(255,255,255,.25)' : `${t.color}22`, padding: '1px 6px', borderRadius: 8 }}>
+                  {completedCount(c)}/{TOTAL_STAGES}
+                </span>
+              )}
             </button>
           ))}
         </div>
 
         <div style={{ padding: 24, maxHeight: '65vh', overflowY: 'auto' }}>
+
+          {/* ===== TAB: WORKFLOW (18-stage gated pipeline) ===== */}
+          {tab === 'workflow' && <WorkflowTab customer={c} canEdit={canEdit} />}
 
           {/* ===== TAB 1: CUSTOMER INFO ===== */}
           {tab === 'info' && (

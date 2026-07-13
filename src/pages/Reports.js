@@ -42,8 +42,8 @@ export default function Reports() {
 
   const exportRevenue = () => {
     const headers = ['Date', 'Type', 'Category', 'Amount', 'Description', 'Customer'];
-    const incRows = income.map(i => [i.date, 'Income', i.category || '', i.amount, i.description || '', i.customer || '']);
-    const expRows = expenses.map(e => [e.date, 'Expense', e.category || '', e.amount, e.description || '', e.vendor || '']);
+    const incRows = income.map(i => [i.date, 'Income', i.category || '', i.amount, i.desc || i.description || '', i.customer || '']);
+    const expRows = expenses.map(e => [e.date, 'Expense', e.category || '', e.amount, e.desc || e.description || '', e.vendor || '']);
     downloadCSV('PPS_Revenue_' + new Date().toISOString().slice(0, 10) + '.csv', headers, [...incRows, ...expRows]);
   };
 
