@@ -13,6 +13,29 @@ const PAGE_SIZE = 20;
 const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
 const phases = ['Single Phase', 'Three Phase'];
 
+// Customer tabs unlock in step with the 18-stage workflow (sequential gating).
+// The number is the minimum "stages completed" required before the tab opens.
+const TAB_MIN_STAGE = {
+  workflow: 0, info: 0, subsidy: 4, payment: 5, dispatch: 6,
+  installation: 8, quality: 9, warranty: 9, sync: 10, firstbill: 14, om: 15,
+};
+
+// How far a customer has actually progressed = the higher of the recorded workflow
+// completion and a floor derived from existing data — so legacy records that already
+// hold real payment/installation data are never locked out of their own tabs.
+function workflowGateLevel(customer) {
+  const c = customer || {};
+  const has = v => toNumber(v) > 0;
+  let n = completedCount(c); // includes the 4 auto stages
+  if (has(c.advanceAmount) || has(c.advanceReceivedAmount) || has(c.totalPrice) || has(c.agreedPrice) || has(c.quotationProjectValue)) n = Math.max(n, 6);
+  if (c.dispatchDate || c.dispatchedBy || c.vehicleNumber) n = Math.max(n, 8);
+  if (c.installationPicUrl || c.installationStatus === 'In Progress') n = Math.max(n, 10);
+  if (c.installationStatus === 'Completed') n = Math.max(n, 12);
+  if (has(c.finalPayment) || has(c.finalAmount)) n = Math.max(n, 14);
+  if (c.status === 'Completed') n = Math.max(n, 18);
+  return n;
+}
+
 export default function Customers() {
   const { customers, leadPOs, installations, leads, users } = useData();
   const { role } = useAuth();
@@ -317,16 +340,28 @@ function CustomerModal({ data, id, onSave, onClose }) {
     cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .15s',
   });
 
+  // Sequential gating: a tab unlocks only once the workflow has reached its stage
+  const gate = workflowGateLevel(data);
+  const tabLocked = (key) => gate < (TAB_MIN_STAGE[key] || 0);
+
   return (
     <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
       <form onSubmit={handleSubmit}>
-        {/* Tab bar */}
+        {/* Tab bar — later stages stay locked until the previous stage is completed */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, padding: '4px 0' }}>
-          {EDIT_TABS.map(t => (
-            <button key={t.key} type="button" onClick={() => setTab(t.key)} style={tabStyle(t.key, t.color)}>
-              <span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}
-            </button>
-          ))}
+          {EDIT_TABS.map(t => {
+            const locked = tabLocked(t.key);
+            return (
+              <button
+                key={t.key} type="button" disabled={locked}
+                onClick={() => { if (locked) { toast('Complete the earlier workflow stage first', 'er'); return; } setTab(t.key); }}
+                style={{ ...tabStyle(t.key, t.color), opacity: locked ? 0.45 : 1, cursor: locked ? 'not-allowed' : 'pointer' }}
+                title={locked ? 'Locked — complete earlier stages in the Workflow tab' : t.label}
+              >
+                <span className="material-icons-round" style={{ fontSize: 15 }}>{locked ? 'lock' : t.icon}</span>{t.label}
+              </button>
+            );
+          })}
         </div>
 
         <div className="mb">
@@ -621,6 +656,10 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     { key: 'om',           label: 'Next O&M',         icon: 'build_circle',   color: '#14b8a6' },
   ];
 
+  // Sequential gating (same rule as the edit form) — later stages stay locked
+  const gate = workflowGateLevel(customer);
+  const tabLocked = (key) => gate < (TAB_MIN_STAGE[key] || 0);
+
   const tabStyle = (key, color) => ({
     padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
     color: tab === key ? '#fff' : color,
@@ -664,16 +703,24 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
 
         {/* Tab bar */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 24px 0', borderBottom: '1px solid var(--bor)', paddingBottom: 12 }}>
-          {TABS.map(t => (
-            <button key={t.key} onClick={() => setTab(t.key)} style={tabStyle(t.key, t.color)}>
-              <span className="material-icons-round" style={{ fontSize: 15 }}>{t.icon}</span>{t.label}
-              {t.key === 'workflow' && (
-                <span style={{ fontSize: '.68rem', fontWeight: 700, background: tab === t.key ? 'rgba(255,255,255,.25)' : `${t.color}22`, padding: '1px 6px', borderRadius: 8 }}>
-                  {completedCount(c)}/{TOTAL_STAGES}
-                </span>
-              )}
-            </button>
-          ))}
+          {TABS.map(t => {
+            const locked = tabLocked(t.key);
+            return (
+              <button
+                key={t.key} disabled={locked}
+                onClick={() => { if (locked) { toast('Complete the earlier workflow stage first', 'er'); return; } setTab(t.key); }}
+                style={{ ...tabStyle(t.key, t.color), opacity: locked ? 0.45 : 1, cursor: locked ? 'not-allowed' : 'pointer' }}
+                title={locked ? 'Locked — complete earlier stages in the Workflow tab' : t.label}
+              >
+                <span className="material-icons-round" style={{ fontSize: 15 }}>{locked ? 'lock' : t.icon}</span>{t.label}
+                {t.key === 'workflow' && (
+                  <span style={{ fontSize: '.68rem', fontWeight: 700, background: tab === t.key ? 'rgba(255,255,255,.25)' : `${t.color}22`, padding: '1px 6px', borderRadius: 8 }}>
+                    {completedCount(c)}/{TOTAL_STAGES}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
         <div style={{ padding: 24, maxHeight: '65vh', overflowY: 'auto' }}>
