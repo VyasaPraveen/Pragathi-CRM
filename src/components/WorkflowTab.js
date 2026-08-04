@@ -196,7 +196,7 @@ export default function WorkflowTab({ customer, canEdit }) {
                         Completed by {stage.data.completedBy || '-'}{stage.data.completedAt ? ' on ' + formatDate(stage.data.completedAt) : ''}
                       </div>
                       {canEdit && isAdmin && (
-                        <button className="btn bsm bo" style={{ marginTop: 10, color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }} onClick={() => reopenStage(stage)}>
+                        <button type="button" className="btn bsm bo" style={{ marginTop: 10, color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }} onClick={() => reopenStage(stage)}>
                           <span className="material-icons-round" style={{ fontSize: 15 }}>lock_open</span> Reopen
                         </button>
                       )}
@@ -216,11 +216,11 @@ export default function WorkflowTab({ customer, canEdit }) {
                   </div>
                   {canEdit && (
                     <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-                      <button className="btn bp bsm" onClick={completeStage} disabled={saving || uploading || !stageValid}>
+                      <button type="button" className="btn bp bsm" onClick={completeStage} disabled={saving || uploading || !stageValid}>
                         <span className="material-icons-round" style={{ fontSize: 16 }}>task_alt</span>
                         {saving ? 'Saving...' : 'Complete Stage & Unlock Next'}
                       </button>
-                      <button className="btn bo bsm" onClick={saveProgress} disabled={saving || uploading}>Save Progress</button>
+                      <button type="button" className="btn bo bsm" onClick={saveProgress} disabled={saving || uploading}>Save Progress</button>
                       {!stageValid && <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>Fill all required fields to unlock the next stage.</span>}
                     </div>
                   )}

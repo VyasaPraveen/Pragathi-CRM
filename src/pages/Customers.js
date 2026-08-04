@@ -168,8 +168,11 @@ export default function Customers() {
 
 /* ============ CUSTOMER MODAL (ADD / EDIT) ============ */
 function CustomerModal({ data, id, onSave, onClose }) {
-  const { leads, installations, leadPOs, users, settings } = useData();
+  const { leads, installations, leadPOs, users, settings, customers } = useData();
   const { toast } = useToast();
+  // Live customer (so completing a stage in the Workflow tab unlocks the next tab
+  // immediately); falls back to the passed snapshot for a brand-new customer.
+  const liveCustomer = (id && customers.find(x => x.id === id)) || data;
   // Find linked lead to pre-populate payment fields from lead stage
   const ll = leads.find(l => l.phone === data.phone && l.name === data.name) || leads.find(l => l.phone === data.phone);
   const linkedInst = (id && installations.find(i => i.customerId === id))
@@ -312,6 +315,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
   };
 
   const EDIT_TABS = [
+    ...(id ? [{ key: 'workflow', label: 'Workflow', icon: 'account_tree', color: '#7c3aed' }] : []),
     { key: 'info',         label: 'Customer Info', icon: 'person',          color: '#3b82f6' },
     { key: 'payment',      label: 'Payment',       icon: 'payments',        color: '#10b981' },
     { key: 'dispatch',     label: 'Dispatch',      icon: 'local_shipping',  color: '#f59e0b' },
@@ -336,7 +340,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
   // Sequential gating: a tab unlocks only once the workflow has reached its stage
   // Admin can globally disable gating from Settings; default is enabled.
   const gatingOn = settings?.workflowGatingEnabled !== false;
-  const gate = workflowGateLevel(data);
+  const gate = workflowGateLevel(liveCustomer);
   const tabLocked = (key) => gatingOn && gate < (TAB_MIN_STAGE[key] || 0);
 
   return (
@@ -360,6 +364,14 @@ function CustomerModal({ data, id, onSave, onClose }) {
         </div>
 
         <div className="mb">
+          {/* Workflow tab (edit modal) — complete stages here to unlock later tabs live.
+              Guard Enter so typing in a stage field doesn't submit the customer form. */}
+          {tab === 'workflow' && id && (
+            <div onKeyDown={e => { if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') e.preventDefault(); }}>
+              <WorkflowTab customer={liveCustomer} canEdit={true} />
+            </div>
+          )}
+
           {/* Tab 1: Customer Info */}
           {tab === 'info' && (<>
             <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
