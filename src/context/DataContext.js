@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
 import { listenCollection } from '../services/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
+import { db } from '../services/firebase';
 
 const DataContext = createContext();
 export const useData = () => useContext(DataContext);
@@ -26,6 +28,7 @@ export function DataProvider({ children }) {
   const [activityLog, setActivityLog] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [users, setUsers] = useState([]);
+  const [settings, setSettings] = useState({}); // app-wide config (e.g. workflow gating)
 
   useEffect(() => {
     if (!user) return;
@@ -51,6 +54,8 @@ export function DataProvider({ children }) {
       listenCollection('activityLog', (d) => d && setActivityLog(d), 'timestamp', 'desc'),
       listenCollection('notifications', (d) => d && setNotifications(d)),
       listenCollection('users', (d) => d && setUsers(d)),
+      // Single app-wide settings doc (workflow gating toggle, etc.)
+      onSnapshot(doc(db, 'company', 'settings'), s => setSettings(s.exists() ? s.data() : {}), () => {}),
     ];
     return () => unsubs.forEach(u => u());
   }, [user]);
@@ -59,7 +64,7 @@ export function DataProvider({ children }) {
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
-      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, bomTemplates, activityLog, notifications, users
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, bomTemplates, activityLog, notifications, users, settings
     }}>
       {children}
     </DataContext.Provider>

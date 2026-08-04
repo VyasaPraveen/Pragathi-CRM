@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
 import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -68,6 +68,26 @@ export default function Settings() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [perms, setPerms] = useState({});
   const [saving, setSaving] = useState(false);
+
+  // Global workflow-gating toggle (company-wide)
+  const [gatingEnabled, setGatingEnabled] = useState(true);
+  const [gatingSaving, setGatingSaving] = useState(false);
+  useEffect(() => {
+    if (!isAdmin) return;
+    getDoc(doc(db, 'company', 'settings'))
+      .then(snap => { if (snap.exists()) setGatingEnabled(snap.data().workflowGatingEnabled !== false); })
+      .catch(() => {});
+  }, [isAdmin]);
+
+  const toggleGating = async (val) => {
+    setGatingSaving(true);
+    try {
+      await setDoc(doc(db, 'company', 'settings'), { workflowGatingEnabled: val }, { merge: true });
+      setGatingEnabled(val);
+      toast(val ? 'Workflow gating ON — Customer tabs unlock stage by stage' : 'Workflow gating OFF — all Customer tabs unlocked');
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setGatingSaving(false);
+  };
 
   // Load all users for permission management (admin only)
   useEffect(() => {
@@ -398,6 +418,30 @@ export default function Settings() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Customer Workflow Gating — admin only */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>account_tree</span>Customer Workflow Gating</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              When <strong>ON</strong>, each Customer tab (Payment, Dispatch, Installation, …) unlocks only after its workflow stage is completed. When <strong>OFF</strong>, every tab is unlocked for all users so any stage can be edited at any time.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: '.9rem', fontWeight: 700, color: gatingEnabled ? '#27ae60' : '#e74c3c' }}>
+                Currently: {gatingEnabled ? 'ON — sequential locking enforced' : 'OFF — all tabs unlocked'}
+              </span>
+              <button className="btn bp" onClick={() => toggleGating(!gatingEnabled)} disabled={gatingSaving} style={{ padding: '8px 20px', fontSize: '.86rem' }}>
+                {gatingSaving
+                  ? <><span className="ssm"></span> Saving...</>
+                  : (gatingEnabled
+                      ? <><span className="material-icons-round" style={{ fontSize: 16 }}>lock_open</span> Unlock all tabs</>
+                      : <><span className="material-icons-round" style={{ fontSize: 16 }}>lock</span> Enforce workflow locking</>)}
+              </button>
+            </div>
           </div>
         </div>
       )}

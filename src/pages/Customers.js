@@ -16,7 +16,9 @@ const phases = ['Single Phase', 'Three Phase'];
 // Customer tabs unlock in step with the 18-stage workflow (sequential gating).
 // The number is the minimum "stages completed" required before the tab opens.
 const TAB_MIN_STAGE = {
-  workflow: 0, info: 0, subsidy: 5, payment: 5, dispatch: 6,
+  // Info + Payment are open from the start (payment must be entered before proceeding);
+  // every later tab unlocks only as its workflow stage is completed.
+  workflow: 0, info: 0, payment: 4, subsidy: 5, dispatch: 6,
   installation: 8, quality: 9, warranty: 9, sync: 10, firstbill: 14, om: 15,
 };
 
@@ -166,7 +168,7 @@ export default function Customers() {
 
 /* ============ CUSTOMER MODAL (ADD / EDIT) ============ */
 function CustomerModal({ data, id, onSave, onClose }) {
-  const { leads, installations, leadPOs, users } = useData();
+  const { leads, installations, leadPOs, users, settings } = useData();
   const { toast } = useToast();
   // Find linked lead to pre-populate payment fields from lead stage
   const ll = leads.find(l => l.phone === data.phone && l.name === data.name) || leads.find(l => l.phone === data.phone);
@@ -332,8 +334,10 @@ function CustomerModal({ data, id, onSave, onClose }) {
   });
 
   // Sequential gating: a tab unlocks only once the workflow has reached its stage
+  // Admin can globally disable gating from Settings; default is enabled.
+  const gatingOn = settings?.workflowGatingEnabled !== false;
   const gate = workflowGateLevel(data);
-  const tabLocked = (key) => gate < (TAB_MIN_STAGE[key] || 0);
+  const tabLocked = (key) => gatingOn && gate < (TAB_MIN_STAGE[key] || 0);
 
   return (
     <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
@@ -571,7 +575,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
 /* ============ CUSTOMER DETAIL MODAL (10 TABS) ============ */
 function CustomerDetailModal({ customer, onClose, onEdit }) {
   const [tab, setTab] = useState('info');
-  const { leadPOs, leads, installations, users } = useData();
+  const { leadPOs, leads, installations, users, settings } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const canEdit = hasAccess(role, 'coordinator');
@@ -647,9 +651,11 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     { key: 'om',           label: 'Next O&M',         icon: 'build_circle',   color: '#14b8a6' },
   ];
 
-  // Sequential gating (same rule as the edit form) — later stages stay locked
+  // Sequential gating (same rule as the edit form) — later stages stay locked.
+  // Admin can globally disable gating from Settings; default is enabled.
+  const gatingOn = settings?.workflowGatingEnabled !== false;
   const gate = workflowGateLevel(customer);
-  const tabLocked = (key) => gate < (TAB_MIN_STAGE[key] || 0);
+  const tabLocked = (key) => gatingOn && gate < (TAB_MIN_STAGE[key] || 0);
 
   const tabStyle = (key, color) => ({
     padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
