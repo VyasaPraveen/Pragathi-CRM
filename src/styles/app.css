@@ -6,8 +6,10 @@ a{text-decoration:none;color:inherit}button{cursor:pointer;font-family:inherit;b
 input,select,textarea{font-family:inherit;font-size:inherit}img{max-width:100%}
 ::-webkit-scrollbar{width:6px}::-webkit-scrollbar-thumb{background:#c1c9d6;border-radius:10px}
 
-#LS{position:fixed;inset:0;z-index:99999;background:linear-gradient(135deg,#0e2558,#1a3a7a);display:flex;flex-direction:column;align-items:center;justify-content:center}
-#LS img{height:56px;margin-bottom:18px}
+#LS{position:fixed;inset:0;z-index:99999;background:linear-gradient(160deg,#ffffff 0%,#eaf1f9 100%);display:flex;flex-direction:column;align-items:center;justify-content:center}
+#LS img{height:66px;max-width:80%;object-fit:contain;margin-bottom:22px}
+#LS .spin{border-color:rgba(26,58,122,.15);border-top-color:var(--sec)}
+#LS .lt{color:var(--muted)}
 .spin{width:40px;height:40px;border:4px solid rgba(255,255,255,.2);border-top-color:var(--sec);border-radius:50%;animation:sp .8s linear infinite}
 @keyframes sp{to{transform:rotate(360deg)}}
 .lt{color:rgba(255,255,255,.7);font-size:.85rem;margin-top:14px}
@@ -162,3 +164,54 @@ tbody tr:last-child td{border-bottom:none}
 /* B5 fix: overlay uses .active class instead of sibling selector */
 .sbo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99}
 @media(max-width:768px){.sbo.active{display:block}}
+
+/* ============================================================
+   Enhanced login / landing page (scoped .lg-* — does not touch
+   the legacy .auth / .auth-box used by PendingApproval)
+   ============================================================ */
+.lg{min-height:100vh;display:grid;grid-template-columns:1.05fr 1fr}
+/* Left = light branding panel (logo reads clearly); right = navy form panel */
+.lg-brand{position:relative;overflow:hidden;background:linear-gradient(160deg,#ffffff 0%,#eaf1f9 100%);color:var(--txt);display:flex;flex-direction:column;justify-content:space-between;padding:56px 52px;border-right:1px solid var(--bor)}
+.lg-glow{position:absolute;border-radius:50%;filter:blur(8px);pointer-events:none}
+.lg-glow-1{top:-16%;right:-14%;width:56vh;height:56vh;background:radial-gradient(circle,rgba(232,131,12,.16),transparent 70%)}
+.lg-glow-2{bottom:-20%;left:-16%;width:50vh;height:50vh;background:radial-gradient(circle,rgba(42,92,184,.12),transparent 72%)}
+.lg-brand-inner{position:relative;z-index:2;margin-top:auto;margin-bottom:auto}
+.lg-brand-inner>img{height:76px;max-width:100%;margin-bottom:36px;object-fit:contain}
+.lg-brand-title{font-size:2rem;font-weight:800;line-height:1.15;letter-spacing:-.01em;margin-bottom:14px;max-width:15ch;color:var(--pri)}
+.lg-brand-sub{font-size:1rem;line-height:1.6;color:var(--muted);max-width:42ch;margin-bottom:34px}
+.lg-feats{list-style:none;display:flex;flex-direction:column;gap:16px}
+.lg-feats li{display:flex;align-items:center;gap:13px;font-size:.95rem;font-weight:600;color:var(--txt)}
+.lg-feats li .material-icons-round{font-size:22px;background:linear-gradient(135deg,var(--pri),var(--pri-l));border-radius:10px;padding:8px;color:#fff;box-shadow:0 4px 12px rgba(26,58,122,.22)}
+.lg-brand-foot{position:relative;z-index:2;font-size:.78rem;color:var(--light)}
+
+.lg-main{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 24px;background:linear-gradient(135deg,#0e2558 0%,#1a3a7a 45%,#2a5cb8 100%);position:relative;overflow:hidden}
+.lg-main::before{content:'';position:absolute;top:-20%;right:-10%;width:60vh;height:60vh;background:radial-gradient(circle,rgba(232,131,12,.14),transparent 68%);pointer-events:none}
+.lg-card{position:relative;z-index:2;width:100%;max-width:404px;background:var(--card);border:1px solid rgba(255,255,255,.12);border-radius:20px;padding:40px;box-shadow:0 24px 60px rgba(0,0,0,.28);animation:su .5s ease-out}
+.lg-logo-sm{display:none;height:48px;margin:0 auto 18px;object-fit:contain}
+.lg-head{font-size:1.6rem;font-weight:800;letter-spacing:-.01em;color:var(--txt)}
+.lg-subhead{font-size:.9rem;color:var(--muted);margin:6px 0 26px}
+
+.asucc{background:rgba(0,184,148,.09);border:1px solid rgba(0,184,148,.24);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:.84rem;color:#0a8f74;display:flex;align-items:center;gap:8px;line-height:1.4}
+
+.pw{position:relative}
+.pw .fi{padding-right:44px}
+.pw-toggle{position:absolute;top:50%;right:6px;transform:translateY(-50%);display:flex;align-items:center;justify-content:center;width:34px;height:34px;border-radius:8px;color:var(--muted);transition:color .2s,background .2s}
+.pw-toggle:hover{color:var(--pri);background:rgba(26,58,122,.06)}
+
+.lg-row{display:flex;align-items:center;justify-content:space-between;margin:-4px 0 6px}
+.lg-caps{display:flex;align-items:center;gap:5px;color:var(--warn);font-size:.78rem;font-weight:600;margin:-6px 0 8px}
+.lg-hint{color:var(--muted);font-size:.78rem;margin-top:4px;display:block}
+.lg-link{background:none;border:none;color:var(--pri);font-weight:600;cursor:pointer;font-size:.86rem;padding:0}
+.lg-link:hover{color:var(--pri-l);text-decoration:underline}
+.lg-switch{text-align:center;margin-top:18px;font-size:.88rem;color:var(--muted)}
+.lg-foot-sm{position:relative;z-index:2;margin-top:20px;font-size:.76rem;color:rgba(255,255,255,.55)}
+
+@media(max-width:880px){
+  .lg{grid-template-columns:1fr}
+  .lg-brand{display:none}
+  .lg-logo-sm{display:block}
+  .lg-card{box-shadow:0 12px 40px rgba(14,37,88,.14)}
+}
+@media(max-width:420px){
+  .lg-card{padding:30px 22px;border-radius:16px}
+}

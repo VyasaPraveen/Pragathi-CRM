@@ -9,3 +9,4 @@ backups/
 *-adminsdk-*.json
 serviceAccountKey.json
 nul
+shots/

@@ -1,0 +1,79 @@
+# ==========================================================================
+# Pragathi Power CRM — static SPA (.htaccess for Hostinger / LiteSpeed)
+# React (CRA) single-page app talking to Firebase Auth/Firestore over HTTPS.
+# ==========================================================================
+
+# ---- Force HTTPS (never redirect ACME/SSL challenges) --------------------
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} !=on [OR]
+  RewriteCond %{HTTP:X-Forwarded-Proto} !https
+  RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
+  RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+  # ---- SPA fallback: serve index.html for any non-file/non-dir route ------
+  # Relative target (not /index.html) so it resolves within this subdomain's
+  # docroot even though it lives under the main site's public_html.
+  Options -MultiViews
+  RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# ---- Security response headers -------------------------------------------
+<IfModule mod_headers.c>
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' https: data:; connect-src 'self' https://*.googleapis.com https://*.firebaseio.com https://*.firebaseapp.com https://firebasestorage.googleapis.com https://api.postalpincode.in wss://*.firebaseio.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'; upgrade-insecure-requests"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+  Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  Header always unset X-Powered-By
+  Header unset X-Powered-By
+</IfModule>
+
+# ---- Compression ----------------------------------------------------------
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml application/javascript application/json application/xml image/svg+xml font/woff2
+</IfModule>
+<IfModule mod_brotli.c>
+  AddOutputFilterByType BROTLI_COMPRESS text/html text/plain text/css text/xml application/javascript application/json application/xml image/svg+xml font/woff2
+</IfModule>
+
+# ---- Caching --------------------------------------------------------------
+# CRA fingerprints assets under /static/ → cache them forever, immutable.
+<IfModule mod_headers.c>
+  <FilesMatch "\.(css|js|woff2?|ttf|eot|png|jpe?g|gif|svg|ico|webp)$">
+    Header set Cache-Control "public, max-age=31536000, immutable"
+  </FilesMatch>
+  # index.html must always revalidate so new deploys are picked up immediately.
+  <FilesMatch "^(index\.html)?$">
+    Header set Cache-Control "public, max-age=0, must-revalidate"
+  </FilesMatch>
+</IfModule>
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/html "access plus 0 seconds"
+  ExpiresByType text/css "access plus 1 year"
+  ExpiresByType application/javascript "access plus 1 year"
+  ExpiresByType font/woff2 "access plus 1 year"
+  ExpiresByType image/png "access plus 1 year"
+  ExpiresByType image/svg+xml "access plus 1 year"
+</IfModule>
+
+# ---- Hardening ------------------------------------------------------------
+Options -Indexes
+<IfModule mod_authz_core.c>
+  # Block hidden/sensitive files (service-account keys, env, source maps) from ever being served.
+  <FilesMatch "(^\.|\.(env|map|json)$)">
+    Require all denied
+  </FilesMatch>
+  # ...but the app manifest and known service files must stay reachable.
+  <Files "manifest.json">
+    Require all granted
+  </Files>
+  <Files "asset-manifest.json">
+    Require all granted
+  </Files>
+</IfModule>

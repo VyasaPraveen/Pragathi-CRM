@@ -37,7 +37,7 @@ function AppContent() {
   if (loading) {
     return (
       <div id="LS">
-        <img src="/logo.png" alt="PPS" onError={e => e.target.style.display = 'none'} />
+        <img src="/logo-full.png" alt="Pragathi Power Solutions" onError={e => e.target.style.display = 'none'} />
         <div className="spin"></div>
         <p className="lt">Loading Pragathi Power CRM...</p>
       </div>
