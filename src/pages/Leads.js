@@ -4,8 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
+import { can, ACTIONS, PO_STATUS, advanceGate } from '../services/permissions';
 
 const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
 const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
@@ -294,6 +295,7 @@ function LeadModal({ data, id, onSave, onClose }) {
   const { toast } = useToast();
   const [cityOptions, setCityOptions] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [supportName, setSupportName] = useState('');
 
   const handlePincodeChange = async (val) => {
     set('pincode', val);
@@ -379,7 +381,7 @@ function LeadModal({ data, id, onSave, onClose }) {
             <div className="fg"><label>District</label><input className="fi" value={form.district} onChange={e => set('district', e.target.value)} placeholder="District" /></div>
           </div>
           <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{priorities.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Lead Reference</label><select className="fi" value={form.leadReference} onChange={e => set('leadReference', e.target.value)}>{refs.map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Date Generated</label><input type="date" className="fi" value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Lead Reference</label><select className="fi" value={form.leadReference} onChange={e => set('leadReference', e.target.value)}>{refs.map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Date Generated</label><DateInput value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div></div>
           {form.leadReference === 'Other' && (
             <div className="fg"><label>Specify Other Source</label><input className="fi" value={form.leadReferenceOther} onChange={e => set('leadReferenceOther', e.target.value)} placeholder="Enter lead source details..." /></div>
           )}
@@ -398,10 +400,33 @@ function LeadModal({ data, id, onSave, onClose }) {
               }
             </div>
           )}
-          <div className="fr"><div className="fg"><label>Last Follow-up</label><input type="date" className="fi" value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><input type="date" className="fi" value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
-          <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => set('salesExecutive', e.target.value)}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><input type="date" className="fi" value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
-          <div className="fg"><label>Supporting Team</label><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 12px', border: '1px solid var(--bor)', borderRadius: 8, minHeight: 38, background: '#fff' }}>{team.filter(t => t.status === 'Active').map(t => (<label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.84rem', cursor: 'pointer' }}><input type="checkbox" checked={(form.supportingTeam || []).includes(t.name)} onChange={e => { const cur = form.supportingTeam || []; if (e.target.checked) set('supportingTeam', [...cur, t.name]); else set('supportingTeam', cur.filter(n => n !== t.name)); }} />{t.name}</label>))}{team.filter(t => t.status === 'Active').length === 0 && <span style={{ color: 'var(--muted)', fontSize: '.82rem' }}>No active team members</span>}</div></div>
+          <div className="fr"><div className="fg"><label>Last Follow-up</label><DateInput value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>
+          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><DateInput value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => {
+            const val = e.target.value;
+            set('salesExecutive', val);
+            // Dedup: the selected Sales Executive should not also appear in Supporting Team
+            if (val) set('supportingTeam', (form.supportingTeam || []).filter(n => n !== val));
+          }}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
+          <div className="fg"><label>Supporting Team / Names</label>
+            {/* Selected supporting names (team members + custom) as removable chips */}
+            {(form.supportingTeam || []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {(form.supportingTeam || []).map(n => (
+                  <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(26,58,122,.08)', color: 'var(--pri)', padding: '3px 8px', borderRadius: 12, fontSize: '.8rem' }}>
+                    {n}
+                    <span className="material-icons-round" style={{ fontSize: 15, cursor: 'pointer' }} onClick={() => set('supportingTeam', (form.supportingTeam || []).filter(x => x !== n))}>close</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 12px', border: '1px solid var(--bor)', borderRadius: 8, minHeight: 38, background: '#fff' }}>{team.filter(t => t.status === 'Active' && t.name !== form.salesExecutive).map(t => (<label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.84rem', cursor: 'pointer' }}><input type="checkbox" checked={(form.supportingTeam || []).includes(t.name)} onChange={e => { const cur = form.supportingTeam || []; if (e.target.checked) set('supportingTeam', [...cur, t.name]); else set('supportingTeam', cur.filter(n => n !== t.name)); }} />{t.name}</label>))}{team.filter(t => t.status === 'Active' && t.name !== form.salesExecutive).length === 0 && <span style={{ color: 'var(--muted)', fontSize: '.82rem' }}>No other active team members</span>}</div>
+            {/* Add a custom supporting name not in the team list */}
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <input className="fi" value={supportName} onChange={e => setSupportName(e.target.value)} placeholder="Add a supporting name..." onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const nm = supportName.trim(); if (nm && !(form.supportingTeam || []).includes(nm)) set('supportingTeam', [...(form.supportingTeam || []), nm]); setSupportName(''); } }} />
+              <button type="button" className="btn bsm bo" onClick={() => { const nm = supportName.trim(); if (nm && !(form.supportingTeam || []).includes(nm)) set('supportingTeam', [...(form.supportingTeam || []), nm]); setSupportName(''); }}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Name</button>
+            </div>
+          </div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>
           {form.advancePaid === 'Yes' && (
             <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
@@ -409,7 +434,7 @@ function LeadModal({ data, id, onSave, onClose }) {
           {form.siteVisit === 'Yes' && (
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
               <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Site Visit Details</label>
-              <div className="fr"><div className="fg"><label>Visit Date</label><input type="date" className="fi" value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div></div>
+              <div className="fr"><div className="fg"><label>Visit Date</label><DateInput value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div></div>
               {form.roofType === 'Elevated' && (
                 <div className="fr"><div className="fg"><label>North Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedNorthHeight} onChange={e => set('elevatedNorthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div><div className="fg"><label>South Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedSouthHeight} onChange={e => set('elevatedSouthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div></div>
               )}
@@ -486,12 +511,29 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
     } catch (e) { toast(e.message, 'er'); }
   };
 
-  /* PO Workflow */
+  /* PO Workflow — gated by the role matrix + mandatory 10% advance + Management approval */
+  // The approval request may only proceed "to Sir" once the 10% advance is recorded.
+  const requireAdvance = (po) => {
+    const g = advanceGate(po, lead);
+    if (!g.ok) {
+      toast(
+        g.cost <= 0
+          ? 'Set the PO price (agreed price) before sending for approval.'
+          : `10% advance not recorded. Required ₹${g.required.toLocaleString('en-IN')}, recorded ₹${g.paid.toLocaleString('en-IN')}. Record the advance on the lead first.`,
+        'er'
+      );
+      return false;
+    }
+    return true;
+  };
+
   const handleRecommend = async (po) => {
+    if (!can(role, ACTIONS.PO_RECOMMENDATION)) { toast('You are not authorised to recommend POs', 'er'); return; }
+    if (!requireAdvance(po)) return;
     if (!window.confirm('Recommend this PO for approval?')) return;
     try {
       await updateDocument('leadPOs', po.id, {
-        status: 'Recommended',
+        status: PO_STATUS.RECOMMENDED,
         recommendedBy: user?.email || 'unknown',
         recommendedDate: new Date().toISOString().slice(0, 10)
       });
@@ -499,11 +541,30 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
     } catch (e) { toast(e.message, 'er'); }
   };
 
+  // Mandatory Management permission BEFORE final approval (req #3)
+  const handleManagementApprove = async (po) => {
+    if (!can(role, ACTIONS.PO_MANAGEMENT_APPROVAL)) { toast('Only Management can grant this approval', 'er'); return; }
+    if (!requireAdvance(po)) return;
+    if (!window.confirm('Grant Management approval for this PO? It can then be approved by Admin/Management.')) return;
+    try {
+      await updateDocument('leadPOs', po.id, {
+        status: PO_STATUS.MANAGEMENT_APPROVED,
+        managementApprovedBy: user?.email || 'unknown',
+        managementApprovalDate: new Date().toISOString().slice(0, 10)
+      });
+      toast('Management approval granted');
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
   const handleApprove = async (po) => {
+    if (!can(role, ACTIONS.PO_APPROVAL)) { toast('You are not authorised to approve POs', 'er'); return; }
+    // Management permission is mandatory before final approval
+    if (po.status !== PO_STATUS.MANAGEMENT_APPROVED) { toast('Management approval is required before this PO can be approved', 'er'); return; }
+    if (!requireAdvance(po)) return;
     if (!window.confirm('Approve this purchase order?')) return;
     try {
       await updateDocument('leadPOs', po.id, {
-        status: 'Approved',
+        status: PO_STATUS.APPROVED,
         approvedBy: user?.email || 'unknown',
         approvalDate: new Date().toISOString().slice(0, 10)
       });
@@ -526,7 +587,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
   ];
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="md" style={{ width: '860px', maxWidth: '96vw' }}>
         <div className="mh">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -637,8 +698,8 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 8 }}>Current Follow-up</div>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                   <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Status:</span> <strong>{lead.followUpStatus || '-'}</strong></div>
-                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Last:</span> <strong>{lead.lastFollowUp || '-'}</strong></div>
-                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Next:</span> <strong>{lead.nextFollowUpDate || '-'}</strong></div>
+                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Last:</span> <strong>{formatDate(lead.lastFollowUp)}</strong></div>
+                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Next:</span> <strong>{formatDate(lead.nextFollowUpDate)}</strong></div>
                 </div>
               </div>
 
@@ -648,7 +709,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                   <div className="fr" style={{ marginBottom: 10 }}>
                     <div className="fg" style={{ marginBottom: 0 }}>
                       <label>Date *</label>
-                      <input type="date" className="fi" value={fupData.date} onChange={e => setFupData(p => ({ ...p, date: e.target.value }))} />
+                      <DateInput value={fupData.date} onChange={e => setFupData(p => ({ ...p, date: e.target.value }))} />
                     </div>
                     <div className="fg" style={{ marginBottom: 0 }}>
                       <label>Status *</label>
@@ -677,7 +738,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       {[...history].reverse().map((h, i) => (
                         <tr key={`fup-${h.date}-${i}`}>
                           <td>{history.length - i}</td>
-                          <td style={{ fontSize: '.84rem' }}>{h.date || '-'}</td>
+                          <td style={{ fontSize: '.84rem' }}>{formatDate(h.date)}</td>
                           <td><StatusBadge status={h.status} /></td>
                           <td style={{ maxWidth: 220, fontSize: '.84rem' }}>{h.notes || '-'}</td>
                           <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{h.by || '-'}</td>
@@ -696,9 +757,11 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           {tab === 'pos' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-                <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
-                </button>
+                {can(role, ACTIONS.PO_RECORD) && (
+                  <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
+                  </button>
+                )}
               </div>
 
               {myPOs.length > 0 ? (
@@ -711,14 +774,20 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                         <StatusBadge status={po.status} />
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {/* Recommend: manager or admin, only Unapproved */}
-                        {po.status === 'Unapproved' && (hasAccess(role, 'manager')) && (
+                        {/* Recommend: Operation Manager / Admin, only Unapproved */}
+                        {(!po.status || po.status === PO_STATUS.UNAPPROVED) && can(role, ACTIONS.PO_RECOMMENDATION) && (
                           <button className="btn bsm bo" onClick={() => handleRecommend(po)} style={{ color: '#d68910', borderColor: 'rgba(243,156,18,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>thumb_up</span> Recommend
                           </button>
                         )}
-                        {/* Approve: admin only, only Recommended */}
-                        {po.status === 'Recommended' && hasAccess(role, 'admin') && (
+                        {/* Management approval: mandatory before final approval */}
+                        {po.status === PO_STATUS.RECOMMENDED && can(role, ACTIONS.PO_MANAGEMENT_APPROVAL) && (
+                          <button className="btn bsm bo" onClick={() => handleManagementApprove(po)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
+                            <span className="material-icons-round" style={{ fontSize: 16 }}>verified_user</span> Management Approve
+                          </button>
+                        )}
+                        {/* Final approve: Admin / Management, only after Management approval */}
+                        {po.status === PO_STATUS.MANAGEMENT_APPROVED && can(role, ACTIONS.PO_APPROVAL) && (
                           <button className="btn bsm bo" onClick={() => handleApprove(po)} style={{ color: 'var(--ok)', borderColor: 'rgba(0,184,148,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>check_circle</span> Approve
                           </button>
@@ -739,8 +808,8 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                         <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                           <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
                         </button>
-                        {/* Edit: non-Approved, admin/manager */}
-                        {po.status !== 'Approved' && (hasAccess(role, 'manager')) && (
+                        {/* Edit: non-Approved, PO Record permission (Operation Manager / Admin) */}
+                        {po.status !== PO_STATUS.APPROVED && can(role, ACTIONS.PO_RECORD) && (
                           <button className="btn bsm bo" onClick={() => setPOModal({ data: po, id: po.id })}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span>
                           </button>
@@ -754,9 +823,30 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       </div>
                     </div>
 
+                    {/* 10% advance gate notice — approval can't proceed "to Sir" without it */}
+                    {po.status !== PO_STATUS.APPROVED && (() => {
+                      const g = advanceGate(po, lead);
+                      if (g.ok) {
+                        return (
+                          <div style={{ background: 'rgba(39,174,96,.08)', border: '1px solid rgba(39,174,96,.3)', borderRadius: 8, padding: '6px 12px', fontSize: '.8rem', color: '#1e8449', marginBottom: 10 }}>
+                            <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 4 }}>check_circle</span>
+                            10% advance recorded (₹{g.paid.toLocaleString('en-IN')} of ₹{g.required.toLocaleString('en-IN')}) — eligible for approval.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div style={{ background: 'rgba(231,76,60,.08)', border: '1px solid rgba(231,76,60,.3)', borderRadius: 8, padding: '6px 12px', fontSize: '.8rem', color: '#c0392b', marginBottom: 10 }}>
+                          <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 4 }}>warning</span>
+                          {g.cost <= 0
+                            ? 'Set the PO agreed price to enable approval.'
+                            : `10% advance pending — required ₹${g.required.toLocaleString('en-IN')}, recorded ₹${g.paid.toLocaleString('en-IN')}. Cannot send for approval until the advance is recorded on the lead.`}
+                        </div>
+                      );
+                    })()}
+
                     {/* PO Details Grid */}
                     <div className="dg" style={{ gap: 8 }}>
-                      <div className="di"><div className="dl">PO Date</div><div className="dv">{po.poDate || '-'}</div></div>
+                      <div className="di"><div className="dl">PO Date</div><div className="dv">{formatDate(po.poDate)}</div></div>
                       <div className="di"><div className="dl">Vendor</div><div className="dv">{po.vendorName || '-'}</div></div>
                       {po.moduleCount && <div className="di"><div className="dl">Modules</div><div className="dv">{po.moduleCount}</div></div>}
                       {po.inverterDetails && <div className="di"><div className="dl">Inverter</div><div className="dv">{po.inverterDetails}</div></div>}
@@ -767,8 +857,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       {po.extraChargesTotal > 0 && <div className="di"><div className="dl">Extra Charges</div><div className="dv" style={{ fontWeight: 600, color: 'var(--sec)' }}>{formatCurrency(po.extraChargesTotal)}</div></div>}
                       {po.agreedPrice && <div className="di"><div className="dl">Price After Subsidy</div><div className="dv" style={{ fontWeight: 700, color: 'var(--pri)' }}>{formatCurrency(po.agreedPrice)}</div></div>}
                       <div className="di"><div className="dl">Created By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.createdBy || '-'}</div></div>
-                      {po.recommendedBy && <div className="di"><div className="dl">Recommended By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.recommendedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{po.recommendedDate}</span></div></div>}
-                      {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{po.approvalDate}</span></div></div>}
+                      {po.recommendedBy && <div className="di"><div className="dl">Recommended By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.recommendedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.recommendedDate)}</span></div></div>}
+                      {po.managementApprovedBy && <div className="di"><div className="dl">Management Approved</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.managementApprovedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.managementApprovalDate)}</span></div></div>}
+                      {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.approvalDate)}</span></div></div>}
                     </div>
 
                     {/* Expandable line items */}
@@ -921,7 +1012,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   };
 
   return (
-    <div className="mo" style={{ zIndex: 1001 }} onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo" style={{ zIndex: 1001 }}>
       <div className="md" style={{ width: '740px', maxWidth: '96vw' }}>
         <div className="mh">
           <h3>{poId ? 'Edit Purchase Order' : 'Create Purchase Order'}</h3>
@@ -962,7 +1053,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
           <div className="mb" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
             <div className="fr">
               <div className="fg"><label>PO Number</label><input className="fi" value={f.poNumber} readOnly style={{ background: '#f0f4f8' }} /></div>
-              <div className="fg"><label>PO Date *</label><input type="date" className="fi" value={f.poDate} onChange={e => set('poDate', e.target.value)} required /></div>
+              <div className="fg"><label>PO Date *</label><DateInput value={f.poDate} onChange={e => set('poDate', e.target.value)} required /></div>
             </div>
             <div className="fr">
               <div className="fg"><label>Customer Name</label><input className="fi" value={f.customerName} onChange={e => set('customerName', e.target.value)} /></div>

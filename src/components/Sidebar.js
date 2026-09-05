@@ -19,6 +19,7 @@ const sections = [
   ]},
   { title: 'Finance', items: [
     { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue' },
+    { to: '/expenditure', icon: 'payments', label: 'Expenditure' },
     { to: '/reports', icon: 'assessment', label: 'Reports', minRole: 'coordinator' },
   ]},
   { title: 'People', items: [

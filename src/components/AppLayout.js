@@ -12,6 +12,7 @@ import Installations from '../pages/Installations';
 import OngoingWork from '../pages/OngoingWork';
 import Materials from '../pages/Materials';
 import Revenue from '../pages/Revenue';
+import Expenditure from '../pages/Expenditure';
 import Reports from '../pages/Reports';
 import Team from '../pages/Team';
 import Reminders from '../pages/Reminders';
@@ -48,6 +49,7 @@ export default function AppLayout() {
             <Route path="/ongoing" element={<OngoingWork />} />
             <Route path="/materials" element={<Materials />} />
             <Route path="/revenue" element={<Revenue />} />
+            <Route path="/expenditure" element={<Expenditure />} />
             <Route path="/reports" element={<GuardedRoute minRole="coordinator"><Reports /></GuardedRoute>} />
             <Route path="/team" element={<Team />} />
             <Route path="/reminders" element={<Reminders />} />

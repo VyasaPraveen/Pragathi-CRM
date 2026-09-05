@@ -1,117 +1,142 @@
-import { db, auth } from './firebase';
-import {
-  collection, doc, addDoc, updateDoc, deleteDoc, onSnapshot,
-  query, orderBy, serverTimestamp
-} from 'firebase/firestore';
+// ============================================================================
+// Data primitives — same signatures as the old Firestore helpers, but backed
+// by the Hostinger PHP/MySQL API. Realtime onSnapshot is emulated with light
+// polling (+ refresh on window focus). Pages that used these keep working
+// unchanged.
+// ============================================================================
 
-export function listenCollection(col, cb, ob = 'createdAt', dir = 'desc') {
-  let q;
-  try {
-    q = query(collection(db, col), orderBy(ob, dir));
-  } catch (e) {
-    // Fallback to unordered if index missing
-    q = collection(db, col);
-  }
-  return onSnapshot(q, snap => {
-    cb(snap.docs.map(d => ({ id: d.id, ...d.data() })), null);
-  }, err => cb([], err));
+import { apiGet, apiPost, apiPatch, apiDelete, getMe } from './api';
+
+const POLL_MS = 15000;
+
+// After a write, ask listeners for the affected collection to refetch now, so
+// changes appear immediately instead of waiting for the next poll tick.
+function pingRefresh(col) {
+  try { window.dispatchEvent(new CustomEvent('pps:refresh', { detail: { col } })); } catch { /* ignore */ }
 }
 
-// Security: strip dangerous HTML/script patterns from all string fields before Firestore write
+// ── string sanitisation (defensive, ported from the old layer) ───────────────
 function sanitizeString(str) {
   return str
     .trim()
-    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')  // strip <script> tags
-    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')  // strip <iframe> tags
-    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '') // strip <object> tags
-    .replace(/<embed[^>]*>/gi, '')                                       // strip <embed> tags
-    .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')                        // strip inline event handlers (onerror=, onclick=, etc.)
-    .replace(/javascript\s*:/gi, '')                                     // strip javascript: URIs
-    .replace(/data\s*:\s*text\/html/gi, '')                              // strip data:text/html URIs
-    .replace(/vbscript\s*:/gi, '');                                      // strip vbscript: URIs
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/<object\b[^<]*(?:(?!<\/object>)<[^<]*)*<\/object>/gi, '')
+    .replace(/<embed[^>]*>/gi, '')
+    .replace(/on\w+\s*=\s*["'][^"']*["']/gi, '')
+    .replace(/javascript\s*:/gi, '')
+    .replace(/data\s*:\s*text\/html/gi, '')
+    .replace(/vbscript\s*:/gi, '');
 }
-
 function trimStrings(obj) {
   const out = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (typeof v === 'string') {
-      out[k] = sanitizeString(v);
-    } else if (Array.isArray(v)) {
-      out[k] = v.map(item => (typeof item === 'object' && item !== null) ? trimStrings(item) : (typeof item === 'string' ? sanitizeString(item) : item));
-    } else if (typeof v === 'object' && v !== null && typeof v.toDate !== 'function') {
-      out[k] = trimStrings(v);  // recurse into nested objects (but not Firestore Timestamps)
-    } else {
-      out[k] = v;
-    }
+    if (typeof v === 'string') out[k] = sanitizeString(v);
+    else if (Array.isArray(v)) out[k] = v.map(item => (typeof item === 'object' && item !== null) ? trimStrings(item) : (typeof item === 'string' ? sanitizeString(item) : item));
+    else if (typeof v === 'object' && v !== null) out[k] = trimStrings(v);
+    else out[k] = v;
   }
   return out;
 }
 
-export async function addDocument(col, data) {
-  const ref = await addDoc(collection(db, col), {
-    ...trimStrings(data),
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-    createdBy: auth.currentUser?.email || 'unknown'
+// ── client-side sort to preserve the old orderBy contract ────────────────────
+function sortDocs(docs, ob = 'createdAt', dir = 'desc') {
+  const mul = dir === 'asc' ? 1 : -1;
+  return [...docs].sort((a, b) => {
+    const av = a[ob], bv = b[ob];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    if (av < bv) return -1 * mul;
+    if (av > bv) return 1 * mul;
+    return 0;
   });
-  logActivity('Created', col, data.name || data.customerName || data.title || data.type || ref.id);
-  return ref.id;
+}
+
+// Poll a collection; cb(docs, err). Returns an unsubscribe function.
+export function listenCollection(col, cb, ob = 'createdAt', dir = 'desc') {
+  let stopped = false;
+  let timer = null;
+
+  const tick = async () => {
+    try {
+      // 'users' is a special table exposed via /auth/users (admin-only); everything
+      // else is a generic document collection.
+      let docs;
+      if (col === 'users') {
+        const res = await apiGet('/auth/directory');
+        docs = res && Array.isArray(res.users) ? res.users : [];
+      } else {
+        docs = await apiGet('/collections/' + encodeURIComponent(col));
+      }
+      if (!stopped) cb(sortDocs(Array.isArray(docs) ? docs : [], ob, dir), null);
+    } catch (err) {
+      if (!stopped) cb([], err);
+    } finally {
+      if (!stopped) timer = setTimeout(tick, POLL_MS);
+    }
+  };
+
+  const onFocus = () => { if (!stopped) tick(); };
+  const onRefresh = (e) => { if (!stopped && (!e.detail || e.detail.col === col)) tick(); };
+  window.addEventListener('focus', onFocus);
+  window.addEventListener('pps:refresh', onRefresh);
+  tick();
+
+  return () => {
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    window.removeEventListener('focus', onFocus);
+    window.removeEventListener('pps:refresh', onRefresh);
+  };
+}
+
+export async function addDocument(col, data) {
+  const res = await apiPost('/collections/' + encodeURIComponent(col), trimStrings(data));
+  pingRefresh(col);
+  logActivity('Created', col, data.name || data.customerName || data.title || data.type || res.id);
+  return res.id;
 }
 
 export async function updateDocument(col, id, data) {
-  await updateDoc(doc(db, col, id), {
-    ...trimStrings(data),
-    updatedAt: serverTimestamp(),
-    updatedBy: auth.currentUser?.email || 'unknown'
-  });
+  await apiPatch('/collections/' + encodeURIComponent(col) + '/' + encodeURIComponent(id), trimStrings(data));
+  pingRefresh(col);
   logActivity('Updated', col, data.name || data.customerName || data.title || data.status || id);
 }
 
 export async function deleteDocument(col, id) {
-  await deleteDoc(doc(db, col, id));
+  await apiDelete('/collections/' + encodeURIComponent(col) + '/' + encodeURIComponent(id));
+  pingRefresh(col);
   logActivity('Deleted', col, id);
 }
 
-// Notification helper — creates a notification for a specific user
+// ── Notifications (stored in the notifications collection) ────────────────────
 export async function createNotification({ forUser, title, message, type = 'info', module = '', relatedId = '' }) {
   try {
-    await addDoc(collection(db, 'notifications'), {
-      forUser,       // team member name (matched to logged-in user displayName)
-      title,
-      message,
-      type,          // 'lead', 'customer', 'task', 'status_update', 'info'
-      module,
-      relatedId,
+    const me = getMe();
+    await apiPost('/collections/notifications', {
+      forUser, title, message, type, module, relatedId,
       read: false,
-      fromUser: auth.currentUser?.displayName || auth.currentUser?.email || 'System',
-      createdAt: serverTimestamp()
+      fromUser: me?.displayName || me?.email || 'System',
     });
-  } catch (e) {
-    // Non-critical — swallow silently
-  }
+  } catch (e) { /* non-critical */ }
 }
 
-// Send notification to all admin/super_admin users
 export async function notifyAdmins(users, { title, message, type = 'info', module = '', relatedId = '' }) {
-  const admins = users.filter(u => u.role === 'admin' || u.role === 'super_admin');
+  const admins = (users || []).filter(u => u.role === 'admin' || u.role === 'super_admin' || u.role === 'management');
   for (const admin of admins) {
     await createNotification({ forUser: admin.displayName || admin.email, title, message, type, module, relatedId });
   }
 }
 
-// Activity log helper
 export async function logActivity(action, module, details = '') {
   try {
-    await addDoc(collection(db, 'activityLog'), {
-      action,
-      module,
-      details,
-      user: auth.currentUser?.displayName || auth.currentUser?.email || 'unknown',
-      userEmail: auth.currentUser?.email || '',
-      timestamp: serverTimestamp(),
-      createdAt: serverTimestamp()
+    const me = getMe();
+    await apiPost('/collections/activityLog', {
+      action, module, details,
+      user: me?.displayName || me?.email || 'unknown',
+      userEmail: me?.email || '',
+      timestamp: new Date().toISOString(),
     });
-  } catch (e) {
-    // Activity log write failed — non-critical, swallow silently
-  }
+  } catch (e) { /* non-critical */ }
 }

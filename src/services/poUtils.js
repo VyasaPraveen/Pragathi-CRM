@@ -1,4 +1,4 @@
-import { escapeHtml } from './helpers';
+import { escapeHtml, formatDate } from './helpers';
 
 export function buildPOHtml(po, lead) {
   const agreedPrice = Number(po.agreedPrice || po.totalValue || 0);
@@ -33,7 +33,7 @@ h2{text-align:center;margin:0 0 20px;font-size:18px;text-decoration:underline}
 <p style="margin:0;font-size:11px;font-weight:600">GST: 37AAOFP6349K2ZG</p>
 </div>
 <h2>Purchase Order</h2>
-<div class="date-line">Dated: ${e(po.poDate || '___________')}</div>
+<div class="date-line">Dated: ${po.poDate ? e(formatDate(po.poDate)) : '___________'}</div>
 <div class="addr">
 <strong>To</strong><br/>
 ${e(po.vendorName || 'M/S. Tata Power Solar Systems Limited')},<br/>
@@ -56,7 +56,6 @@ Contact No: 9701426440.
 <span><strong>Address:</strong> ${e(po.customerAddress || l.address || '-')}</span>
 <span><strong>City:</strong> ${e(l.city || '-')}${l.district ? ', ' + e(l.district) : ''}${l.pincode ? ' - ' + e(l.pincode) : ''}</span>
 ${l.email ? `<span><strong>Email:</strong> ${e(l.email)}</span>` : ''}
-<span><strong>Lead Status:</strong> ${e(l.status || '-')}</span>
 <span><strong>Priority:</strong> ${e(l.priority || '-')}</span>
 <span><strong>kW Required:</strong> ${e(po.kwRequired || l.kwRequired || '-')}</span>
 <span><strong>Monthly Bill:</strong> ${l.monthlyBill ? e(l.monthlyBill) + ' Units' : '-'}</span>
@@ -163,7 +162,7 @@ th{background:#f0f0f0;font-weight:700}
 <div class="title">Bill of Materials</div>
 <div class="info-row">
 <div><strong>Customer / Vendor Details:</strong><br/>${e(po.customerName || l.name || '___')}<br/>${e(po.customerAddress || l.address || '')}<br/>Ph: ${e(po.customerPhone || l.phone || '')}</div>
-<div style="text-align:right"><strong>PO NO / Date :</strong><br/>${e(po.poNumber || '___')} / ${e(po.poDate || '___')}</div>
+<div style="text-align:right"><strong>PO NO / Date :</strong><br/>${e(po.poNumber || '___')} / ${po.poDate ? e(formatDate(po.poDate)) : '___'}</div>
 </div>
 <table>
 <thead>
@@ -236,7 +235,7 @@ export function sharePOWhatsApp(po) {
 
   const msg = '*PURCHASE ORDER - ' + po.poNumber + '*\n' +
     'Ref: ' + po.poNumber + '\n\n' +
-    'Date: ' + (po.poDate || '-') + '\n' +
+    'Date: ' + (po.poDate ? formatDate(po.poDate) : '-') + '\n' +
     'Customer: ' + (po.customerName || '-') + '\n' +
     'Address: ' + (po.customerAddress || '-') + '\n' +
     'kW: ' + (po.kwRequired || '-') + '\n' +
@@ -249,7 +248,7 @@ export function sharePOWhatsApp(po) {
     '\nWarranty: ' + (po.warrantyTerms || 'Inverter 5yr, Modules 5+20yr') +
     '\nDelivery: ' + (po.deliveryTerms || '3-4 weeks') +
     '\n\nApproved by: ' + (po.approvedBy || '-') +
-    '\nDate: ' + (po.approvalDate || '-') +
+    '\nDate: ' + (po.approvalDate ? formatDate(po.approvalDate) : '-') +
     '\n\n_Pragathi Power Solutions_';
 
   if (po.customerPhone) {

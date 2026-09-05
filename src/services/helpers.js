@@ -2,10 +2,15 @@ export function formatCurrency(n) {
   return n == null || isNaN(n) ? '₹0' : '₹' + Number(n).toLocaleString('en-IN');
 }
 
+// All dates display as Date-Month-Year (DD-MM-YYYY) for consistency across the app.
 export function formatDate(d) {
   if (!d) return '-';
   const dt = d.toDate ? d.toDate() : new Date(d);
-  return isNaN(dt) ? String(d) : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  if (isNaN(dt)) return String(d);
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const yyyy = dt.getFullYear();
+  return `${dd}-${mm}-${yyyy}`;
 }
 
 export function getInitials(name) {
@@ -39,7 +44,8 @@ export const statusClass = (s) => {
     'Dealer': 'st-b', 'Distributor': 'st-p', 'Channel Partner': 'st-o',
     'Overdue': 'st-r', 'High': 'st-r', 'Medium': 'st-o', 'Low': 'st-g',
     'Inactive': 'st-x',
-    'Unapproved': 'st-o', 'Recommended': 'st-b'
+    'Unapproved': 'st-o', 'Recommended': 'st-b',
+    'Requested': 'st-o', 'Verified': 'st-b', 'Management Approved': 'st-p'
   };
   return m[s] || 'st-x';
 };
@@ -68,9 +74,21 @@ export const priorityClass = (p) => {
   return m[p] || 'st-x';
 };
 
-// Role hierarchy levels — higher number = more access
+// Role hierarchy levels — higher number = more access.
+// The 9 business roles sit alongside the legacy roles (kept for backward
+// compatibility with existing user documents). See permissions.js for the
+// action-level matrix that governs specific workflow steps.
 export const ROLE_LEVELS = {
-  super_admin: 6, admin: 5, manager: 4, coordinator: 3, engineer: 2, staff: 1
+  super_admin: 7,
+  management: 6,
+  admin: 5,
+  // Manager-tier (level 4)
+  manager: 4, operation_manager: 4, technical_manager: 4, sales_manager: 4,
+  // Coordinator-tier (level 3)
+  coordinator: 3, accountant: 3, bco: 3,
+  // Field/operational-tier (level 2)
+  engineer: 2, executive: 2, technician: 2,
+  staff: 1
 };
 
 // Check if user's role meets minimum required access level
@@ -78,25 +96,38 @@ export function hasAccess(userRole, minRole) {
   return (ROLE_LEVELS[userRole] || 0) >= (ROLE_LEVELS[minRole] || 0);
 }
 
-// Designations config — maps display titles to access levels (role)
+// Designations config — the 9 official roles (+ Super Admin owner account).
+// Each maps to its canonical role key used throughout the app.
 export const DESIGNATIONS = [
   { label: 'Super Admin', role: 'super_admin' },
+  { label: 'Management', role: 'management' },
   { label: 'Admin', role: 'admin' },
-  { label: 'Technical Manager', role: 'manager' },
-  { label: 'Operations Manager', role: 'manager' },
-  { label: 'Sales Manager', role: 'manager' },
-  { label: 'Admin Manager', role: 'manager' },
-  { label: 'Business Coordinator', role: 'coordinator' },
-  { label: 'Quality Coordinator', role: 'coordinator' },
-  { label: 'Accountant', role: 'coordinator' },
-  { label: 'Senior Engineer', role: 'engineer' },
-  { label: 'Engineer', role: 'engineer' },
-  { label: 'Staff', role: 'staff' },
+  { label: 'Operation Manager', role: 'operation_manager' },
+  { label: 'Technical Manager', role: 'technical_manager' },
+  { label: 'Sales Manager', role: 'sales_manager' },
+  { label: 'Accountant', role: 'accountant' },
+  { label: 'BCO', role: 'bco' },
+  { label: 'Executive', role: 'executive' },
+  { label: 'Technician', role: 'technician' },
 ];
+
+// Legacy designation labels → nearest new role (so re-assigning an old
+// designation still resolves to a valid role instead of dropping to staff).
+const LEGACY_DESIGNATION_ALIASES = {
+  'Operations Manager': 'operation_manager',
+  'Admin Manager': 'admin',
+  'Business Coordinator': 'bco',
+  'Quality Coordinator': 'operation_manager',
+  'Senior Engineer': 'technician',
+  'Engineer': 'technician',
+  'Staff': 'executive',
+};
 
 export function getRoleFromDesignation(designation) {
   const found = DESIGNATIONS.find(d => d.label === designation);
-  return found ? found.role : 'staff';
+  if (found) return found.role;
+  if (LEGACY_DESIGNATION_ALIASES[designation]) return LEGACY_DESIGNATION_ALIASES[designation];
+  return 'staff';
 }
 
 // Make a phone call via tel: link

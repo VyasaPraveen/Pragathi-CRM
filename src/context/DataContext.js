@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
 import { listenCollection } from '../services/firestore';
-import { doc, onSnapshot } from 'firebase/firestore';
-import { db } from '../services/firebase';
+import { apiGet } from '../services/api';
 
 const DataContext = createContext();
 export const useData = () => useContext(DataContext);
@@ -24,16 +23,15 @@ export function DataProvider({ children }) {
   const [influencers, setInfluencers] = useState([]);
   const [employeeTasks, setEmployeeTasks] = useState([]);
   const [leadPOs, setLeadPOs] = useState([]);
+  const [expenditures, setExpenditures] = useState([]);
   const [bomTemplates, setBomTemplates] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [users, setUsers] = useState([]);
-  const [settings, setSettings] = useState({}); // app-wide config (e.g. workflow gating)
+  const [settings, setSettings] = useState({});
 
   useEffect(() => {
     if (!user) return;
-    // P1 note: all collections are loaded eagerly for realtime sync.
-    // For datasets exceeding ~1000 records, consider route-based lazy subscriptions.
     const unsubs = [
       listenCollection('leads', (d) => d && setLeads(d)),
       listenCollection('customers', (d) => d && setCustomers(d)),
@@ -50,21 +48,37 @@ export function DataProvider({ children }) {
       listenCollection('influencers', (d) => d && setInfluencers(d)),
       listenCollection('employeeTasks', (d) => d && setEmployeeTasks(d)),
       listenCollection('leadPOs', (d) => d && setLeadPOs(d)),
+      listenCollection('expenditures', (d) => d && setExpenditures(d)),
       listenCollection('bomTemplates', (d) => d && setBomTemplates(d)),
-      listenCollection('activityLog', (d) => d && setActivityLog(d), 'timestamp', 'desc'),
+      listenCollection('activityLog', (d) => d && setActivityLog(d)),
       listenCollection('notifications', (d) => d && setNotifications(d)),
       listenCollection('users', (d) => d && setUsers(d)),
-      // Single app-wide settings doc (workflow gating toggle, etc.)
-      onSnapshot(doc(db, 'company', 'settings'), s => setSettings(s.exists() ? s.data() : {}), () => {}),
     ];
-    return () => unsubs.forEach(u => u());
+
+    // App-wide settings (workflow gating toggle, etc.) — poll + focus refresh.
+    let settingsStopped = false, sTimer = null;
+    const pollSettings = async () => {
+      try { const s = await apiGet('/settings'); if (!settingsStopped) setSettings(s || {}); }
+      catch { /* ignore */ }
+      finally { if (!settingsStopped) sTimer = setTimeout(pollSettings, 30000); }
+    };
+    const onFocus = () => { if (!settingsStopped) pollSettings(); };
+    window.addEventListener('focus', onFocus);
+    pollSettings();
+
+    return () => {
+      unsubs.forEach(u => u());
+      settingsStopped = true;
+      if (sTimer) clearTimeout(sTimer);
+      window.removeEventListener('focus', onFocus);
+    };
   }, [user]);
 
   return (
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
-      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, bomTemplates, activityLog, notifications, users, settings
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, bomTemplates, activityLog, notifications, users, settings
     }}>
       {children}
     </DataContext.Provider>

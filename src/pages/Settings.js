@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
-import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
+import { apiGet, apiPatch } from '../services/api';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -74,15 +73,15 @@ export default function Settings() {
   const [gatingSaving, setGatingSaving] = useState(false);
   useEffect(() => {
     if (!isAdmin) return;
-    getDoc(doc(db, 'company', 'settings'))
-      .then(snap => { if (snap.exists()) setGatingEnabled(snap.data().workflowGatingEnabled !== false); })
+    apiGet('/settings')
+      .then(s => { if (s) setGatingEnabled(s.workflowGatingEnabled !== false); })
       .catch(() => {});
   }, [isAdmin]);
 
   const toggleGating = async (val) => {
     setGatingSaving(true);
     try {
-      await setDoc(doc(db, 'company', 'settings'), { workflowGatingEnabled: val }, { merge: true });
+      await apiPatch('/settings', { workflowGatingEnabled: val });
       setGatingEnabled(val);
       toast(val ? 'Workflow gating ON — Customer tabs unlock stage by stage' : 'Workflow gating OFF — all Customer tabs unlocked');
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
@@ -93,8 +92,8 @@ export default function Settings() {
   useEffect(() => {
     if (!isAdmin) return;
     setLoading(true);
-    getDocs(collection(db, 'users')).then(snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.approved).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+    apiGet('/auth/users').then(res => {
+      const list = (res.users || []).filter(u => u.approved).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
       setUsers(list);
       setLoading(false);
     }).catch((err) => { console.error('Failed to load users:', err.message); setLoading(false); });
@@ -126,7 +125,7 @@ export default function Settings() {
     if (!selectedUser) return;
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'users', selectedUser.id), { permissions: perms });
+      await apiPatch('/auth/users/' + selectedUser.id, { permissions: perms });
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, permissions: perms } : u));
       setSelectedUser(prev => ({ ...prev, permissions: perms }));
       toast('Permissions saved');
@@ -148,8 +147,7 @@ export default function Settings() {
     setMigrating(true);
     setMigrateResult(null);
     try {
-      const snap = await getDocs(collection(db, 'leadPOs'));
-      const allPOs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const allPOs = await apiGet('/collections/leadPOs');
       let updated = 0;
 
       for (let idx = 0; idx < allPOs.length; idx++) {
@@ -218,13 +216,12 @@ export default function Settings() {
           updates.poNumber = 'PO-PPSPO-' + String(idx + 1).padStart(4, '0') + '/' + dateStr;
         }
 
-        await updateDoc(doc(db, 'leadPOs', po.id), updates);
+        await apiPatch('/collections/leadPOs/' + po.id, updates);
         updated++;
       }
 
       // Also migrate purchaseOrders collection
-      const poSnap = await getDocs(collection(db, 'purchaseOrders'));
-      const allPurchaseOrders = poSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const allPurchaseOrders = await apiGet('/collections/purchaseOrders');
       for (let idx = 0; idx < allPurchaseOrders.length; idx++) {
         const po = allPurchaseOrders[idx];
         const oldItems = po.items || [];
@@ -259,7 +256,7 @@ export default function Settings() {
           const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
           updates.poNumber = 'PO-PPSPO-' + String(allPOs.length + idx + 1).padStart(4, '0') + '/' + dateStr;
         }
-        await updateDoc(doc(db, 'purchaseOrders', po.id), updates);
+        await apiPatch('/collections/purchaseOrders/' + po.id, updates);
         updated++;
       }
 
@@ -282,7 +279,7 @@ export default function Settings() {
     setSaving(true);
     try {
       for (const uid of bulkSelected) {
-        await updateDoc(doc(db, 'users', uid), { permissions: perms });
+        await apiPatch('/auth/users/' + uid, { permissions: perms });
       }
       setUsers(prev => prev.map(u => bulkSelected.includes(u.id) ? { ...u, permissions: perms } : u));
       setBulkSelected([]);
@@ -474,7 +471,7 @@ export default function Settings() {
         <div className="ch"><h3>Deployment</h3></div>
         <div className="cb">
           <p style={{ fontSize: '.88rem', color: 'var(--muted)', lineHeight: 1.6 }}>
-            To deploy updates, run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm run build</code> followed by <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>firebase deploy</code> from the project root.
+            This CRM runs on Hostinger (PHP + MySQL API at <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>/api</code>). To deploy front-end updates, run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm run build</code> and upload the <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>build/</code> folder to the <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>crm/</code> directory on the server.
           </p>
         </div>
       </div>

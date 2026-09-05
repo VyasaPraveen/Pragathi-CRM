@@ -10,3 +10,10 @@ backups/
 serviceAccountKey.json
 nul
 shots/
+
+# Server (Hostinger PHP API) secrets & runtime — never commit
+server/api/config.php
+server/api/secrets/
+server/api/uploads/
+server/migrate/export/
+*.log

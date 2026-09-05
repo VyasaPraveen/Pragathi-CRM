@@ -1,8 +1,5 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { auth, db } from '../services/firebase';
-import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile, signOut, sendPasswordResetEmail } from 'firebase/auth';
-import { doc, getDoc, setDoc, getDocs, collection, query, where, updateDoc } from 'firebase/firestore';
-import { getRoleFromDesignation } from '../services/helpers';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { apiGet, apiPost, getToken, setToken, setMe, setUnauthorizedHandler } from '../services/api';
 
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
@@ -13,138 +10,63 @@ export function AuthProvider({ children }) {
   const [designation, setDesignation] = useState('');
   const [approved, setApproved] = useState(false);
   const [loading, setLoading] = useState(true);
-  // Flag to prevent onAuthStateChanged from racing with signup
-  const signingUp = useRef(false);
 
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (u) => {
-      // During signup, skip — signup() handles doc creation and state
-      if (signingUp.current) return;
-
-      setLoading(true);
-      if (u) {
-        try {
-          const snap = await getDoc(doc(db, 'users', u.uid));
-          if (snap.exists()) {
-            const data = snap.data();
-            setUser(u);
-            setRole(data.role || 'staff');
-            setDesignation(data.designation || data.role || '');
-            setApproved(data.approved === true);
-          } else {
-            // Auth user exists but no Firestore doc (orphaned account)
-            // Auto-create — check if first user for admin auto-grant
-            const usersSnap = await getDocs(collection(db, 'users'));
-            const isFirstUser = usersSnap.empty;
-            const userData = {
-              email: u.email,
-              displayName: u.displayName || (u.email ? u.email.split('@')[0] : 'User'),
-              role: isFirstUser ? 'super_admin' : 'staff',
-              designation: isFirstUser ? 'Super Admin' : '',
-              approved: isFirstUser,
-              createdAt: new Date().toISOString()
-            };
-            await setDoc(doc(db, 'users', u.uid), userData);
-            setUser(u);
-            setRole(userData.role);
-            setDesignation(userData.designation);
-            setApproved(userData.approved);
-          }
-        } catch (err) {
-          // Auth state error — fall back to unapproved staff
-          setUser(u);
-          setRole('staff');
-          setDesignation('');
-          setApproved(false);
-        }
-      } else {
-        setUser(null);
-        setRole('staff');
-        setDesignation('');
-        setApproved(false);
-      }
-      setLoading(false);
-    });
-    return unsub;
-  }, []);
-
-  const login = (email, password) => signInWithEmailAndPassword(auth, email, password);
-
-  const signup = async (email, password, displayName, chosenDesignation, phone) => {
-    // Set flag so onAuthStateChanged skips during signup
-    signingUp.current = true;
-
-    try {
-      const cred = await createUserWithEmailAndPassword(auth, email, password);
-      await updateProfile(cred.user, { displayName });
-
-      // Check if this is the first user (will become admin)
-      const usersSnap = await getDocs(collection(db, 'users'));
-      const isFirstUser = usersSnap.empty;
-
-      // Match phone with team member for auto-approval
-      let teamMatch = null;
-      if (phone && !isFirstUser) {
-        const cleaned = String(phone).replace(/\D/g, '').slice(-10);
-        if (cleaned.length === 10) {
-          const snap = await getDocs(query(collection(db, 'team'), where('phone', '==', cleaned)));
-          if (!snap.empty) teamMatch = { id: snap.docs[0].id, ...snap.docs[0].data() };
-        }
-      }
-
-      const effectiveDesignation = isFirstUser ? 'Super Admin' : (teamMatch?.role || chosenDesignation);
-      const derivedRole = isFirstUser ? 'super_admin' : getRoleFromDesignation(effectiveDesignation);
-      const autoApproved = isFirstUser || !!teamMatch;
-
-      const userData = {
-        email,
-        displayName,
-        phone: phone ? String(phone).replace(/\D/g, '').slice(-10) : '',
-        role: derivedRole,
-        designation: effectiveDesignation,
-        approved: autoApproved,
-        ...(teamMatch ? { teamId: teamMatch.id } : {}),
-        createdAt: new Date().toISOString()
-      };
-
-      try {
-        await setDoc(doc(db, 'users', cred.user.uid), userData);
-      } catch (docErr) {
-        // Firestore doc creation failed — clean up the orphaned auth account
-        await cred.user.delete().catch(() => {});
-        throw docErr;
-      }
-
-      // Link team record to this user account
-      if (teamMatch) {
-        await updateDoc(doc(db, 'team', teamMatch.id), { userId: cred.user.uid, email });
-      }
-
-      if (autoApproved) {
-        setUser(cred.user);
-        setRole(derivedRole);
-        setDesignation(effectiveDesignation);
-        setApproved(true);
-        setLoading(false);
-      } else {
-        // Non-matching user — sign out, they need admin approval
-        await signOut(auth);
-        setUser(null);
-        setRole('staff');
-        setDesignation('');
-        setApproved(false);
-        setLoading(false);
-      }
-
-      return { approved: autoApproved, teamMatch: teamMatch?.name };
-    } finally {
-      signingUp.current = false;
-    }
+  // Apply a user object (from login/signup/me) to context + the module holder.
+  const applyUser = (u) => {
+    setUser(u);
+    setRole(u?.role || 'staff');
+    setDesignation(u?.designation || u?.role || '');
+    setApproved(u?.approved === true);
+    setMe(u ? { id: u.id, email: u.email, displayName: u.displayName, role: u.role } : null);
   };
 
-  const logout = () => signOut(auth);
+  const clear = () => {
+    setToken('');
+    applyUser(null);
+    setApproved(false);
+  };
 
-  const resetPassword = (email) => sendPasswordResetEmail(auth, email);
+  // On boot: if we have a token, fetch the current user.
+  useEffect(() => {
+    let cancelled = false;
+    // Log out automatically if any authenticated request returns 401.
+    setUnauthorizedHandler(() => clear());
+    (async () => {
+      if (!getToken()) { setLoading(false); return; }
+      try {
+        const res = await apiGet('/auth/me');
+        if (!cancelled) applyUser(res.user);
+      } catch (e) {
+        if (!cancelled) clear(); // invalid/expired token
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const login = async (email, password) => {
+    const res = await apiPost('/auth/login', { email, password }, { auth: false });
+    setToken(res.token);
+    applyUser(res.user);
+    return res.user;
+  };
+
+  const signup = async (email, password, displayName, designation, phone) => {
+    const res = await apiPost('/auth/signup', { email, password, displayName, designation, phone }, { auth: false });
+    if (res.approved && res.token) {
+      setToken(res.token);
+      applyUser(res.user);
+    }
+    return { approved: !!res.approved };
+  };
+
+  const logout = () => { clear(); };
+
+  // Self-service reset routes a request to the admins (no mail server in play).
+  const resetPassword = async (email) => {
+    await apiPost('/auth/request-reset', { email }, { auth: false });
+  };
 
   return (
     <AuthContext.Provider value={{ user, role, designation, approved, loading, login, signup, logout, resetPassword }}>

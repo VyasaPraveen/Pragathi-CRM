@@ -1,11 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, deleteDoc, setDoc, addDoc } from 'firebase/firestore';
+import { apiGet, apiPost, apiPatch, apiDelete } from '../services/api';
+import { addDocument, updateDocument } from '../services/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { DESIGNATIONS, getRoleFromDesignation, hasAccess } from '../services/helpers';
 import { useToast } from '../context/ToastContext';
 import { Modal } from '../components/SharedUI';
+
+// Default temp password for admin-provisioned accounts (staff should change it).
+const TEMP_PASSWORD = (phone) => {
+  const p = String(phone || '').replace(/\D/g, '').slice(-4);
+  return p.length === 4 ? 'PPS@' + p + '#in' : 'PPS@12345';
+};
 
 export default function UserManagement() {
   const { role, user: currentUser } = useAuth();
@@ -17,12 +23,20 @@ export default function UserManagement() {
   const [search, setSearch] = useState('');
   const [editModal, setEditModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
+  const [addModal, setAddModal] = useState(false);
+
+  const handleCreateUser = async (data) => {
+    await apiPost('/auth/users', data);
+    await fetchUsers();
+    setAddModal(false);
+    toast('User created');
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const snap = await getDocs(collection(db, 'users'));
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const res = await apiGet('/auth/users');
+      const list = res.users || [];
       list.sort((a, b) => (a.approved === b.approved ? 0 : a.approved ? 1 : -1));
       setUsers(list);
     } catch (err) {
@@ -35,7 +49,7 @@ export default function UserManagement() {
 
   const handleApprove = async (uid) => {
     try {
-      await updateDoc(doc(db, 'users', uid), { approved: true });
+      await apiPatch('/auth/users/' + uid, { approved: true });
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: true } : u));
       toast('User approved');
     } catch (err) { toast('Failed to approve: ' + err.message, 'er'); }
@@ -44,7 +58,7 @@ export default function UserManagement() {
   const handleDesignationChange = async (uid, newDesignation) => {
     try {
       const newRole = getRoleFromDesignation(newDesignation);
-      await updateDoc(doc(db, 'users', uid), { designation: newDesignation, role: newRole });
+      await apiPatch('/auth/users/' + uid, { designation: newDesignation });
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, designation: newDesignation, role: newRole } : u));
       toast('Designation updated');
     } catch (err) { toast('Failed to update: ' + err.message, 'er'); }
@@ -53,7 +67,7 @@ export default function UserManagement() {
   const handleRevoke = async (uid) => {
     if (!window.confirm('Revoke access for this user? They will see the pending approval screen.')) return;
     try {
-      await updateDoc(doc(db, 'users', uid), { approved: false });
+      await apiPatch('/auth/users/' + uid, { approved: false });
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, approved: false } : u));
       toast('Access revoked');
     } catch (err) { toast('Failed to revoke: ' + err.message, 'er'); }
@@ -62,7 +76,7 @@ export default function UserManagement() {
   const handleDelete = async (uid) => {
     if (!window.confirm('Permanently delete this user account? This action cannot be undone.')) return;
     try {
-      await deleteDoc(doc(db, 'users', uid));
+      await apiDelete('/auth/users/' + uid);
       setUsers(prev => prev.filter(u => u.id !== uid));
       if (detailModal?.id === uid) setDetailModal(null);
       toast('User deleted');
@@ -76,48 +90,39 @@ export default function UserManagement() {
       for (const u of users) {
         if (u.id === currentUser?.uid) continue;
         if (!u.approved) continue;
-        if (u.role === 'manager' && u.designation === 'Operations Manager') continue;
-        await updateDoc(doc(db, 'users', u.id), { designation: 'Operations Manager', role: 'manager' });
+        if (u.role === 'operation_manager' && u.designation === 'Operation Manager') continue;
+        await apiPatch('/auth/users/' + u.id, { designation: 'Operation Manager' });
         count++;
       }
       await fetchUsers();
-      toast(`${count} user(s) updated to Manager role`);
+      toast(`${count} user(s) updated to Operation Manager role`);
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
   };
 
   const handleCreateUsersFromTeam = async () => {
     const activeTeam = team.filter(t => t.status === 'Active');
     if (activeTeam.length === 0) { toast('No active team members found', 'er'); return; }
-    // Find team members that don't already have a user account (match by phone or name)
-    const existingPhones = new Set(users.map(u => String(u.phone || '').replace(/\D/g, '').slice(-10)).filter(p => p.length === 10));
-    const existingNames = new Set(users.map(u => (u.displayName || '').toLowerCase()));
-    const toCreate = activeTeam.filter(t => {
-      const ph = String(t.phone || '').replace(/\D/g, '').slice(-10);
-      const nm = (t.name || '').toLowerCase();
-      return !(ph.length === 10 && existingPhones.has(ph)) && !existingNames.has(nm);
-    });
-    if (toCreate.length === 0) { toast('All team members already have user accounts', 'er'); return; }
-    if (!window.confirm(`Create ${toCreate.length} user account(s) from team members with Manager role?\n\n${toCreate.map(t => t.name).join(', ')}`)) return;
+    const existingEmails = new Set(users.map(u => (u.email || '').toLowerCase()).filter(Boolean));
+    // A login needs an email; only team members with a (new) email can get an account.
+    const toCreate = activeTeam.filter(t => t.email && !existingEmails.has(String(t.email).toLowerCase()));
+    if (toCreate.length === 0) { toast('No team members with a new email to create logins for', 'er'); return; }
+    if (!window.confirm(`Create ${toCreate.length} login(s) from team members (Operation Manager role)?\n\nTemp password: PPS@<last4-of-phone>#in (or PPS@12345). Ask them to change it.\n\n${toCreate.map(t => t.name).join(', ')}`)) return;
     try {
       let count = 0;
       for (const t of toCreate) {
         const phone = String(t.phone || '').replace(/\D/g, '').slice(-10);
-        const userId = 'team_' + t.id; // use team-prefixed ID so they're identifiable
-        await setDoc(doc(db, 'users', userId), {
+        await apiPost('/auth/users', {
+          email: String(t.email).toLowerCase(),
+          password: TEMP_PASSWORD(phone),
           displayName: t.name || '',
-          email: t.email || '',
-          phone: phone,
-          designation: 'Operations Manager',
-          role: 'manager',
+          phone,
+          designation: 'Operation Manager',
           approved: true,
-          teamId: t.id,
-          createdAt: new Date().toISOString(),
-          createdVia: 'bulk_team_import'
         });
         count++;
       }
       await fetchUsers();
-      toast(`${count} user(s) created from team members`);
+      toast(`${count} login(s) created from team members`);
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
   };
 
@@ -125,24 +130,22 @@ export default function UserManagement() {
   const stripInitials = (name) => name.replace(/^([A-Z]{1,3}\.)+\s*/i, '').trim();
 
   const handleCleanNames = async () => {
-    const teamSnap = await getDocs(collection(db, 'team'));
-    const toUpdate = teamSnap.docs
-      .map(d => ({ id: d.id, name: d.data().name || '' }))
+    const teamList = await apiGet('/collections/team');
+    const toUpdate = (teamList || [])
+      .map(t => ({ id: t.id, name: t.name || '' }))
       .filter(t => stripInitials(t.name) !== t.name);
     if (toUpdate.length === 0) { toast('No names with initials found', 'er'); return; }
     const preview = toUpdate.map(t => `${t.name} → ${stripInitials(t.name)}`).join('\n');
     if (!window.confirm(`Remove initials from ${toUpdate.length} name(s)?\n\n${preview}`)) return;
     try {
       for (const t of toUpdate) {
-        const clean = stripInitials(t.name);
-        await updateDoc(doc(db, 'team', t.id), { name: clean });
+        await updateDocument('team', t.id, { name: stripInitials(t.name) });
       }
       // Also update user display names
-      const userSnap = await getDocs(collection(db, 'users'));
-      for (const u of userSnap.docs) {
-        const dn = u.data().displayName || '';
-        const clean = stripInitials(dn);
-        if (clean !== dn) await updateDoc(doc(db, 'users', u.id), { displayName: clean });
+      const res = await apiGet('/auth/users');
+      for (const u of (res.users || [])) {
+        const clean = stripInitials(u.displayName || '');
+        if (clean !== (u.displayName || '')) await apiPatch('/auth/users/' + u.id, { displayName: clean });
       }
       await fetchUsers();
       toast(`${toUpdate.length} name(s) cleaned successfully`);
@@ -150,21 +153,19 @@ export default function UserManagement() {
   };
 
   const handleAddYashwanth = async () => {
-    const teamSnap = await getDocs(collection(db, 'team'));
-    const exists = teamSnap.docs.find(d => (d.data().name || '').toLowerCase().includes('yashwanth'));
+    const teamList = await apiGet('/collections/team');
+    const exists = (teamList || []).find(t => (t.name || '').toLowerCase().includes('yashwanth'));
     if (exists) { toast('Yashwanth already exists in Team', 'er'); return; }
-    if (!window.confirm('Add Yashwanth as a new active team member and create a user account?')) return;
+    if (!window.confirm('Add Yashwanth as a new active team member and create a login (yashwanth@pragathipowersolutions.com / PPS@12345)?')) return;
     try {
-      const teamRef = await addDoc(collection(db, 'team'), {
+      await addDocument('team', {
         name: 'Yashwanth', role: 'Engineer', designation: 'Engineer',
-        status: 'Active', phone: '', email: '', attendance: 0,
+        status: 'Active', phone: '', email: 'yashwanth@pragathipowersolutions.com', attendance: 0,
         joiningDate: new Date().toISOString().slice(0, 10)
       });
-      await setDoc(doc(db, 'users', 'team_' + teamRef.id), {
-        displayName: 'Yashwanth', email: '', phone: '',
-        designation: 'Operations Manager', role: 'manager',
-        approved: true, teamId: teamRef.id,
-        createdAt: new Date().toISOString(), createdVia: 'manual_add'
+      await apiPost('/auth/users', {
+        email: 'yashwanth@pragathipowersolutions.com', password: 'PPS@12345',
+        displayName: 'Yashwanth', phone: '', designation: 'Technician', approved: true,
       });
       await fetchUsers();
       toast('Yashwanth added to Team and Users');
@@ -174,10 +175,8 @@ export default function UserManagement() {
   const handleEditSave = async (uid, data) => {
     try {
       const update = { ...data };
-      // Only derive role when a designation is actually being changed, otherwise
-      // editing unrelated fields (phone, address) would wrongly demote the user.
       if (data.designation) update.role = getRoleFromDesignation(data.designation);
-      await updateDoc(doc(db, 'users', uid), update);
+      await apiPatch('/auth/users/' + uid, update);
       setUsers(prev => prev.map(u => u.id === uid ? { ...u, ...update } : u));
       setEditModal(null);
     } catch (err) {
@@ -242,7 +241,10 @@ export default function UserManagement() {
           </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn bp" onClick={handleCreateUsersFromTeam} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Create user accounts from team members">
+          <button className="btn bp" onClick={() => setAddModal(true)} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Create a new login">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>person_add</span> New User
+          </button>
+          <button className="btn" onClick={handleCreateUsersFromTeam} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Create user accounts from team members">
             <span className="material-icons-round" style={{ fontSize: 16 }}>group_add</span> Create Users from Team
           </button>
           <button className="btn" onClick={handleBulkSetManager} style={{ padding: '6px 16px', fontSize: '.84rem' }} title="Set all approved users to Manager role">
@@ -360,6 +362,9 @@ export default function UserManagement() {
         </div>
       )}
 
+      {/* Add User Modal */}
+      {addModal && <AddUserModal onSave={handleCreateUser} onClose={() => setAddModal(false)} />}
+
       {/* Edit User Modal */}
       {editModal && <EditUserModal user={editModal} onSave={handleEditSave} onClose={() => setEditModal(null)} />}
 
@@ -373,6 +378,59 @@ export default function UserManagement() {
   );
 }
 
+/* ── Add User Modal (admin provisions a login) ── */
+function AddUserModal({ onSave, onClose }) {
+  const [f, setF] = useState({ displayName: '', email: '', phone: '', designation: 'Executive', password: '', approved: true });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setErr('');
+    if (!f.email.trim() || !/^\S+@\S+\.\S+$/.test(f.email)) { setErr('Enter a valid email'); return; }
+    if (f.password.length < 6) { setErr('Password must be at least 6 characters'); return; }
+    setSaving(true);
+    try { await onSave({ ...f, email: f.email.trim().toLowerCase() }); }
+    catch (e2) { setErr(e2.message); setSaving(false); }
+  };
+
+  return (
+    <Modal title="Add User" onClose={onClose}>
+      <form onSubmit={submit}>
+        <div className="mb">
+          {err && <div className="aerr" style={{ marginBottom: 10 }}>{err}</div>}
+          <div className="fr">
+            <div className="fg"><label>Full Name</label><input className="fi" value={f.displayName} onChange={e => set('displayName', e.target.value)} placeholder="e.g. Ravi Kumar" /></div>
+            <div className="fg"><label>Phone</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} /></div>
+          </div>
+          <div className="fr">
+            <div className="fg"><label>Email (username) *</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} required placeholder="name@pragathipowersolutions.com" /></div>
+            <div className="fg"><label>Role *</label>
+              <select className="fi" value={f.designation} onChange={e => set('designation', e.target.value)}>
+                {DESIGNATIONS.map(d => <option key={d.label} value={d.label}>{d.label}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="fr">
+            <div className="fg"><label>Password *</label><input className="fi" value={f.password} onChange={e => set('password', e.target.value)} placeholder="Min 6 characters" /></div>
+            <div className="fg"><label>Access</label>
+              <select className="fi" value={f.approved ? 'yes' : 'no'} onChange={e => set('approved', e.target.value === 'yes')}>
+                <option value="yes">Approved (can log in now)</option>
+                <option value="no">Pending approval</option>
+              </select>
+            </div>
+          </div>
+        </div>
+        <div className="mf">
+          <button type="button" className="btn bo" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn bp" disabled={saving}>{saving ? 'Creating...' : 'Create User'}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
 /* ── Edit User Modal ── */
 function EditUserModal({ user, onSave, onClose }) {
   const [f, setF] = useState({
@@ -381,12 +439,14 @@ function EditUserModal({ user, onSave, onClose }) {
     designation: user.designation || '',
     address: user.address || '',
     department: user.department || '',
-    notes: user.notes || ''
+    notes: user.notes || '',
+    password: ''
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
   const handleSubmit = (e) => {
     e.preventDefault();
+    if (f.password && f.password.length < 6) { alert('Password must be at least 6 characters'); return; }
     const data = {};
     if (f.displayName !== (user.displayName || '')) data.displayName = f.displayName;
     if (f.phone !== (user.phone || '')) data.phone = f.phone;
@@ -394,6 +454,7 @@ function EditUserModal({ user, onSave, onClose }) {
     if (f.address !== (user.address || '')) data.address = f.address;
     if (f.department !== (user.department || '')) data.department = f.department;
     if (f.notes !== (user.notes || '')) data.notes = f.notes;
+    if (f.password) data.password = f.password;
     if (Object.keys(data).length === 0) { onClose(); return; }
     onSave(user.id, data);
   };
@@ -417,6 +478,7 @@ function EditUserModal({ user, onSave, onClose }) {
             <div className="fg"><label>Department</label><input className="fi" value={f.department} onChange={e => set('department', e.target.value)} placeholder="e.g. Sales, Technical, Admin" /></div>
           </div>
           <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} placeholder="Full address" /></div>
+          <div className="fg"><label>Reset Password <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Leave blank to keep current</span></label><input className="fi" value={f.password} onChange={e => set('password', e.target.value)} placeholder="New password (min 6 chars)" autoComplete="new-password" /></div>
           <div className="fg"><label>Admin Notes</label><textarea className="fi" value={f.notes} onChange={e => set('notes', e.target.value)} rows={3} placeholder="Internal notes about this user..." /></div>
         </div>
         <div className="mf">

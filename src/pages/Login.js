@@ -4,6 +4,7 @@ import { DESIGNATIONS } from '../services/helpers';
 
 // Map Firebase auth error codes to generic, non-enumerable messages
 const authErrorMessage = (err) => {
+  // Legacy Firebase-style codes (kept for safety)
   switch (err?.code || '') {
     case 'auth/invalid-email': return 'Please enter a valid email address.';
     case 'auth/user-disabled': return 'This account has been disabled. Please contact your administrator.';
@@ -14,8 +15,11 @@ const authErrorMessage = (err) => {
     case 'auth/network-request-failed': return 'Network error. Please check your connection and try again.';
     case 'auth/email-already-in-use': return 'An account with this email already exists.';
     case 'auth/weak-password': return 'Password is too weak. Use at least 8 characters.';
-    default: return 'Something went wrong. Please try again.';
+    default: break;
   }
+  // The API returns user-friendly messages (e.g. "Invalid email or password").
+  if (err?.message) return err.message;
+  return 'Something went wrong. Please try again.';
 };
 
 // Reusable password field with a show/hide toggle.
@@ -58,7 +62,7 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [phone, setPhone] = useState('');
-  const [designation, setDesignation] = useState('Staff');
+  const [designation, setDesignation] = useState('Executive');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -83,6 +87,7 @@ export default function Login() {
   const handleLogin = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccess('');
     setLoading(true);
     try {
       await login(email, password);
@@ -129,7 +134,7 @@ export default function Login() {
           setEmail('');
           setPassword('');
           setConfirmPassword('');
-          setDesignation('Staff');
+          setDesignation('Executive');
           setPhone('');
         }
         setLoading(false);
@@ -161,8 +166,8 @@ export default function Login() {
       }
     }
     if (mounted.current) {
-      // Generic message (does not disclose whether the account exists)
-      setSuccess('If an account exists for that email, a password reset link is on its way. Check your inbox and spam folder.');
+      // Reset is admin-handled (no mail server). Generic, non-enumerating copy.
+      setSuccess('If an account exists for that email, your reset request has been sent to the administrator, who will set a new password for you.');
       setLoading(false);
     }
   };
@@ -172,7 +177,7 @@ export default function Login() {
     ? 'Sign in to continue to your dashboard.'
     : mode === 'signup'
       ? 'Register for access — an admin will approve your account.'
-      : 'Enter your email and we’ll send you a reset link.';
+      : 'Enter your email and your reset request will be sent to an administrator.';
 
   return (
     <div className="lg">

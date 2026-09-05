@@ -5,8 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatCurrency, formatDate, getInitials, safeStr, toNumber, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
-import { storage } from '../services/firebase';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { apiUpload } from '../services/api';
 
 const retailerTypes = ['Dealer', 'Distributor', 'Channel Partner', 'Other'];
 const commissionTypes = ['Fixed', 'Percentage'];
@@ -141,11 +140,7 @@ function RetailerModal({ data, id, onSave, onClose }) {
     if (file.size > 10 * 1024 * 1024) { toast('File too large (max 10MB)', 'er'); return; }
     setUploading(true);
     try {
-      const ext = file.name.split('.').pop();
-      const fileName = 'mou_' + (f.name || 'retailer').replace(/\s+/g, '_') + '_' + Date.now() + '.' + ext;
-      const storageRef = ref(storage, 'mou/' + fileName);
-      await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(storageRef);
+      const { url } = await apiUpload(file, 'mou');
       set('mouUrl', url);
       toast('MOU uploaded');
     } catch (err) { toast('Upload failed: ' + err.message, 'er'); }

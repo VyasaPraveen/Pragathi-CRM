@@ -7,6 +7,7 @@ import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, o
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
 import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
+import { can, ACTIONS } from '../services/permissions';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
 const PAGE_SIZE = 20;
@@ -37,7 +38,7 @@ export default function PurchaseOrders() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expanded, setExpanded] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
-  const canEdit = hasAccess(role, 'manager');
+  const canEdit = can(role, ACTIONS.PO_RECORD);
 
   // Merge both collections with a source tag (memoized so typing in search doesn't re-merge/re-sort)
   const allPOs = useMemo(() => {
@@ -57,7 +58,7 @@ export default function PurchaseOrders() {
     ].sort((a, b) => ts(b) - ts(a));
   }, [purchaseOrders, leadPOs, leads]);
 
-  const allStatuses = [...new Set([...poStatuses, 'Unapproved', 'Recommended', 'Approved'])];
+  const allStatuses = [...new Set([...poStatuses, 'Unapproved', 'Recommended', 'Management Approved', 'Approved'])];
 
   let filtered = allPOs;
   if (sourceFilter === 'standalone') filtered = filtered.filter(po => po._source === 'standalone');

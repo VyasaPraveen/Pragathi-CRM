@@ -6,7 +6,10 @@
 # ---- Force HTTPS (never redirect ACME/SSL challenges) --------------------
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteCond %{HTTPS} !=on [OR]
+  # Redirect to HTTPS only when the request is NOT already secure by EITHER signal
+  # (direct TLS sets %{HTTPS}=on; a proxy sets X-Forwarded-Proto=https). ANDing the
+  # two checks avoids an infinite redirect loop when TLS terminates on the server.
+  RewriteCond %{HTTPS} !=on
   RewriteCond %{HTTP:X-Forwarded-Proto} !https
   RewriteCond %{REQUEST_URI} !^/\.well-known/ [NC]
   RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
@@ -50,6 +53,12 @@
   # index.html must always revalidate so new deploys are picked up immediately.
   <FilesMatch "^(index\.html)?$">
     Header set Cache-Control "public, max-age=0, must-revalidate"
+  </FilesMatch>
+  # Root-level, non-fingerprinted assets must revalidate (otherwise a changed
+  # logo/favicon would stay cached for up to a year). Placed after the immutable
+  # rule so it wins for these specific filenames.
+  <FilesMatch "^(logo\.png|logo-full\.png|favicon\.ico|manifest\.json|asset-manifest\.json|robots\.txt)$">
+    Header set Cache-Control "public, max-age=86400, must-revalidate"
   </FilesMatch>
 </IfModule>
 <IfModule mod_expires.c>

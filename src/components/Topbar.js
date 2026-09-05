@@ -49,9 +49,9 @@ export default function Topbar({ onMenuClick }) {
   const myNotifications = notifications
     .filter(n => n.forUser === myName)
     .sort((a, b) => {
-      const at = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-      const bt = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-      return bt - at;
+      const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return (isNaN(bt) ? 0 : bt) - (isNaN(at) ? 0 : at);
     });
 
   const unreadCount = myNotifications.filter(n => !n.read).length;

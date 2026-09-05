@@ -1,0 +1,16 @@
+# Route every /api/* request through index.php (sub-path passed as ?_p=).
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /api/
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^(.*)$ index.php?_p=$1 [QSA,L]
+</IfModule>
+
+# Protect sensitive files from direct web access.
+<FilesMatch "^(config\.php|config\.sample\.php|lib\.php|\.env)$">
+  Require all denied
+</FilesMatch>
+
+# Never serve the secrets directory or JSON keys.
+RedirectMatch 404 /api/secrets/.*
