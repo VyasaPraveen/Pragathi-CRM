@@ -157,10 +157,8 @@ export default function Leads() {
             toast(cleaned.referredByName + ' added as Influencer automatically');
           }
         }
-        // Auto-open lead detail on PO tab for the new lead
+        // Close the form and return to the list (no auto-popup).
         setModal(null);
-        setDetailTab('pos');
-        setTimeout(() => setDetailId(newId), 300);
         return;
       }
       // Auto-create reminder for Expected Sign-Up Date (new or changed)
