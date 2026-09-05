@@ -38,6 +38,8 @@ function handle_collections(string $collection, string $id, string $method): voi
     $newId = gen_id();
     $st = db()->prepare("INSERT INTO `$table` (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)");
     $st->execute([$newId, json_encode($data, JSON_UNESCAPED_UNICODE), $email]);
+    // A new in-app notification → also fire a web push to the target device(s).
+    if ($collection === 'notifications') maybe_send_push($data);
     json_out(['id' => $newId] + $data, 201);
   }
 
@@ -139,4 +141,25 @@ function po_advance_ok(array $po): bool {
   if (!is_array($lead)) $lead = [];
   $paid = (($lead['advancePaid'] ?? '') === 'Yes') ? (float)($lead['advanceLeadAmount'] ?? 0) : 0.0;
   return $paid >= $required;
+}
+
+// Send a web push for a freshly-created in-app notification. Best-effort and
+// non-fatal — a push failure must never break the notification write. Returns
+// immediately (no DB hit) when FCM is disabled in config.
+function maybe_send_push(array $note): void {
+  if (empty(cfg()['fcm']['enabled'])) return;
+  try {
+    require_once __DIR__ . '/../lib/fcm.php';
+    $target = (string)($note['forUser'] ?? '');
+    if ($target === '') return;
+    $tokens = fcm_tokens_for([$target]);
+    if (!$tokens) return;
+    fcm_send($tokens, (string)($note['title'] ?? 'Pragathi Power CRM'), (string)($note['message'] ?? ''), [
+      'module'    => (string)($note['module'] ?? ''),
+      'relatedId' => (string)($note['relatedId'] ?? ''),
+      'link'      => '/',
+    ]);
+  } catch (Throwable $e) {
+    error_log('push send failed: ' . $e->getMessage());
+  }
 }

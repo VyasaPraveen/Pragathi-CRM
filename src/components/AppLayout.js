@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
+import { registerPush } from '../services/push';
 
 import Dashboard from '../pages/Dashboard';
 import Leads from '../pages/Leads';
@@ -34,6 +36,13 @@ function GuardedRoute({ minRole, children }) {
 
 export default function AppLayout() {
   const [sbOpen, setSbOpen] = useState(false);
+  const { toast } = useToast();
+
+  // Register this device for web push once the authenticated shell mounts.
+  // No-op until FCM is configured (VAPID key set), so it's safe pre-launch.
+  useEffect(() => {
+    registerPush((title, body) => toast(`${title}${body ? ' — ' + body : ''}`));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="app">

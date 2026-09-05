@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { apiGet, apiPost, getToken, setToken, setMe, setUnauthorizedHandler } from '../services/api';
+import { unregisterPush } from '../services/push';
 
 const AuthContext = createContext();
 export const useAuth = () => useContext(AuthContext);
@@ -61,7 +62,7 @@ export function AuthProvider({ children }) {
     return { approved: !!res.approved };
   };
 
-  const logout = () => { clear(); };
+  const logout = () => { unregisterPush(); clear(); };
 
   // Self-service reset routes a request to the admins (no mail server in play).
   const resetPassword = async (email) => {
