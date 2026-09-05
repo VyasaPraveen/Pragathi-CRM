@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument, deleteDocument, notifyAdmins } from '../services/firestore';
+import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { can, ACTIONS, EXP_STATUS, nextExpStage } from '../services/permissions';
@@ -94,6 +94,14 @@ export default function Expenditure() {
         [stage.field + 'Date']: new Date().toISOString().slice(0, 10),
         ...extra,
       });
+      // Keep the requester informed as their expenditure moves through the chain.
+      if (exp.requestedBy && exp.requestedBy !== user?.email) {
+        createNotification({ forUser: exp.requestedBy, title: `Expenditure ${stage.to}`, message: `Your expenditure "${exp.title || ''}" (${formatCurrency(exp.amount)}) is now ${stage.to}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+      }
+      // On final release, let admins know the payment went out.
+      if (stage.to === EXP_STATUS.RELEASED) {
+        notifyAdmins(users, { title: 'Expenditure Payment Released', message: `Payment released for "${exp.title || ''}" — ${formatCurrency(exp.amount)}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+      }
       toast(`Expenditure ${stage.to.toLowerCase()}`);
     } catch (e) { toast(e.message, 'er'); }
   };
@@ -106,6 +114,9 @@ export default function Expenditure() {
         rejectedBy: user?.email || 'unknown',
         rejectedDate: new Date().toISOString().slice(0, 10),
       });
+      if (exp.requestedBy && exp.requestedBy !== user?.email) {
+        createNotification({ forUser: exp.requestedBy, title: 'Expenditure Rejected', message: `Your expenditure "${exp.title || ''}" (${formatCurrency(exp.amount)}) was rejected`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+      }
       toast('Expenditure rejected', 'er');
     } catch (e) { toast(e.message, 'er'); }
   };

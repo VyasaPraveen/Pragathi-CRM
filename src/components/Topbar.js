@@ -42,12 +42,14 @@ export default function Topbar({ onMenuClick }) {
   const [showPanel, setShowPanel] = useState(false);
   const panelRef = useRef(null);
 
-  // Get current user's display name for matching notifications
+  // Get current user's identifiers for matching notifications. Notifications may
+  // target a user by display name (assignment flows) or by email (workflow flows
+  // like expenditure requestedBy / PO createdBy), so match either.
   const myName = user?.displayName || '';
+  const myEmail = user?.email || '';
 
-  // Filter notifications for current user (match by displayName)
   const myNotifications = notifications
-    .filter(n => n.forUser === myName)
+    .filter(n => n.forUser === myName || (myEmail && n.forUser === myEmail))
     .sort((a, b) => {
       const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;

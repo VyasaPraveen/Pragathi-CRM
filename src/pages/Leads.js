@@ -454,7 +454,7 @@ function LeadModal({ data, id, onSave, onClose }) {
 /* ============ LEAD DETAIL MODAL (NEW) ============ */
 function LeadDetailModal({ lead, initialTab, onClose }) {
   const [tab, setTab] = useState(initialTab || 'overview');
-  const { leadPOs, installations } = useData();
+  const { leadPOs, installations, users } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [poModal, setPOModal] = useState(null);
@@ -535,6 +535,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         recommendedBy: user?.email || 'unknown',
         recommendedDate: new Date().toISOString().slice(0, 10)
       });
+      notifyAdmins(users, { title: 'PO Awaiting Management Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" was recommended and needs Management approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('PO recommended for approval');
     } catch (e) { toast(e.message, 'er'); }
   };
@@ -550,6 +551,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         managementApprovedBy: user?.email || 'unknown',
         managementApprovalDate: new Date().toISOString().slice(0, 10)
       });
+      notifyAdmins(users, { title: 'PO Ready for Final Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" received Management approval and is ready for final approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('Management approval granted');
     } catch (e) { toast(e.message, 'er'); }
   };
@@ -566,6 +568,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         approvedBy: user?.email || 'unknown',
         approvalDate: new Date().toISOString().slice(0, 10)
       });
+      // Tell the PO creator it's approved, and notify admins for visibility.
+      if (po.createdBy) createNotification({ forUser: po.createdBy, title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
+      notifyAdmins(users, { title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('PO approved');
     } catch (e) { toast(e.message, 'er'); }
   };
