@@ -147,8 +147,14 @@ export function isSafeUrl(url) {
   const blocked = ['javascript', 'vbscript'];
   if (blocked.some(proto => trimmed.startsWith(proto + ':'))) return false;
   if (trimmed.startsWith('data:') && !trimmed.startsWith('data:image/')) return false;
-  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol); }
-  catch { return false; }
+  // Resolve against the current origin so same-origin RELATIVE URLs (e.g. our own
+  // "/uploads/..." files from device uploads) are recognised as safe, not just
+  // absolute http/https URLs. Falls back to a dummy base outside the browser.
+  try {
+    const base = (typeof window !== 'undefined' && window.location) ? window.location.origin : 'https://localhost';
+    const parsed = new URL(url, base);
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch { return false; }
 }
 
 // Security: safe HTML print — uses Blob URL instead of document.write to prevent DOM injection
