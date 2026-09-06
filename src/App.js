@@ -5,6 +5,7 @@ import { DataProvider } from './context/DataContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { Toast } from './components/SharedUI';
 import AppLayout from './components/AppLayout';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import './styles/app.css';
 
@@ -67,7 +68,9 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <AppContent />
+          <ErrorBoundary>
+            <AppContent />
+          </ErrorBoundary>
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

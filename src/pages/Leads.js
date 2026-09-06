@@ -12,6 +12,7 @@ const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Oth
 const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
 const sts = ['Interested', 'Not Interested', 'Converted', 'Not Converted'];
 const priorities = ['Hot', 'Warm', 'Cold'];
+const payModes = ['PhonePe', 'Google Pay', 'Paytm', 'Cash', 'Bank Transfer', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
 
 const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
@@ -271,6 +272,7 @@ function LeadModal({ data, id, onSave, onClose }) {
     lastFollowUp: data.lastFollowUp || '', followUpStatus: data.followUpStatus || 'New Lead',
     siteVisit: data.siteVisit || 'No', quotationSent: data.quotationSent || 'No',
     advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', status: data.status || 'Interested',
+    modeOfPayment: data.modeOfPayment || '', modeOfPaymentOther: data.modeOfPaymentOther || '',
     assignedTo: data.assignedTo || '', expectedValue: data.expectedValue || '',
     kwRequired: data.kwRequired || '', nextFollowUpDate: data.nextFollowUpDate || '',
     priority: data.priority || '', notes: data.notes || '',
@@ -429,6 +431,12 @@ function LeadModal({ data, id, onSave, onClose }) {
           {form.advancePaid === 'Yes' && (
             <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
           )}
+          <div className="fr">
+            <div className="fg"><label>Mode of Payment</label><select className="fi" value={form.modeOfPayment} onChange={e => set('modeOfPayment', e.target.value)}><option value="">-- Select --</option>{payModes.map(o => <option key={o}>{o}</option>)}</select></div>
+            {form.modeOfPayment === 'Other'
+              ? <div className="fg"><label>Specify Payment Mode</label><input className="fi" value={form.modeOfPaymentOther} onChange={e => set('modeOfPaymentOther', e.target.value)} placeholder="Enter payment method" /></div>
+              : <div className="fg" />}
+          </div>
           {form.siteVisit === 'Yes' && (
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
               <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Site Visit Details</label>
@@ -656,6 +664,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <div className="di"><div className="dl">Site Visit</div><div className="dv">{lead.siteVisit || 'No'}</div></div>
                 <div className="di"><div className="dl">Quotation Sent</div><div className="dv">{lead.quotationSent || 'No'}</div></div>
                 <div className="di"><div className="dl">Advance Paid</div><div className="dv">{lead.advancePaid || 'No'}</div></div>
+                {(lead.modeOfPayment) && <div className="di"><div className="dl">Mode of Payment</div><div className="dv">{lead.modeOfPayment === 'Other' ? (lead.modeOfPaymentOther || 'Other') : lead.modeOfPayment}</div></div>}
                 <div className="di"><div className="dl">Follow-up Status</div><div className="dv">{lead.followUpStatus || '-'}</div></div>
                 {lead.referredByName && <div className="di"><div className="dl">Referred By</div><div className="dv">{lead.referredByName} ({lead.referredByType})</div></div>}
                 {lead.siteVisit === 'Yes' && (lead.roofType || lead.structureType || lead.existingConnection) && (

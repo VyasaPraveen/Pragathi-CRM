@@ -50,10 +50,10 @@ export default function Revenue() {
         <StatCard color="re" icon="trending_down" value={formatCurrency(tE)} label="Total Expenses" />
         <StatCard color="pu" icon="savings" value={formatCurrency(tI - tE)} label="Net Profit" />
       </div>}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 18 }}>
         <div className="card">
           <div className="ch"><h3 style={{ color: 'var(--ok)' }}>Income</h3>{canEdit && <button className="btn bsm bs" onClick={() => setModal({ type: 'income' })}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>}</div>
-          <div className="cb" style={{ padding: 0 }}><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
+          <div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
             {income.slice(0, incomeVisible).map(i => <tr key={i.id}>
               <td>{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
               <td style={{ fontWeight: 600, color: 'var(--ok)' }}>{formatCurrency(i.amount)}</td>
@@ -63,13 +63,13 @@ export default function Revenue() {
                 {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
-          </tbody></table>
+          </tbody></table></div>
           {income.length > incomeVisible && <div style={{ textAlign: 'center', padding: 12 }}><button className="btn bsm bo" onClick={() => setIncomeVisible(c => c + PAGE_SIZE)}>Show More</button></div>}
           </div>
         </div>
         <div className="card">
           <div className="ch"><h3 style={{ color: 'var(--err)' }}>Expenses</h3>{canEdit && <button className="btn bsm bs" onClick={() => setModal({ type: 'expenses' })}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>}</div>
-          <div className="cb" style={{ padding: 0 }}><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
+          <div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
             {expenses.slice(0, expenseVisible).map(i => <tr key={i.id}>
               <td>{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
               <td style={{ fontWeight: 600, color: 'var(--err)' }}>{formatCurrency(i.amount)}</td>
@@ -79,7 +79,7 @@ export default function Revenue() {
                 {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
-          </tbody></table>
+          </tbody></table></div>
           {expenses.length > expenseVisible && <div style={{ textAlign: 'center', padding: 12 }}><button className="btn bsm bo" onClick={() => setExpenseVisible(c => c + PAGE_SIZE)}>Show More</button></div>}
           </div>
         </div>
