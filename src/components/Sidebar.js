@@ -10,6 +10,7 @@ const sections = [
     { to: '/leads', icon: 'leaderboard', label: 'Leads', badgeKey: 'leads' },
     { to: '/customers', icon: 'people', label: 'Customers' },
     { to: '/tasks', icon: 'task_alt', label: 'Tasks' },
+    { to: '/my-reports', icon: 'insights', label: 'My Reports & Planning' },
   ]},
   { title: 'Operations', items: [
     { to: '/installations', icon: 'solar_power', label: 'Installations' },
