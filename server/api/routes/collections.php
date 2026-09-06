@@ -35,6 +35,19 @@ function handle_collections(string $collection, string $id, string $method): voi
     enforce_create($collection, $role);
     $data = body();
     unset($data['id'], $data['createdAt'], $data['updatedAt']);
+    // Force the correct initial status for approval-chain collections so the
+    // workflow can't be bypassed by POSTing an already-advanced status (the UI
+    // always starts here; this stops the raw API from skipping stages).
+    $initialStatus = [
+      'expenditures'   => 'Requested',
+      'leaveRequests'  => 'Awaiting Replacement',
+      'leadPOs'        => 'Unapproved',
+      'purchaseOrders' => 'Draft',
+    ];
+    if (isset($initialStatus[$collection])) {
+      $data['status'] = $initialStatus[$collection];
+      if ($collection === 'leaveRequests') $data['replacementStatus'] = 'Pending';
+    }
     $newId = gen_id();
     $st = db()->prepare("INSERT INTO `$table` (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)");
     $st->execute([$newId, json_encode($data, JSON_UNESCAPED_UNICODE), $email]);

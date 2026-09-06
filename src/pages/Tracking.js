@@ -34,11 +34,14 @@ export default function Tracking() {
   const isSelf = empEmail === myEmail;
   const doc = tracking.find(t => t.employeeEmail === empEmail && t.date === date);
 
-  // Load the selected employee/date plan into the editor whenever the selection changes.
+  // Load the selected employee/date plan into the editor when the selection
+  // changes, or when the matching doc first arrives from the server (doc?.id
+  // flips from undefined → id). Keying on doc?.id (not the whole doc) means later
+  // polls with the same id don't clobber what the user is currently typing.
   useEffect(() => {
     const d = tracking.find(t => t.employeeEmail === empEmail && t.date === date);
     setSlots(d?.slots || {});
-  }, [date, empEmail]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [date, empEmail, doc?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const setSlot = (key, val) => setSlots(p => ({ ...p, [key]: val }));
 

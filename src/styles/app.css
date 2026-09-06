@@ -162,7 +162,7 @@ tbody tr:last-child td{border-bottom:none}
   .sb-x{max-width:none}.dg{grid-template-columns:1fr}
   /* Collapse fixed multi-column INLINE grids so they stack on phones
      (inline styles beat class-based media queries, hence the !important). */
-  [style*="1fr 1fr"],[style*="repeat(2"],[style*="repeat(3"],[style*="repeat(4"],[style*="repeat(5"],[style*="repeat(6"]{grid-template-columns:1fr!important}
+  [style*="1fr 1fr"],[style*="repeat(2"],[style*="repeat(3"],[style*="repeat(4"],[style*="repeat(5"],[style*="repeat(6"],[style*="150px 1fr"]{grid-template-columns:1fr!important}
   .tb{padding:0 14px;height:58px}.pt{font-size:1.02rem}
   .cb{padding:16px}.ch{padding:14px 16px}
   thead th,tbody td{padding:8px 8px}

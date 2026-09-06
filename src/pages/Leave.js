@@ -89,6 +89,10 @@ export default function Leave() {
         countedDays: countedFor(days),
         replacementName: rep ? (rep.displayName || rep.email) : (data.replacementName || ''),
         replacementEmail: rep ? rep.email : (data.replacementEmail || ''),
+        // Only the applicant can create or edit their own request, so the current
+        // user is always the employee.
+        employeeName: myName || myEmail,
+        employeeEmail: myEmail,
       };
       if (id) {
         // Re-assigning a replacement puts it back to Pending and re-notifies.
@@ -97,8 +101,6 @@ export default function Leave() {
         await updateDocument('leaveRequests', id, payload);
         toast('Leave request updated');
       } else {
-        payload.employeeName = myName || myEmail;
-        payload.employeeEmail = myEmail;
         payload.status = ST.AWAIT_REPLACEMENT;
         payload.replacementStatus = 'Pending';
         payload.requestedDate = new Date().toISOString().slice(0, 10);
