@@ -28,6 +28,9 @@ export function DataProvider({ children }) {
   const [activityLog, setActivityLog] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [users, setUsers] = useState([]);
+  const [leaveRequests, setLeaveRequests] = useState([]);
+  const [attendance, setAttendance] = useState([]);
+  const [tracking, setTracking] = useState([]);
   const [settings, setSettings] = useState({});
 
   useEffect(() => {
@@ -53,6 +56,9 @@ export function DataProvider({ children }) {
       listenCollection('activityLog', (d) => d && setActivityLog(d)),
       listenCollection('notifications', (d) => d && setNotifications(d)),
       listenCollection('users', (d) => d && setUsers(d)),
+      listenCollection('leaveRequests', (d) => d && setLeaveRequests(d)),
+      listenCollection('attendance', (d) => d && setAttendance(d)),
+      listenCollection('tracking', (d) => d && setTracking(d)),
     ];
 
     // App-wide settings (workflow gating toggle, etc.) — poll + focus refresh.
@@ -78,7 +84,8 @@ export function DataProvider({ children }) {
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
-      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, bomTemplates, activityLog, notifications, users, settings
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, bomTemplates, activityLog, notifications, users,
+      leaveRequests, attendance, tracking, settings
     }}>
       {children}
     </DataContext.Provider>

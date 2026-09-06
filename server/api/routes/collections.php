@@ -127,6 +127,21 @@ function enforce_status_transition(string $collection, string $role, array $patc
       if ($from !== $prev[$to]) fail(409, "Out of order: this expenditure must be '{$prev[$to]}' before it can move to '{$to}'.");
     }
   }
+
+  // Leave requests: only the Sales Manager (or Management/Admin/Owner) may
+  // approve or reject; the final approval step follows replacement acceptance (req #1).
+  if ($collection === 'leaveRequests') {
+    if (in_array($to, ['Approved', 'Rejected'], true)) {
+      $r = normalize_role($role);
+      if ($role !== 'super_admin' && !in_array($r, ['sales_manager', 'management', 'admin'], true)) {
+        fail(403, 'Only the Sales Manager can approve or reject leave.');
+      }
+      // The manager step is reachable only after the replacement has accepted.
+      if ($to === 'Approved' && ($existing['status'] ?? '') !== 'Awaiting Manager') {
+        fail(409, 'Leave must be accepted by the assigned replacement before the manager can approve it.');
+      }
+    }
+  }
 }
 
 // Is the mandatory 10% advance recorded for this lead-sourced PO? Mirrors

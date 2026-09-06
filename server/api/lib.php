@@ -163,6 +163,7 @@ function collection_table(string $collection): ?string {
     'influencers' => 'influencers', 'employeeTasks' => 'employee_tasks', 'leadPOs' => 'lead_pos',
     'expenditures' => 'expenditures', 'bomTemplates' => 'bom_templates',
     'activityLog' => 'activity_log', 'notifications' => 'notifications',
+    'leaveRequests' => 'leave_requests', 'attendance' => 'attendance', 'tracking' => 'tracking',
   ];
   return $map[$collection] ?? null;
 }

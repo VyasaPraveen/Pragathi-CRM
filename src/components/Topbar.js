@@ -11,7 +11,8 @@ const titles = {
   '/revenue': 'Revenue', '/reports': 'Reports', '/team': 'Team Management',
   '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings',
   '/purchase-orders': 'Purchase Orders', '/retailers': 'Retailers', '/influencers': 'Influencers',
-  '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log'
+  '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log',
+  '/leave': 'Leave Management'
 };
 
 const typeIcons = {
