@@ -45,7 +45,8 @@ export const statusClass = (s) => {
     'Overdue': 'st-r', 'High': 'st-r', 'Medium': 'st-o', 'Low': 'st-g',
     'Inactive': 'st-x',
     'Unapproved': 'st-o', 'Recommended': 'st-b',
-    'Requested': 'st-o', 'Verified': 'st-b', 'Management Approved': 'st-p'
+    'Requested': 'st-o', 'Verified': 'st-b', 'Management Approved': 'st-p',
+    'Awaiting Replacement': 'st-o', 'Awaiting Manager': 'st-b'
   };
   return m[s] || 'st-x';
 };
