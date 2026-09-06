@@ -109,7 +109,18 @@ function enforce_create(string $collection, string $role): void {
 
 // Enforce the approval-chain transitions server-side (can't be forged via API).
 function enforce_status_transition(string $collection, string $role, array $patch, array $existing): void {
-  if (!array_key_exists('status', $patch)) return;
+  // A patch with no `status` key is a plain field edit. For approval-chain
+  // collections, lock those once the record has left its initial stage so
+  // amounts/details can't be altered after review/approval (only Admin/Owner may
+  // still correct them). Other collections keep the open edit model.
+  if (!array_key_exists('status', $patch)) {
+    static $initialOnly = ['expenditures' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'leadPOs' => 'Unapproved', 'purchaseOrders' => 'Draft'];
+    if (isset($initialOnly[$collection]) && $role !== 'super_admin' && !has_access($role, 'admin')) {
+      $cur = $existing['status'] ?? $initialOnly[$collection];
+      if ($cur !== $initialOnly[$collection]) fail(403, 'This record has entered its approval workflow and can no longer be edited.');
+    }
+    return;
+  }
   $to = $patch['status'];
 
   if ($collection === 'leadPOs' || $collection === 'purchaseOrders') {
@@ -133,6 +144,13 @@ function enforce_status_transition(string $collection, string $role, array $patc
     if ($to === 'Verified'    && !can($role, 'expenditure_verified'))       fail(403, 'Not authorised to review (Accountant)');
     if ($to === 'Approved'    && !can($role, 'expenditure_approve'))        fail(403, 'Only Management/Owner can give final approval');
     if ($to === 'Released'    && !can($role, 'payment_release'))            fail(403, 'Only the Accountant can release payment');
+    // Rejection: only a chain participant may reject, and not once paid/rejected.
+    if ($to === 'Rejected') {
+      $r = normalize_role($role);
+      $chain = ['technical_manager', 'operation_manager', 'sales_manager', 'accountant', 'management', 'admin'];
+      if ($role !== 'super_admin' && !in_array($r, $chain, true)) fail(403, 'Not authorised to reject this expenditure');
+      if (in_array($existing['status'] ?? '', ['Released', 'Rejected'], true)) fail(409, 'A released or already-rejected expenditure cannot be rejected.');
+    }
     // Strict step-by-step ordering — a request may not skip a stage (req #12).
     $prev = ['Recommended' => 'Requested', 'Verified' => 'Recommended', 'Approved' => 'Verified', 'Released' => 'Approved'];
     if (isset($prev[$to])) {

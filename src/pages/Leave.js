@@ -94,6 +94,7 @@ export default function Leave() {
         employeeName: myName || myEmail,
         employeeEmail: myEmail,
       };
+      let savedId = id;
       if (id) {
         // Re-assigning a replacement puts it back to Pending and re-notifies.
         payload.replacementStatus = 'Pending';
@@ -104,7 +105,7 @@ export default function Leave() {
         payload.status = ST.AWAIT_REPLACEMENT;
         payload.replacementStatus = 'Pending';
         payload.requestedDate = new Date().toISOString().slice(0, 10);
-        await addDocument('leaveRequests', payload);
+        savedId = await addDocument('leaveRequests', payload);
         toast('Leave request submitted');
       }
       if (payload.replacementEmail) {
@@ -112,7 +113,7 @@ export default function Leave() {
           forUser: payload.replacementEmail,
           title: 'Leave Replacement Request',
           message: `${payload.employeeName || 'A colleague'} asked you to cover their work (${payload.leaveType}, ${formatDate(payload.fromDate)}${payload.toDate && payload.toDate !== payload.fromDate ? '–' + formatDate(payload.toDate) : ''}). Please accept or decline.`,
-          type: 'task', module: 'leaveRequests', relatedId: id || '',
+          type: 'task', module: 'leaveRequests', relatedId: savedId || '',
         });
       }
       setModal(null);

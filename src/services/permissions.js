@@ -119,7 +119,8 @@ export function advanceGate(po, lead) {
     cost,
     required,
     paid,
-    // If we don't know the cost yet, don't hard-block on an unknowable figure.
+    // Until a cost (agreed price / total value) is set, the 10% requirement can't
+    // be verified, so the PO is not yet allowed to move for approval.
     ok: cost <= 0 ? false : paid >= required,
   };
 }

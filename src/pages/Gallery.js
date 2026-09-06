@@ -84,7 +84,8 @@ function GalleryModal({ data, id, onSave, onClose }) {
     // When editing an existing photo we only replace with a single image.
     const list = id ? files.slice(0, 1) : files;
     setPicked(list.map(file => ({ file, preview: URL.createObjectURL(file) })));
-    setUrl(''); // a device photo takes precedence over any typed URL
+    // Note: a picked device photo takes precedence at submit; we keep any existing
+    // URL so that removing the pick (in edit mode) falls back to the original image.
   };
 
   const removePicked = (i) => setPicked(p => {
