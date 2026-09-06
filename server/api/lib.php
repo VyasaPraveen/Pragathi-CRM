@@ -117,19 +117,19 @@ function require_auth(): array {
 }
 
 // ── RBAC (server-side mirror of src/services/permissions.js) ─────────────────
-const ALL_ROLES = ['executive','technical_manager','operation_manager','accountant','admin','management','bco','technician','sales_manager'];
+const ALL_ROLES = ['executive','technical_manager','operation_manager','accountant','admin','management','bco','technician','sales_manager','warehouse_admin'];
 const ACTION_ROLES = [
   'lead_entry'                 => ALL_ROLES,
   'site_visit'                 => ['executive','technical_manager'],
-  'po_record'                  => ['operation_manager','admin'],
+  'po_record'                  => ['operation_manager','admin','warehouse_admin'],
   'po_recommendation'          => ['operation_manager','admin'],
   'po_management_approval'     => ['management'],
   'po_approval'                => ['admin','management'],
   'expenditure_request'        => ALL_ROLES,
   'expenditure_recommendation' => ['technical_manager','operation_manager','sales_manager'],
-  'expenditure_verified'       => ['operation_manager','admin','management','bco'],
-  'expenditure_approve'        => ['admin','management'],
-  'payment_release'            => ['accountant','admin','management'],
+  'expenditure_verified'       => ['accountant'],   // Accountant review (req #12)
+  'expenditure_approve'        => ['management'],    // Management/Owner final approval
+  'payment_release'            => ['accountant'],    // Accountant releases payment
 ];
 const LEGACY_ROLE_MAP = ['manager'=>'operation_manager','coordinator'=>'bco','engineer'=>'technician','staff'=>'executive'];
 
@@ -145,7 +145,7 @@ function can(?string $role, string $action): bool {
 }
 const ROLE_LEVELS = [
   'super_admin'=>7,'management'=>6,'admin'=>5,
-  'manager'=>4,'operation_manager'=>4,'technical_manager'=>4,'sales_manager'=>4,
+  'manager'=>4,'operation_manager'=>4,'technical_manager'=>4,'sales_manager'=>4,'warehouse_admin'=>4,
   'coordinator'=>3,'accountant'=>3,'bco'=>3,
   'engineer'=>2,'executive'=>2,'technician'=>2,'staff'=>1,
 ];

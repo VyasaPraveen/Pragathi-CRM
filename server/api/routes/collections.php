@@ -117,9 +117,15 @@ function enforce_status_transition(string $collection, string $role, array $patc
 
   if ($collection === 'expenditures') {
     if ($to === 'Recommended' && !can($role, 'expenditure_recommendation')) fail(403, 'Not authorised to recommend');
-    if ($to === 'Verified'    && !can($role, 'expenditure_verified'))       fail(403, 'Not authorised to verify');
-    if ($to === 'Approved'    && !can($role, 'expenditure_approve'))        fail(403, 'Not authorised to approve');
-    if ($to === 'Released'    && !can($role, 'payment_release'))            fail(403, 'Not authorised to release payment');
+    if ($to === 'Verified'    && !can($role, 'expenditure_verified'))       fail(403, 'Not authorised to review (Accountant)');
+    if ($to === 'Approved'    && !can($role, 'expenditure_approve'))        fail(403, 'Only Management/Owner can give final approval');
+    if ($to === 'Released'    && !can($role, 'payment_release'))            fail(403, 'Only the Accountant can release payment');
+    // Strict step-by-step ordering — a request may not skip a stage (req #12).
+    $prev = ['Recommended' => 'Requested', 'Verified' => 'Recommended', 'Approved' => 'Verified', 'Released' => 'Approved'];
+    if (isset($prev[$to])) {
+      $from = $existing['status'] ?? 'Requested';
+      if ($from !== $prev[$to]) fail(409, "Out of order: this expenditure must be '{$prev[$to]}' before it can move to '{$to}'.");
+    }
   }
 }
 

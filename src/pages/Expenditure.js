@@ -12,9 +12,10 @@ const PAGE_SIZE = 20;
 
 // Which roles may act at the current stage — used to decide whether to reject too.
 const canRejectAtStage = (role, status) => {
+  if (status === EXP_STATUS.REQUESTED) return can(role, ACTIONS.EXPENDITURE_RECOMMENDATION);
   if (status === EXP_STATUS.RECOMMENDED) return can(role, ACTIONS.EXPENDITURE_VERIFIED);
   if (status === EXP_STATUS.VERIFIED) return can(role, ACTIONS.EXPENDITURE_APPROVE);
-  if (status === EXP_STATUS.REQUESTED) return can(role, ACTIONS.EXPENDITURE_RECOMMENDATION);
+  if (status === EXP_STATUS.APPROVED) return can(role, ACTIONS.PAYMENT_RELEASE);
   return false;
 };
 
@@ -28,6 +29,20 @@ export default function Expenditure() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   const canRequest = can(role, ACTIONS.EXPENDITURE_REQUEST);
+
+  // Notify every user authorised for `action` that an expenditure now needs their
+  // step — this is how the request "moves to" the next person in the chain.
+  const notifyActors = (action, label, exp) => {
+    const seen = new Set();
+    (users || []).forEach(u => {
+      if (u.role === 'super_admin') return; // owner gets admin-level notices already
+      if (!can(u.role, action)) return;
+      const key = u.displayName || u.email;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      createNotification({ forUser: key, title: `Expenditure needs your ${label}`, message: `"${exp.title || ''}" (${formatCurrency(exp.amount)}) is awaiting your ${label.toLowerCase()}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+    });
+  };
 
   const statuses = ['all', EXP_STATUS.REQUESTED, EXP_STATUS.RECOMMENDED, EXP_STATUS.VERIFIED, EXP_STATUS.APPROVED, EXP_STATUS.RELEASED, EXP_STATUS.REJECTED];
 
@@ -69,6 +84,8 @@ export default function Expenditure() {
         cleaned.requestedDate = new Date().toISOString().slice(0, 10);
         const newId = await addDocument('expenditures', cleaned);
         notifyAdmins(users, { title: 'New Expenditure Request', message: `${cleaned.title} — ${formatCurrency(cleaned.amount)}`, type: 'info', module: 'expenditure', relatedId: newId });
+        // Route it to the concerned managers who can recommend it.
+        notifyActors(ACTIONS.EXPENDITURE_RECOMMENDATION, 'Recommendation', { title: cleaned.title, amount: cleaned.amount, id: newId });
         toast('Expenditure requested');
       }
       setModal(null);
@@ -101,6 +118,10 @@ export default function Expenditure() {
       // On final release, let admins know the payment went out.
       if (stage.to === EXP_STATUS.RELEASED) {
         notifyAdmins(users, { title: 'Expenditure Payment Released', message: `Payment released for "${exp.title || ''}" — ${formatCurrency(exp.amount)}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+      } else {
+        // Hand the request to whoever must act on the next stage.
+        const next = nextExpStage(stage.to);
+        if (next) notifyActors(next.action, next.label, exp);
       }
       toast(`Expenditure ${stage.to.toLowerCase()}`);
     } catch (e) { toast(e.message, 'er'); }
@@ -173,9 +194,9 @@ export default function Expenditure() {
               <td style={{ fontSize: '.76rem', color: 'var(--muted)', minWidth: 150 }}>
                 {[
                   exp.recommendedBy && 'Recommended',
-                  exp.verifiedBy && 'Verified',
-                  exp.approvedBy && 'Approved',
-                  exp.releasedBy && 'Released',
+                  exp.verifiedBy && 'Accountant Reviewed',
+                  exp.approvedBy && 'Management Approved',
+                  exp.releasedBy && 'Paid',
                 ].filter(Boolean).join(' → ') || 'Awaiting recommendation'}
               </td>
               <td style={{ textAlign: 'right' }}>
@@ -213,7 +234,7 @@ export default function Expenditure() {
       {/* Workflow legend */}
       <div style={{ marginTop: 12, fontSize: '.76rem', color: 'var(--muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <span className="material-icons-round" style={{ fontSize: 15 }}>info</span>
-        Flow: Request → Recommendation → Verified → Approve → Payment Release. Each step is limited to authorised roles.
+        Flow: Request → Recommend (concerned manager) → Accountant Review → Management/Owner Approval → Payment Release (Accountant). Steps are role-restricted and must follow this order — no stage can be skipped.
       </div>
 
       {modal && <ExpModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}

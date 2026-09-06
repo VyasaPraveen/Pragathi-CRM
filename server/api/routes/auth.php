@@ -208,6 +208,7 @@ function role_from_designation(string $d): string {
     'Operation Manager' => 'operation_manager', 'Technical Manager' => 'technical_manager',
     'Sales Manager' => 'sales_manager', 'Accountant' => 'accountant', 'BCO' => 'bco',
     'Executive' => 'executive', 'Technician' => 'technician',
+    'Warehouse Admin' => 'warehouse_admin',
     // legacy aliases
     'Operations Manager' => 'operation_manager', 'Admin Manager' => 'admin',
     'Business Coordinator' => 'bco', 'Quality Coordinator' => 'operation_manager',

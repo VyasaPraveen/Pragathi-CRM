@@ -83,7 +83,7 @@ export const ROLE_LEVELS = {
   management: 6,
   admin: 5,
   // Manager-tier (level 4)
-  manager: 4, operation_manager: 4, technical_manager: 4, sales_manager: 4,
+  manager: 4, operation_manager: 4, technical_manager: 4, sales_manager: 4, warehouse_admin: 4,
   // Coordinator-tier (level 3)
   coordinator: 3, accountant: 3, bco: 3,
   // Field/operational-tier (level 2)
@@ -109,6 +109,7 @@ export const DESIGNATIONS = [
   { label: 'BCO', role: 'bco' },
   { label: 'Executive', role: 'executive' },
   { label: 'Technician', role: 'technician' },
+  { label: 'Warehouse Admin', role: 'warehouse_admin' },
 ];
 
 // Legacy designation labels → nearest new role (so re-assigning an old

@@ -18,6 +18,7 @@ export const ROLES = [
   { key: 'bco', label: 'BCO' },
   { key: 'technician', label: 'Technician' },
   { key: 'sales_manager', label: 'Sales Manager' },
+  { key: 'warehouse_admin', label: 'Warehouse Admin' },
 ];
 
 export const ALL_ROLE_KEYS = ROLES.map(r => r.key);
@@ -47,16 +48,19 @@ export const ACTIONS = {
 export const ACTION_ROLES = {
   [ACTIONS.LEAD_ENTRY]: [...ALL_ROLE_KEYS], // all 1–9
   [ACTIONS.SITE_VISIT]: ['executive', 'technical_manager'],
-  [ACTIONS.PO_RECORD]: ['operation_manager', 'admin'],
+  [ACTIONS.PO_RECORD]: ['operation_manager', 'admin', 'warehouse_admin'],
   [ACTIONS.PO_RECOMMENDATION]: ['operation_manager', 'admin'],
   // Management permission is mandatory before a PO can be approved
   [ACTIONS.PO_MANAGEMENT_APPROVAL]: ['management'],
   [ACTIONS.PO_APPROVAL]: ['admin', 'management'],
-  [ACTIONS.EXPENDITURE_REQUEST]: [...ALL_ROLE_KEYS], // all 1–9
+  [ACTIONS.EXPENDITURE_REQUEST]: [...ALL_ROLE_KEYS], // anyone may raise a request
+  // Approval/payment chain (req #12): requester → concerned approval (Recommend)
+  // → Accountant review → Management/Owner final approval → back to Accountant to
+  // release payment. super_admin (Owner) always overrides via can().
   [ACTIONS.EXPENDITURE_RECOMMENDATION]: ['technical_manager', 'operation_manager', 'sales_manager'],
-  [ACTIONS.EXPENDITURE_VERIFIED]: ['operation_manager', 'admin', 'management', 'bco'],
-  [ACTIONS.EXPENDITURE_APPROVE]: ['admin', 'management'],
-  [ACTIONS.PAYMENT_RELEASE]: ['accountant', 'admin', 'management'],
+  [ACTIONS.EXPENDITURE_VERIFIED]: ['accountant'],   // Accountant review step
+  [ACTIONS.EXPENDITURE_APPROVE]: ['management'],     // Management/Owner final approval
+  [ACTIONS.PAYMENT_RELEASE]: ['accountant'],         // Accountant releases the payment
 };
 
 // Legacy role keys (from before the 9-role system) → nearest new role, so
@@ -133,8 +137,8 @@ export const EXP_STATUS = {
 // Ordered stages of the expenditure chain, each with its gating action.
 export const EXP_STAGES = [
   { from: EXP_STATUS.REQUESTED, to: EXP_STATUS.RECOMMENDED, action: ACTIONS.EXPENDITURE_RECOMMENDATION, label: 'Recommend', field: 'recommendedBy' },
-  { from: EXP_STATUS.RECOMMENDED, to: EXP_STATUS.VERIFIED, action: ACTIONS.EXPENDITURE_VERIFIED, label: 'Verify', field: 'verifiedBy' },
-  { from: EXP_STATUS.VERIFIED, to: EXP_STATUS.APPROVED, action: ACTIONS.EXPENDITURE_APPROVE, label: 'Approve', field: 'approvedBy' },
+  { from: EXP_STATUS.RECOMMENDED, to: EXP_STATUS.VERIFIED, action: ACTIONS.EXPENDITURE_VERIFIED, label: 'Accountant Review', field: 'verifiedBy' },
+  { from: EXP_STATUS.VERIFIED, to: EXP_STATUS.APPROVED, action: ACTIONS.EXPENDITURE_APPROVE, label: 'Management Approval', field: 'approvedBy' },
   { from: EXP_STATUS.APPROVED, to: EXP_STATUS.RELEASED, action: ACTIONS.PAYMENT_RELEASE, label: 'Release Payment', field: 'releasedBy' },
 ];
 
