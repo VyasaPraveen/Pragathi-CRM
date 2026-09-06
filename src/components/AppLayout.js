@@ -28,6 +28,8 @@ import EmployeeTasks from '../pages/EmployeeTasks';
 import UserManagement from '../pages/UserManagement';
 import ActivityLog from '../pages/ActivityLog';
 import Leave from '../pages/Leave';
+import Attendance from '../pages/Attendance';
+import Tracking from '../pages/Tracking';
 
 function GuardedRoute({ minRole, children }) {
   const { role } = useAuth();
@@ -71,6 +73,8 @@ export default function AppLayout() {
             <Route path="/influencers" element={<Influencers />} />
             <Route path="/tasks" element={<EmployeeTasks />} />
             <Route path="/leave" element={<Leave />} />
+            <Route path="/attendance" element={<Attendance />} />
+            <Route path="/tracking" element={<Tracking />} />
             <Route path="/user-management" element={<GuardedRoute minRole="admin"><UserManagement /></GuardedRoute>} />
             <Route path="/activity-log" element={<GuardedRoute minRole="admin"><ActivityLog /></GuardedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />

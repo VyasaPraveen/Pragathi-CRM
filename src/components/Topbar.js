@@ -12,7 +12,7 @@ const titles = {
   '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings',
   '/purchase-orders': 'Purchase Orders', '/retailers': 'Retailers', '/influencers': 'Influencers',
   '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log',
-  '/leave': 'Leave Management'
+  '/leave': 'Leave Management', '/attendance': 'Staff Attendance', '/tracking': 'Work Tracking'
 };
 
 const typeIcons = {

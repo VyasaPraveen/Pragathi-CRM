@@ -24,6 +24,8 @@ const sections = [
   ]},
   { title: 'People', items: [
     { to: '/team', icon: 'groups', label: 'Team' },
+    { to: '/attendance', icon: 'how_to_reg', label: 'Attendance' },
+    { to: '/tracking', icon: 'schedule', label: 'Tracking' },
     { to: '/leave', icon: 'event_available', label: 'Leave' },
     { to: '/reminders', icon: 'notifications_active', label: 'Reminders', badgeKey: 'reminders' },
     { to: '/retailers', icon: 'storefront', label: 'Retailers' },
