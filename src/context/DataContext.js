@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
-import { listenCollection } from '../services/firestore';
+import { sortDocs } from '../services/firestore';
 import { apiGet } from '../services/api';
 
 const DataContext = createContext();
@@ -35,48 +35,75 @@ export function DataProvider({ children }) {
 
   useEffect(() => {
     if (!user) return;
-    const unsubs = [
-      listenCollection('leads', (d) => d && setLeads(d)),
-      listenCollection('customers', (d) => d && setCustomers(d)),
-      listenCollection('installations', (d) => d && setInstallations(d)),
-      listenCollection('team', (d) => d && setTeam(d), 'name', 'asc'),
-      listenCollection('materials', (d) => d && setMaterials(d)),
-      listenCollection('ongoingWork', (d) => d && setOngoingWork(d)),
-      listenCollection('income', (d) => d && setIncome(d), 'date', 'desc'),
-      listenCollection('expenses', (d) => d && setExpenses(d), 'date', 'desc'),
-      listenCollection('reminders', (d) => d && setReminders(d)),
-      listenCollection('gallery', (d) => d && setGallery(d)),
-      listenCollection('purchaseOrders', (d) => d && setPurchaseOrders(d)),
-      listenCollection('retailers', (d) => d && setRetailers(d)),
-      listenCollection('influencers', (d) => d && setInfluencers(d)),
-      listenCollection('employeeTasks', (d) => d && setEmployeeTasks(d)),
-      listenCollection('leadPOs', (d) => d && setLeadPOs(d)),
-      listenCollection('expenditures', (d) => d && setExpenditures(d)),
-      listenCollection('bomTemplates', (d) => d && setBomTemplates(d)),
-      listenCollection('activityLog', (d) => d && setActivityLog(d)),
-      listenCollection('notifications', (d) => d && setNotifications(d)),
-      listenCollection('users', (d) => d && setUsers(d)),
-      listenCollection('leaveRequests', (d) => d && setLeaveRequests(d)),
-      listenCollection('attendance', (d) => d && setAttendance(d)),
-      listenCollection('tracking', (d) => d && setTracking(d)),
-    ];
 
-    // App-wide settings (workflow gating toggle, etc.) — poll + focus refresh.
-    let settingsStopped = false, sTimer = null;
-    const pollSettings = async () => {
-      try { const s = await apiGet('/settings'); if (!settingsStopped) setSettings(s || {}); }
-      catch { /* ignore */ }
-      finally { if (!settingsStopped) sTimer = setTimeout(pollSettings, 30000); }
+    // All document collections are fetched in ONE batched request (one DB
+    // connection) instead of one request per collection — this keeps the app
+    // well under the host's per-user MySQL connection limit even with several
+    // tabs/users open. `users` (directory) and `settings` are separate routes.
+    // [name, setter, orderByField, dir] — omit sort → createdAt desc (batch default).
+    const cfg = [
+      ['leads', setLeads], ['customers', setCustomers], ['installations', setInstallations],
+      ['team', setTeam, 'name', 'asc'], ['materials', setMaterials], ['ongoingWork', setOngoingWork],
+      ['income', setIncome, 'date', 'desc'], ['expenses', setExpenses, 'date', 'desc'],
+      ['reminders', setReminders], ['gallery', setGallery], ['purchaseOrders', setPurchaseOrders],
+      ['retailers', setRetailers], ['influencers', setInfluencers], ['employeeTasks', setEmployeeTasks],
+      ['leadPOs', setLeadPOs], ['expenditures', setExpenditures], ['bomTemplates', setBomTemplates],
+      ['activityLog', setActivityLog], ['notifications', setNotifications],
+      ['leaveRequests', setLeaveRequests], ['attendance', setAttendance], ['tracking', setTracking],
+    ];
+    const names = cfg.map(c => c[0]).join(',');
+
+    let stopped = false;
+    let pollTimer = null;
+    let refreshTimer = null;
+
+    const distribute = (batch) => {
+      cfg.forEach(([name, setter, ob, dir]) => {
+        const docs = Array.isArray(batch?.[name]) ? batch[name] : [];
+        setter(sortDocs(docs, ob || 'createdAt', dir || 'desc'));
+      });
     };
-    const onFocus = () => { if (!settingsStopped) pollSettings(); };
+
+    const fetchAll = async () => {
+      try {
+        // Batch + directory run concurrently (2 connections); settings follows.
+        const [batch, dir] = await Promise.all([
+          apiGet('/batch?names=' + encodeURIComponent(names)),
+          apiGet('/auth/directory').catch(() => null),
+        ]);
+        if (stopped) return;
+        distribute(batch || {});
+        if (dir && Array.isArray(dir.users)) setUsers(dir.users);
+      } catch { /* transient (e.g. DB busy) — the next tick retries */ }
+      try {
+        const s = await apiGet('/settings');
+        if (!stopped) setSettings(s || {});
+      } catch { /* ignore */ }
+    };
+
+    const tick = async () => {
+      await fetchAll();
+      if (!stopped) pollTimer = setTimeout(tick, 15000);
+    };
+
+    // Refetch on window focus and after any local write (pps:refresh), coalescing
+    // rapid bursts into a single batched fetch.
+    const onFocus = () => { if (!stopped) fetchAll(); };
+    const onRefresh = () => {
+      if (stopped) return;
+      clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(fetchAll, 300);
+    };
     window.addEventListener('focus', onFocus);
-    pollSettings();
+    window.addEventListener('pps:refresh', onRefresh);
+    tick();
 
     return () => {
-      unsubs.forEach(u => u());
-      settingsStopped = true;
-      if (sTimer) clearTimeout(sTimer);
+      stopped = true;
+      if (pollTimer) clearTimeout(pollTimer);
+      if (refreshTimer) clearTimeout(refreshTimer);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('pps:refresh', onRefresh);
     };
   }, [user]);
 

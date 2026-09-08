@@ -31,6 +31,14 @@ try {
       handle_collections($seg[1] ?? '', $seg[2] ?? '', $method);
       break;
 
+    // Batch read: GET /batch?names=leads,customers,... → { leads:[…], … } in ONE
+    // request/one DB connection, so the client's periodic refresh doesn't open a
+    // separate connection per collection (avoids max_user_connections exhaustion).
+    case 'batch':
+      require __DIR__ . '/routes/collections.php';
+      handle_batch($method);
+      break;
+
     case 'settings':
       require __DIR__ . '/routes/settings.php';
       handle_settings($method);

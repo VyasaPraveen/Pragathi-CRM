@@ -40,7 +40,7 @@ function trimStrings(obj) {
 }
 
 // ── client-side sort to preserve the old orderBy contract ────────────────────
-function sortDocs(docs, ob = 'createdAt', dir = 'desc') {
+export function sortDocs(docs, ob = 'createdAt', dir = 'desc') {
   const mul = dir === 'asc' ? 1 : -1;
   return [...docs].sort((a, b) => {
     const av = a[ob], bv = b[ob];

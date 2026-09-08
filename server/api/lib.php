@@ -24,14 +24,22 @@ function db(): PDO {
   if ($pdo === null) {
     $d = cfg()['db'];
     $dsn = "mysql:host={$d['host']};dbname={$d['name']};charset={$d['charset']}";
-    try {
-      $pdo = new PDO($dsn, $d['user'], $d['pass'], [
-        PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
-        PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
-        PDO::ATTR_EMULATE_PREPARES   => false,
-      ]);
-    } catch (Throwable $e) {
-      fail(500, 'Database connection failed');
+    $opts = [
+      PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+      PDO::ATTR_EMULATE_PREPARES   => false,
+    ];
+    // Retry briefly: on shared hosting a burst can momentarily hit
+    // max_user_connections. Connections are short-lived, so a short backoff
+    // usually succeeds. Return 503 (not 500/401) so the client shows a transient
+    // error and never mistakes it for a dead session.
+    $attempts = 0;
+    while (true) {
+      try { $pdo = new PDO($dsn, $d['user'], $d['pass'], $opts); break; }
+      catch (Throwable $e) {
+        if (++$attempts >= 3) { error_log('DB connect failed: ' . $e->getMessage()); fail(503, 'Database busy, please retry'); }
+        usleep(200000); // 200ms
+      }
     }
   }
   return $pdo;

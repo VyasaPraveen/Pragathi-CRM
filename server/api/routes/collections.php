@@ -88,6 +88,24 @@ function handle_collections(string $collection, string $id, string $method): voi
   fail(405, 'Method not allowed');
 }
 
+// Batch read of several collections in a single request (one DB connection).
+// GET /batch?names=leads,customers,...  → { leads:[…docs…], customers:[…], … }
+// Unknown names are skipped silently. Read-only; same auth as a normal GET.
+function handle_batch(string $method): void {
+  require_auth();
+  if ($method !== 'GET') fail(405, 'Method not allowed');
+  $names = array_filter(array_map('trim', explode(',', (string)($_GET['names'] ?? ''))));
+  $out = [];
+  foreach ($names as $name) {
+    if (isset($out[$name])) continue;
+    $table = collection_table($name);
+    if (!$table) continue;
+    $rows = db()->query("SELECT * FROM `$table` ORDER BY created_at DESC")->fetchAll();
+    $out[$name] = array_map('row_to_doc', $rows);
+  }
+  json_out($out);
+}
+
 // Who may CREATE in a given collection.
 function enforce_create(string $collection, string $role): void {
   switch ($collection) {
