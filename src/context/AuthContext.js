@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { apiGet, apiPost, getToken, setToken, setMe, setUnauthorizedHandler } from '../services/api';
 import { unregisterPush } from '../services/push';
 
@@ -11,6 +11,7 @@ export function AuthProvider({ children }) {
   const [designation, setDesignation] = useState('');
   const [approved, setApproved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const verifyingRef = useRef(false);
 
   // Apply a user object (from login/signup/me) to context + the module holder.
   const applyUser = (u) => {
@@ -30,8 +31,24 @@ export function AuthProvider({ children }) {
   // On boot: if we have a token, fetch the current user.
   useEffect(() => {
     let cancelled = false;
-    // Log out automatically if any authenticated request returns 401.
-    setUnauthorizedHandler(() => clear());
+    // A 401 on a background request (e.g. a 15s poll) is NOT taken as proof the
+    // session is dead — a dropped/again-needed auth header can cause a stray 401.
+    // Verify with a single /auth/me before logging out, so a transient 401 never
+    // wipes the screen and the user's unsaved work. Only a confirmed 401 (or a
+    // missing token) actually signs the user out.
+    setUnauthorizedHandler(async () => {
+      if (verifyingRef.current) return;      // one verification at a time
+      if (!getToken()) return;               // already signed out
+      verifyingRef.current = true;
+      try {
+        await apiGet('/auth/me', { skipAuthHandler: true });
+        // Still valid → the 401 was transient; keep the user where they are.
+      } catch (e) {
+        if (e && e.status === 401) clear();   // session genuinely invalid
+      } finally {
+        verifyingRef.current = false;
+      }
+    });
     (async () => {
       if (!getToken()) { setLoading(false); return; }
       try {

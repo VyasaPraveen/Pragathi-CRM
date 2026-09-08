@@ -26,7 +26,7 @@ export function getMe() { return _me; }
 let _onUnauthorized = null;
 export function setUnauthorizedHandler(fn) { _onUnauthorized = fn; }
 
-async function request(path, { method = 'GET', body, auth = true, isForm = false } = {}) {
+async function request(path, { method = 'GET', body, auth = true, isForm = false, skipAuthHandler = false } = {}) {
   const headers = {};
   if (!isForm) headers['Content-Type'] = 'application/json';
   if (auth) {
@@ -47,8 +47,10 @@ async function request(path, { method = 'GET', body, auth = true, isForm = false
   const text = await res.text();
   if (text) { try { data = JSON.parse(text); } catch { data = { error: text }; } }
   if (!res.ok) {
-    // An authenticated request rejected as unauthorized → session is dead.
-    if (res.status === 401 && auth && _onUnauthorized) _onUnauthorized();
+    // An authenticated request came back 401. Hand it to the app to decide
+    // whether the session is really dead (it verifies before logging out) — but
+    // never for the verification call itself (skipAuthHandler), to avoid a loop.
+    if (res.status === 401 && auth && _onUnauthorized && !skipAuthHandler) _onUnauthorized();
     const msg = (data && data.error) ? data.error : `Request failed (${res.status})`;
     const err = new Error(msg);
     err.status = res.status;
