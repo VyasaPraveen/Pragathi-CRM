@@ -3,6 +3,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
 import { apiGet, apiPatch } from '../services/api';
+import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../services/permissions';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -36,25 +37,6 @@ const NEW_BOM_MATERIALS = [
   { materialName: 'DISCOM Charges', unit: 'Rs.', make: '' },
   { materialName: 'Ladder (Height)', unit: 'Nos', make: '' },
   { materialName: 'MCS - Cleaning System', unit: 'Nos', make: '' },
-];
-
-// Module permissions that admin can toggle per user
-const PERMISSION_MODULES = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
-  { key: 'leads', label: 'Leads', icon: 'leaderboard' },
-  { key: 'customers', label: 'Customers', icon: 'people' },
-  { key: 'installations', label: 'Installations', icon: 'solar_power' },
-  { key: 'ongoing_work', label: 'Ongoing Work', icon: 'engineering' },
-  { key: 'materials', label: 'Materials', icon: 'inventory_2' },
-  { key: 'revenue', label: 'Revenue', icon: 'account_balance' },
-  { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long' },
-  { key: 'retailers', label: 'Retailers', icon: 'storefront' },
-  { key: 'influencers', label: 'Influencers', icon: 'record_voice_over' },
-  { key: 'tasks', label: 'Tasks', icon: 'task_alt' },
-  { key: 'team', label: 'Team', icon: 'groups' },
-  { key: 'reminders', label: 'Reminders', icon: 'notifications_active' },
-  { key: 'reports', label: 'Reports', icon: 'assessment' },
-  { key: 'gallery', label: 'Gallery', icon: 'photo_library' },
 ];
 
 export default function Settings() {
@@ -102,11 +84,14 @@ export default function Settings() {
   // When a user is selected, load their permissions
   const selectUser = (u) => {
     setSelectedUser(u);
-    // Default: all permissions ON if no permissions object exists
+    // Anything the Admin has not set explicitly shows its role default (a
+    // Technician, for example, starts with only the options their work needs).
     const existing = u.permissions || {};
     const p = {};
     PERMISSION_MODULES.forEach(m => {
-      p[m.key] = existing[m.key] !== undefined ? existing[m.key] : true;
+      p[m.key] = existing[m.key] !== undefined && existing[m.key] !== null
+        ? !!existing[m.key]
+        : defaultModuleAllowed(u.role, m.key);
     });
     setPerms(p);
   };
@@ -356,20 +341,29 @@ export default function Settings() {
                         </div>
                       </div>
 
-                      {/* Permission toggles grid */}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8, marginBottom: 16 }}>
-                        {PERMISSION_MODULES.map(m => (
-                          <label key={m.key} style={{
-                            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
-                            border: '1px solid var(--bor)', background: perms[m.key] ? 'rgba(39,174,96,.06)' : 'rgba(231,76,60,.04)',
-                            transition: 'all .15s',
-                          }}>
-                            <input type="checkbox" checked={perms[m.key] || false} onChange={() => togglePerm(m.key)} style={{ accentColor: 'var(--pri)' }} />
-                            <span className="material-icons-round" style={{ fontSize: 18, color: perms[m.key] ? '#27ae60' : '#e74c3c' }}>{m.icon}</span>
-                            <span style={{ fontSize: '.84rem', fontWeight: 500 }}>{m.label}</span>
-                          </label>
-                        ))}
-                      </div>
+                      {/* Permission toggles, grouped the same way as the sidebar */}
+                      {PERMISSION_GROUPS.map(group => (
+                        <div key={group} style={{ marginBottom: 14 }}>
+                          <p style={{ fontSize: '.72rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', margin: '0 0 6px' }}>{group}</p>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
+                            {PERMISSION_MODULES.filter(m => m.group === group).map(m => (
+                              <label key={m.key} style={{
+                                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                                border: '1px solid var(--bor)', background: perms[m.key] ? 'rgba(39,174,96,.06)' : 'rgba(231,76,60,.04)',
+                                transition: 'all .15s',
+                              }}>
+                                <input type="checkbox" checked={perms[m.key] || false} onChange={() => togglePerm(m.key)} style={{ accentColor: 'var(--pri)' }} />
+                                <span className="material-icons-round" style={{ fontSize: 18, color: perms[m.key] ? '#27ae60' : '#e74c3c' }}>{m.icon}</span>
+                                <span style={{ fontSize: '.84rem', fontWeight: 500 }}>{m.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      <p style={{ fontSize: '.76rem', color: 'var(--muted)', marginBottom: 14 }}>
+                        <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: 'middle', marginRight: 4 }}>info</span>
+                        Admin, Management and the Owner account always keep full access. Everything switched off here is hidden from that user&rsquo;s menu and blocked if they open the page directly.
+                      </p>
 
                       {/* Actions */}
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>

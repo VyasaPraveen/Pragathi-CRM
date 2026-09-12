@@ -129,7 +129,7 @@ const ALL_ROLES = ['executive','technical_manager','operation_manager','accounta
 const ACTION_ROLES = [
   'lead_entry'                 => ALL_ROLES,
   'site_visit'                 => ['executive','technical_manager'],
-  'po_record'                  => ['operation_manager','admin','warehouse_admin'],
+  'po_record'                  => ['operation_manager','admin','warehouse_admin','sales_manager'],
   'po_recommendation'          => ['operation_manager','admin'],
   'po_management_approval'     => ['management'],
   'po_approval'                => ['admin','management'],
@@ -138,6 +138,14 @@ const ACTION_ROLES = [
   'expenditure_verified'       => ['accountant'],   // Accountant review (req #12)
   'expenditure_approve'        => ['management'],    // Management/Owner final approval
   'payment_release'            => ['accountant'],    // Accountant releases payment
+  // Payment Request chain: Team Member → Team Leader → Admin/Management/
+  // Operation Manager → Accountant → Work Proposal / Pre-PO → Admin/Mgmt/OM
+  'pr_create'                  => ALL_ROLES,
+  'pr_recommend'               => ['technical_manager','operation_manager','sales_manager'],
+  'pr_approve'                 => ['admin','management','operation_manager'],
+  'pr_transfer'                => ['accountant'],
+  'pr_proposal'                => ['accountant'],
+  'pr_proposal_approve'        => ['admin','management','operation_manager'],
 ];
 const LEGACY_ROLE_MAP = ['manager'=>'operation_manager','coordinator'=>'bco','engineer'=>'technician','staff'=>'executive'];
 
@@ -161,6 +169,48 @@ function has_access(?string $role, string $min): bool {
   return (ROLE_LEVELS[$role] ?? 0) >= (ROLE_LEVELS[$min] ?? 0);
 }
 
+// Per-user module/action permission set by an Admin in Settings → Permission
+// Management. Returns true/false when the Admin has set that key explicitly for
+// the user, or null when they have not (caller then applies the role default).
+// Mirrors hasModule() in src/services/permissions.js.
+function user_perm(?string $uid, string $key): ?bool {
+  static $cache = [];
+  if (!$uid) return null;
+  if (!array_key_exists($uid, $cache)) {
+    $st = db()->prepare('SELECT permissions FROM users WHERE id = ? LIMIT 1');
+    $st->execute([$uid]);
+    $r = $st->fetch();
+    $p = ($r && $r['permissions']) ? json_decode($r['permissions'], true) : null;
+    $cache[$uid] = is_array($p) ? $p : [];
+  }
+  $p = $cache[$uid];
+  if (!array_key_exists($key, $p) || $p[$key] === null) return null;
+  return (bool)$p[$key];
+}
+
+// A Technician login is limited to the options their work needs; everything else
+// is off until an Admin switches it on for them. Mirrors
+// TECHNICIAN_DEFAULT_MODULES in src/services/permissions.js.
+const TECHNICIAN_DEFAULT_MODULES = ['dashboard','tasks','my_reports','installations','ongoing_work','materials','attendance','tracking','leave','reminders','gallery','about'];
+
+function default_module_allowed(?string $role, string $key): bool {
+  $r = normalize_role($role);
+  if ($key === 'new_po') return can($r, 'po_record');
+  if ($r === 'technician') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true);
+  return true;
+}
+
+// Is a module/action available to this user? The Admin's explicit per-user value
+// wins, then the role default. Admin and above always keep full access.
+// Mirrors hasModule() in src/services/permissions.js.
+function may_module(array $claims, string $key): bool {
+  $role = $claims['role'] ?? '';
+  if ($role === 'super_admin' || has_access($role, 'admin')) return true;
+  $explicit = user_perm($claims['sub'] ?? null, $key);
+  if ($explicit !== null) return $explicit;
+  return default_module_allowed($role, $key);
+}
+
 // ── Collection → table allowlist ─────────────────────────────────────────────
 function collection_table(string $collection): ?string {
   static $map = [
@@ -169,7 +219,8 @@ function collection_table(string $collection): ?string {
     'income' => 'income', 'expenses' => 'expenses', 'reminders' => 'reminders',
     'gallery' => 'gallery', 'purchaseOrders' => 'purchase_orders', 'retailers' => 'retailers',
     'influencers' => 'influencers', 'employeeTasks' => 'employee_tasks', 'leadPOs' => 'lead_pos',
-    'expenditures' => 'expenditures', 'bomTemplates' => 'bom_templates',
+    'expenditures' => 'expenditures', 'paymentRequests' => 'payment_requests',
+    'bomTemplates' => 'bom_templates',
     'activityLog' => 'activity_log', 'notifications' => 'notifications',
     'leaveRequests' => 'leave_requests', 'attendance' => 'attendance', 'tracking' => 'tracking',
   ];

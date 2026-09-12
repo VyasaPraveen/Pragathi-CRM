@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
+import { hasModule } from '../services/permissions';
 import { registerPush } from '../services/push';
 
 import Dashboard from '../pages/Dashboard';
@@ -15,6 +16,7 @@ import OngoingWork from '../pages/OngoingWork';
 import Materials from '../pages/Materials';
 import Revenue from '../pages/Revenue';
 import Expenditure from '../pages/Expenditure';
+import PaymentRequests from '../pages/PaymentRequests';
 import Reports from '../pages/Reports';
 import Team from '../pages/Team';
 import Reminders from '../pages/Reminders';
@@ -32,15 +34,32 @@ import Attendance from '../pages/Attendance';
 import Tracking from '../pages/Tracking';
 import MyReports from '../pages/MyReports';
 
-function GuardedRoute({ minRole, children }) {
-  const { role } = useAuth();
-  if (!hasAccess(role, minRole)) return <Navigate to="/" replace />;
+// Blocks a page when the role floor (`minRole`) or the user's own Admin-managed
+// permission (`perm`) does not allow it — the same rules the sidebar uses, so a
+// hidden page cannot be reached by typing its URL either.
+function GuardedRoute({ minRole, perm, children }) {
+  const { role, user } = useAuth();
+  if (minRole && !hasAccess(role, minRole)) return <Navigate to="/" replace />;
+  if (perm && !hasModule(user, role, perm)) return <Navigate to="/" replace />;
   return children;
 }
 
 export default function AppLayout() {
   const [sbOpen, setSbOpen] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
+
+  // When a tapped push cannot navigate this tab itself, the service worker asks
+  // the app to route instead. Only in-app paths are accepted.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return undefined;
+    const onMessage = (e) => {
+      const link = e.data && e.data.type === 'pps:navigate' ? e.data.link : null;
+      if (typeof link === 'string' && link.startsWith('/') && !link.startsWith('//')) navigate(link);
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [navigate]);
 
   // Register this device for web push once the authenticated shell mounts.
   // No-op until FCM is configured (VAPID key set), so it's safe pre-launch.
@@ -56,27 +75,28 @@ export default function AppLayout() {
         <div className="pc fin">
           <Routes>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/leads" element={<Leads />} />
-            <Route path="/customers" element={<Customers />} />
-            <Route path="/installations" element={<Installations />} />
-            <Route path="/ongoing" element={<OngoingWork />} />
-            <Route path="/materials" element={<Materials />} />
-            <Route path="/revenue" element={<Revenue />} />
-            <Route path="/expenditure" element={<Expenditure />} />
-            <Route path="/reports" element={<GuardedRoute minRole="coordinator"><Reports /></GuardedRoute>} />
-            <Route path="/team" element={<Team />} />
-            <Route path="/reminders" element={<Reminders />} />
-            <Route path="/about" element={<About />} />
-            <Route path="/gallery" element={<Gallery />} />
+            <Route path="/leads" element={<GuardedRoute perm="leads"><Leads /></GuardedRoute>} />
+            <Route path="/customers" element={<GuardedRoute perm="customers"><Customers /></GuardedRoute>} />
+            <Route path="/installations" element={<GuardedRoute perm="installations"><Installations /></GuardedRoute>} />
+            <Route path="/ongoing" element={<GuardedRoute perm="ongoing_work"><OngoingWork /></GuardedRoute>} />
+            <Route path="/materials" element={<GuardedRoute perm="materials"><Materials /></GuardedRoute>} />
+            <Route path="/revenue" element={<GuardedRoute perm="revenue"><Revenue /></GuardedRoute>} />
+            <Route path="/expenditure" element={<GuardedRoute perm="expenditure"><Expenditure /></GuardedRoute>} />
+            <Route path="/reports" element={<GuardedRoute minRole="coordinator" perm="reports"><Reports /></GuardedRoute>} />
+            <Route path="/payment-requests" element={<GuardedRoute perm="payment_requests"><PaymentRequests /></GuardedRoute>} />
+            <Route path="/team" element={<GuardedRoute perm="team"><Team /></GuardedRoute>} />
+            <Route path="/reminders" element={<GuardedRoute perm="reminders"><Reminders /></GuardedRoute>} />
+            <Route path="/about" element={<GuardedRoute perm="about"><About /></GuardedRoute>} />
+            <Route path="/gallery" element={<GuardedRoute perm="gallery"><Gallery /></GuardedRoute>} />
             <Route path="/settings" element={<GuardedRoute minRole="coordinator"><Settings /></GuardedRoute>} />
-            <Route path="/purchase-orders" element={<PurchaseOrders />} />
-            <Route path="/retailers" element={<Retailers />} />
-            <Route path="/influencers" element={<Influencers />} />
-            <Route path="/tasks" element={<EmployeeTasks />} />
-            <Route path="/leave" element={<Leave />} />
-            <Route path="/attendance" element={<Attendance />} />
-            <Route path="/tracking" element={<Tracking />} />
-            <Route path="/my-reports" element={<MyReports />} />
+            <Route path="/purchase-orders" element={<GuardedRoute perm="purchase_orders"><PurchaseOrders /></GuardedRoute>} />
+            <Route path="/retailers" element={<GuardedRoute perm="retailers"><Retailers /></GuardedRoute>} />
+            <Route path="/influencers" element={<GuardedRoute perm="influencers"><Influencers /></GuardedRoute>} />
+            <Route path="/tasks" element={<GuardedRoute perm="tasks"><EmployeeTasks /></GuardedRoute>} />
+            <Route path="/leave" element={<GuardedRoute perm="leave"><Leave /></GuardedRoute>} />
+            <Route path="/attendance" element={<GuardedRoute perm="attendance"><Attendance /></GuardedRoute>} />
+            <Route path="/tracking" element={<GuardedRoute perm="tracking"><Tracking /></GuardedRoute>} />
+            <Route path="/my-reports" element={<GuardedRoute perm="my_reports"><MyReports /></GuardedRoute>} />
             <Route path="/user-management" element={<GuardedRoute minRole="admin"><UserManagement /></GuardedRoute>} />
             <Route path="/activity-log" element={<GuardedRoute minRole="admin"><ActivityLog /></GuardedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />

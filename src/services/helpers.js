@@ -46,6 +46,7 @@ export const statusClass = (s) => {
     'Inactive': 'st-x',
     'Unapproved': 'st-o', 'Recommended': 'st-b',
     'Requested': 'st-o', 'Verified': 'st-b', 'Management Approved': 'st-p',
+    'Proposal Submitted': 'st-b', 'Closed': 'st-g',
     'Awaiting Replacement': 'st-o', 'Awaiting Manager': 'st-b'
   };
   return m[s] || 'st-x';
@@ -131,6 +132,22 @@ export function getRoleFromDesignation(designation) {
   if (LEGACY_DESIGNATION_ALIASES[designation]) return LEGACY_DESIGNATION_ALIASES[designation];
   return 'staff';
 }
+
+// Where a notification about `module` should take the user when it is tapped.
+// Mirrors module_link() in server/api/routes/collections.php, which builds the
+// deep link for push notifications — keep the two in step.
+export const MODULE_ROUTES = {
+  leads: '/leads', customers: '/customers', employeeTasks: '/tasks',
+  tasks: '/tasks', installations: '/installations', ongoingWork: '/ongoing',
+  materials: '/materials', purchaseOrders: '/purchase-orders', leadPOs: '/purchase-orders',
+  revenue: '/revenue', expenditure: '/expenditure', expenditures: '/expenditure',
+  paymentRequests: '/payment-requests', reports: '/reports', team: '/team',
+  attendance: '/attendance', tracking: '/tracking', leaveRequests: '/leave',
+  leave: '/leave', reminders: '/reminders', retailers: '/retailers',
+  influencers: '/influencers', gallery: '/gallery', users: '/user-management',
+};
+
+export const moduleRoute = (module) => MODULE_ROUTES[module] || '/';
 
 // Make a phone call via tel: link
 export function makeCall(phone) {

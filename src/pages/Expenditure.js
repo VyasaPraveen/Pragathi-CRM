@@ -7,8 +7,15 @@ import { formatCurrency, formatDate, safeStr, toNumber, hasAccess } from '../ser
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { can, ACTIONS, EXP_STATUS, nextExpStage } from '../services/permissions';
 
-const CATEGORIES = ['Travel', 'Materials', 'Office', 'Salary', 'Maintenance', 'Marketing', 'Utilities', 'Fuel', 'Other'];
+// Only these three categories are offered — the section is deliberately simple.
+const CATEGORIES = ['Expenditure', 'Salary Advance', 'Loan'];
+// "Type of Payment" replaces the old free-text Title field.
+const PAYMENT_TYPES = ['Cash', 'Bank Transfer', 'UPI', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
+
+// Row label: the Type of Payment, falling back to the Title stored on records
+// created before the form changed, so older entries still read correctly.
+const expLabel = (exp) => exp?.paymentType || exp?.title || exp?.category || '-';
 
 // Which roles may act at the current stage — used to decide whether to reject too.
 const canRejectAtStage = (role, status) => {
@@ -40,7 +47,7 @@ export default function Expenditure() {
       const key = u.displayName || u.email;
       if (!key || seen.has(key)) return;
       seen.add(key);
-      createNotification({ forUser: key, title: `Expenditure needs your ${label}`, message: `"${exp.title || ''}" (${formatCurrency(exp.amount)}) is awaiting your ${label.toLowerCase()}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+      createNotification({ forUser: key, title: `Expenditure needs your ${label}`, message: `"${expLabel(exp)}" (${formatCurrency(exp.amount)}) is awaiting your ${label.toLowerCase()}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
     });
   };
 
@@ -50,7 +57,7 @@ export default function Expenditure() {
   if (search) {
     const q = search.toLowerCase();
     filtered = filtered.filter(x =>
-      safeStr(x.title).toLowerCase().includes(q) ||
+      safeStr(expLabel(x)).toLowerCase().includes(q) ||
       safeStr(x.category).toLowerCase().includes(q) ||
       safeStr(x.vendor).toLowerCase().includes(q) ||
       safeStr(x.requestedBy).toLowerCase().includes(q)
@@ -83,9 +90,9 @@ export default function Expenditure() {
         cleaned.requestedBy = user?.email || 'unknown';
         cleaned.requestedDate = new Date().toISOString().slice(0, 10);
         const newId = await addDocument('expenditures', cleaned);
-        notifyAdmins(users, { title: 'New Expenditure Request', message: `${cleaned.title} — ${formatCurrency(cleaned.amount)}`, type: 'info', module: 'expenditure', relatedId: newId });
+        notifyAdmins(users, { title: 'New Expenditure Request', message: `${expLabel(cleaned)} — ${formatCurrency(cleaned.amount)}`, type: 'info', module: 'expenditure', relatedId: newId });
         // Route it to the concerned managers who can recommend it.
-        notifyActors(ACTIONS.EXPENDITURE_RECOMMENDATION, 'Recommendation', { title: cleaned.title, amount: cleaned.amount, id: newId });
+        notifyActors(ACTIONS.EXPENDITURE_RECOMMENDATION, 'Recommendation', { ...cleaned, id: newId });
         toast('Expenditure requested');
       }
       setModal(null);
@@ -113,11 +120,11 @@ export default function Expenditure() {
       });
       // Keep the requester informed as their expenditure moves through the chain.
       if (exp.requestedBy && exp.requestedBy !== user?.email) {
-        createNotification({ forUser: exp.requestedBy, title: `Expenditure ${stage.to}`, message: `Your expenditure "${exp.title || ''}" (${formatCurrency(exp.amount)}) is now ${stage.to}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+        createNotification({ forUser: exp.requestedBy, title: `Expenditure ${stage.to}`, message: `Your expenditure "${expLabel(exp)}" (${formatCurrency(exp.amount)}) is now ${stage.to}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
       }
       // On final release, let admins know the payment went out.
       if (stage.to === EXP_STATUS.RELEASED) {
-        notifyAdmins(users, { title: 'Expenditure Payment Released', message: `Payment released for "${exp.title || ''}" — ${formatCurrency(exp.amount)}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+        notifyAdmins(users, { title: 'Expenditure Payment Released', message: `Payment released for "${expLabel(exp)}" — ${formatCurrency(exp.amount)}`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
       } else {
         // Hand the request to whoever must act on the next stage.
         const next = nextExpStage(stage.to);
@@ -136,7 +143,7 @@ export default function Expenditure() {
         rejectedDate: new Date().toISOString().slice(0, 10),
       });
       if (exp.requestedBy && exp.requestedBy !== user?.email) {
-        createNotification({ forUser: exp.requestedBy, title: 'Expenditure Rejected', message: `Your expenditure "${exp.title || ''}" (${formatCurrency(exp.amount)}) was rejected`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
+        createNotification({ forUser: exp.requestedBy, title: 'Expenditure Rejected', message: `Your expenditure "${expLabel(exp)}" (${formatCurrency(exp.amount)}) was rejected`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
       }
       toast('Expenditure rejected', 'er');
     } catch (e) { toast(e.message, 'er'); }
@@ -179,14 +186,14 @@ export default function Expenditure() {
       </div>
 
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
-        <th>Title / Category</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
+        <th>Type of Payment / Category</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
       </tr></thead><tbody>
         {displayed.map(exp => {
           const stage = nextExpStage(exp.status);
           const canAct = stage && can(role, stage.action);
           return (
             <tr key={exp.id}>
-              <td><strong>{exp.title || '-'}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{exp.category || '-'}{exp.vendor ? ' · ' + exp.vendor : ''}</span></td>
+              <td><strong>{expLabel(exp)}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{exp.category || '-'}{exp.vendor ? ' · ' + exp.vendor : ''}</span></td>
               <td style={{ fontWeight: 700 }}>{formatCurrency(exp.amount)}</td>
               <td style={{ fontSize: '.82rem' }}>{exp.requestedBy || '-'}</td>
               <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(exp.requestedDate)}</td>
@@ -246,37 +253,50 @@ export default function Expenditure() {
 function ExpModal({ data, id, onSave, onClose }) {
   const { toast } = useToast();
   const [saving, setSaving] = useState(false);
+  // An existing record may hold a custom payment type — show it under "Other".
+  const existingType = data.paymentType || '';
+  // An older record may carry a category from before the list was cut to three.
+  // Keep it as an option while editing so saving cannot silently re-categorise it.
+  const catOptions = !data.category || CATEGORIES.includes(data.category) ? CATEGORIES : [...CATEGORIES, data.category];
   const [f, setF] = useState({
-    title: data.title || '',
-    category: data.category || 'Travel',
+    category: data.category || CATEGORIES[0],
+    paymentTypeSel: existingType && !PAYMENT_TYPES.includes(existingType) ? 'Other' : (existingType || PAYMENT_TYPES[0]),
+    paymentTypeOther: existingType && !PAYMENT_TYPES.includes(existingType) ? existingType : '',
     amount: data.amount || '',
-    vendor: data.vendor || '',
     date: data.date || new Date().toISOString().slice(0, 10),
     purpose: data.purpose || '',
     notes: data.notes || '',
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const resolvedType = (f.paymentTypeSel === 'Other' ? f.paymentTypeOther : f.paymentTypeSel).trim();
 
   const submit = async (e) => {
     e.preventDefault();
     if (saving) return;
-    if (!f.title.trim()) { toast('Title is required', 'er'); return; }
+    if (!resolvedType) { toast('Type of Payment is required', 'er'); return; }
     if (toNumber(f.amount) <= 0) { toast('Enter a valid amount', 'er'); return; }
     setSaving(true);
-    try { await onSave(f, id); } finally { setSaving(false); }
+    const { paymentTypeSel, paymentTypeOther, ...rest } = f; // eslint-disable-line no-unused-vars
+    try { await onSave({ ...rest, paymentType: resolvedType }, id); } finally { setSaving(false); }
   };
 
   return (
     <Modal title={id ? 'Edit Expenditure' : 'New Expenditure Request'} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="mb">
-          <div className="fg"><label>Title *</label><input className="fi" value={f.title} onChange={e => set('title', e.target.value)} placeholder="e.g. Site visit fuel — Tirupati" required /></div>
           <div className="fr3">
-            <div className="fg"><label>Category</label><select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>{CATEGORIES.map(c => <option key={c}>{c}</option>)}</select></div>
+            <div className="fg"><label>Category *</label><select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>{catOptions.map(c => <option key={c}>{c}</option>)}</select></div>
+            <div className="fg"><label>Type of Payment *</label><select className="fi" value={f.paymentTypeSel} onChange={e => set('paymentTypeSel', e.target.value)}>{PAYMENT_TYPES.map(t => <option key={t}>{t}</option>)}</select></div>
             <div className="fg"><label>Amount (₹) *</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} min="1" required /></div>
-            <div className="fg"><label>Date</label><DateInput value={f.date} onChange={e => set('date', e.target.value)} /></div>
           </div>
-          <div className="fg"><label>Vendor / Paid To</label><input className="fi" value={f.vendor} onChange={e => set('vendor', e.target.value)} placeholder="Vendor or payee name" /></div>
+          {f.paymentTypeSel === 'Other' ? (
+            <div className="fr">
+              <div className="fg"><label>Specify Type of Payment *</label><input className="fi" value={f.paymentTypeOther} onChange={e => set('paymentTypeOther', e.target.value)} placeholder="e.g. Demand Draft" required /></div>
+              <div className="fg"><label>Date</label><DateInput value={f.date} onChange={e => set('date', e.target.value)} /></div>
+            </div>
+          ) : (
+            <div className="fg"><label>Date</label><DateInput value={f.date} onChange={e => set('date', e.target.value)} /></div>
+          )}
           <div className="fg"><label>Purpose</label><textarea className="fi" value={f.purpose} onChange={e => set('purpose', e.target.value)} rows="2" placeholder="Reason for this expenditure..." /></div>
           <div className="fg"><label>Notes</label><textarea className="fi" value={f.notes} onChange={e => set('notes', e.target.value)} rows="2" /></div>
         </div>

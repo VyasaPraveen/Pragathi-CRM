@@ -32,7 +32,7 @@ function handle_collections(string $collection, string $id, string $method): voi
 
   // ── CREATE ──
   if ($method === 'POST' && $id === '') {
-    enforce_create($collection, $role);
+    enforce_create($collection, $claims);
     $data = body();
     unset($data['id'], $data['createdAt'], $data['updatedAt']);
     // Force the correct initial status for approval-chain collections so the
@@ -40,6 +40,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     // always starts here; this stops the raw API from skipping stages).
     $initialStatus = [
       'expenditures'   => 'Requested',
+      'paymentRequests' => 'Requested',
       'leaveRequests'  => 'Awaiting Replacement',
       'leadPOs'        => 'Unapproved',
       'purchaseOrders' => 'Draft',
@@ -78,9 +79,19 @@ function handle_collections(string $collection, string $id, string $method): voi
     json_out($merged);
   }
 
-  // ── DELETE (admin only, matching the UI) ──
+  // ── DELETE (admins — plus, for gallery photos, the uploader themselves) ──
   if ($method === 'DELETE') {
-    if (!has_access($role, 'admin')) fail(403, 'Only admins can delete');
+    if (!has_access($role, 'admin')) {
+      // A photo may only be removed by the person who uploaded it.
+      if ($collection !== 'gallery') fail(403, 'Only admins can delete');
+      $st = db()->prepare("SELECT created_by FROM `$table` WHERE id = ? LIMIT 1");
+      $st->execute([$id]);
+      $row = $st->fetch();
+      if (!$row) fail(404, 'Not found');
+      if ($email === '' || strcasecmp((string)$row['created_by'], $email) !== 0) {
+        fail(403, 'Only the employee who uploaded this photo can delete it');
+      }
+    }
     db()->prepare("DELETE FROM `$table` WHERE id = ?")->execute([$id]);
     json_out(['ok' => true]);
   }
@@ -100,21 +111,48 @@ function handle_batch(string $method): void {
     if (isset($out[$name])) continue;
     $table = collection_table($name);
     if (!$table) continue;
-    $rows = db()->query("SELECT * FROM `$table` ORDER BY created_at DESC")->fetchAll();
-    $out[$name] = array_map('row_to_doc', $rows);
+    // One unreadable table (e.g. a collection added by a newer build before its
+    // table exists) must not fail the whole batch and blank the app.
+    try {
+      $rows = db()->query("SELECT * FROM `$table` ORDER BY created_at DESC")->fetchAll();
+      $out[$name] = array_map('row_to_doc', $rows);
+    } catch (Throwable $e) {
+      error_log("batch read failed for $name: " . $e->getMessage());
+      $out[$name] = [];
+    }
   }
   json_out($out);
 }
 
 // Who may CREATE in a given collection.
-function enforce_create(string $collection, string $role): void {
+function enforce_create(string $collection, array $claims): void {
+  $role = $claims['role'] ?? '';
+  // A section switched off for this user (Settings -> Permission Management, or
+  // the Technician role default) cannot be written to through the raw API either.
+  static $moduleOf = [
+    'leads' => 'leads', 'customers' => 'customers', 'installations' => 'installations',
+    'ongoingWork' => 'ongoing_work', 'materials' => 'materials', 'team' => 'team',
+    'purchaseOrders' => 'purchase_orders', 'leadPOs' => 'purchase_orders',
+    'expenditures' => 'expenditure', 'paymentRequests' => 'payment_requests',
+    'income' => 'revenue', 'expenses' => 'revenue', 'retailers' => 'retailers',
+    'influencers' => 'influencers', 'employeeTasks' => 'tasks', 'gallery' => 'gallery',
+    'reminders' => 'reminders', 'attendance' => 'attendance', 'tracking' => 'tracking',
+    'leaveRequests' => 'leave',
+  ];
+  if (isset($moduleOf[$collection]) && !may_module($claims, $moduleOf[$collection])) {
+    fail(403, 'You do not have access to this section');
+  }
   switch ($collection) {
     case 'leadPOs':
     case 'purchaseOrders':
-      if (!can($role, 'po_record')) fail(403, 'Not authorised to create purchase orders');
+      // Role action + the Admin-managed per-user "New PO" permission.
+      if (!may_module($claims, 'new_po')) fail(403, 'Not authorised to create purchase orders');
       break;
     case 'expenditures':
       if (!can($role, 'expenditure_request')) fail(403, 'Not authorised to raise expenditures');
+      break;
+    case 'paymentRequests':
+      if (!can($role, 'pr_create')) fail(403, 'Not authorised to raise payment requests');
       break;
     case 'leads':
       if (!can($role, 'lead_entry')) fail(403, 'Not authorised to create leads');
@@ -132,7 +170,7 @@ function enforce_status_transition(string $collection, string $role, array $patc
   // amounts/details can't be altered after review/approval (only Admin/Owner may
   // still correct them). Other collections keep the open edit model.
   if (!array_key_exists('status', $patch)) {
-    static $initialOnly = ['expenditures' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'leadPOs' => 'Unapproved', 'purchaseOrders' => 'Draft'];
+    static $initialOnly = ['expenditures' => 'Requested', 'paymentRequests' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'leadPOs' => 'Unapproved', 'purchaseOrders' => 'Draft'];
     if (isset($initialOnly[$collection]) && $role !== 'super_admin' && !has_access($role, 'admin')) {
       $cur = $existing['status'] ?? $initialOnly[$collection];
       if ($cur !== $initialOnly[$collection]) fail(403, 'This record has entered its approval workflow and can no longer be edited.');
@@ -177,6 +215,35 @@ function enforce_status_transition(string $collection, string $role, array $patc
     }
   }
 
+  // Payment requests: Team Member -> Team Leader (Recommend) -> Admin/Management/
+  // Operation Manager (Main Approval) -> Accountant (Payment Transfer) ->
+  // Accountant (Work Proposal / Pre-PO) -> Admin/Management/Operation Manager.
+  if ($collection === 'paymentRequests') {
+    $gate = [
+      'Recommended'        => ['pr_recommend',        'Not authorised to recommend payment requests'],
+      'Approved'           => ['pr_approve',          'Only Admin / Management / Operation Manager can give the main approval'],
+      'Paid'               => ['pr_transfer',         'Only the Accountant can transfer the payment'],
+      'Proposal Submitted' => ['pr_proposal',         'Only the Accountant can submit the Work Proposal / Pre-PO'],
+      'Closed'             => ['pr_proposal_approve', 'Only Admin / Management / Operation Manager can close the request'],
+    ];
+    if (isset($gate[$to]) && !can($role, $gate[$to][0])) fail(403, $gate[$to][1]);
+    // Strict step-by-step ordering - no stage can be skipped.
+    $prev = ['Recommended' => 'Requested', 'Approved' => 'Recommended', 'Paid' => 'Approved', 'Proposal Submitted' => 'Paid', 'Closed' => 'Proposal Submitted'];
+    if (isset($prev[$to])) {
+      $from = $existing['status'] ?? 'Requested';
+      if ($from !== $prev[$to]) fail(409, "Out of order: this payment request must be '{$prev[$to]}' before it can move to '{$to}'.");
+    }
+    if ($to === 'Rejected') {
+      $stageAction = ['Requested' => 'pr_recommend', 'Recommended' => 'pr_approve', 'Approved' => 'pr_transfer', 'Paid' => 'pr_proposal', 'Proposal Submitted' => 'pr_proposal_approve'];
+      $cur = $existing['status'] ?? 'Requested';
+      if (in_array($cur, ['Closed', 'Rejected'], true)) fail(409, 'A closed or already-rejected payment request cannot be rejected.');
+      $act = $stageAction[$cur] ?? '';
+      if ($role !== 'super_admin' && !has_access($role, 'admin') && !($act && can($role, $act))) {
+        fail(403, 'Only the person responsible for the current stage can reject this payment request.');
+      }
+    }
+  }
+
   // Leave requests: only the Sales Manager (or Management/Admin/Owner) may
   // approve or reject; the final approval step follows replacement acceptance (req #1).
   if ($collection === 'leaveRequests') {
@@ -213,6 +280,23 @@ function po_advance_ok(array $po): bool {
   return $paid >= $required;
 }
 
+// Map a notification module to the in-app route it should open, so tapping a
+// push lands the employee on the relevant screen instead of the dashboard.
+// Keep in step with the routes in src/components/AppLayout.js.
+function module_link(string $module): string {
+  static $routes = [
+    'leads' => '/leads', 'customers' => '/customers', 'employeeTasks' => '/tasks',
+    'tasks' => '/tasks', 'installations' => '/installations', 'ongoingWork' => '/ongoing',
+    'materials' => '/materials', 'purchaseOrders' => '/purchase-orders', 'leadPOs' => '/purchase-orders',
+    'revenue' => '/revenue', 'expenditure' => '/expenditure', 'expenditures' => '/expenditure',
+    'paymentRequests' => '/payment-requests', 'reports' => '/reports', 'team' => '/team',
+    'attendance' => '/attendance', 'tracking' => '/tracking', 'leaveRequests' => '/leave',
+    'leave' => '/leave', 'reminders' => '/reminders', 'retailers' => '/retailers',
+    'influencers' => '/influencers', 'gallery' => '/gallery', 'users' => '/user-management',
+  ];
+  return $routes[$module] ?? '/';
+}
+
 // Send a web push for a freshly-created in-app notification. Best-effort and
 // non-fatal — a push failure must never break the notification write. Returns
 // immediately (no DB hit) when FCM is disabled in config.
@@ -227,7 +311,8 @@ function maybe_send_push(array $note): void {
     fcm_send($tokens, (string)($note['title'] ?? 'Pragathi Power CRM'), (string)($note['message'] ?? ''), [
       'module'    => (string)($note['module'] ?? ''),
       'relatedId' => (string)($note['relatedId'] ?? ''),
-      'link'      => '/',
+      // Tapping the notification opens the screen the notification is about.
+      'link'      => module_link((string)($note['module'] ?? '')),
     ]);
   } catch (Throwable $e) {
     error_log('push send failed: ' . $e->getMessage());

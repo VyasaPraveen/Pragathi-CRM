@@ -1,5 +1,126 @@
 import { escapeHtml, formatDate } from './helpers';
 
+const money = (v) => {
+  const n = Number(v);
+  return !isNaN(n) && n > 0 ? '\u20b9' + n.toLocaleString('en-IN') : '';
+};
+
+// The four details captured on the PO that must also appear on the printed
+// quotation / BOM. Each falls back to the matching field on the lead.
+function poMeta(po, lead) {
+  const l = lead || {};
+  return {
+    referredBy: po.referredBy || l.referredByName || '',
+    sourceOfLead: po.sourceOfLead || l.leadReference || '',
+    amount: po.amount || po.agreedPrice || po.totalValue || '',
+    date: po.poDate || '',
+    uscNo: po.uscNo || l.customerServiceNumber || l.meterNumber || '',
+  };
+}
+
+// Company letterhead, as printed on the official BOM sheet.
+function letterhead() {
+  return `<div class="lh">
+<img src="/logo.png" alt="Pragathi Power Solutions" class="lh-logo" onerror="this.style.display='none'" />
+<div class="lh-txt">
+  <div class="lh-name">Pragathi Power Solutions</div>
+  <div class="lh-tag">Power from the Sun... To Power every one</div>
+</div>
+<div class="lh-since">Since 2012</div>
+</div>
+<div class="lh-sub">19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-517501 &nbsp;|&nbsp; Mob: 9701426440 &nbsp;|&nbsp; ppstirupathi@gmail.com &nbsp;|&nbsp; GST: 37AAOFP6349K2ZG</div>`;
+}
+
+// The Bill of Materials table, laid out exactly like the printed sheet:
+// S.No | Description | UOM | Make | Model/Rating | Quantity (Estimation |
+// Actuals) | Scope (Pragathi | Customer), closed by a Total Quantity row.
+function bomTableHtml(po) {
+  const e = escapeHtml;
+  const items = (po.items || []).filter(it => it && (it.materialName || it.quantity));
+  const totalQty = items.reduce((sum, it) => sum + (Number(it.quantity) || 0), 0);
+  const rows = items.length
+    ? items.map((item, i) => `<tr>
+<td class="c">${i + 1}</td>
+<td>${e(item.materialName || '')}</td>
+<td class="c">${e(item.unit || '')}</td>
+<td>${e(item.make || '')}</td>
+<td>${e(item.specification || '')}</td>
+<td class="c">${item.quantity !== '' && item.quantity != null ? e(String(item.quantity)) : ''}</td>
+<td class="c">${item.actualQuantity !== '' && item.actualQuantity != null ? e(String(item.actualQuantity)) : ''}</td>
+<td class="c tick">${item.scopePragathi ? '\u2713' : ''}</td>
+<td class="c tick">${item.scopeCustomer ? '\u2713' : ''}</td>
+</tr>`).join('')
+    : '<tr><td colspan="9" class="c" style="padding:14px">No materials added</td></tr>';
+
+  return `<table class="bom">
+<thead>
+<tr>
+  <th rowspan="2" style="width:38px">S. No</th>
+  <th rowspan="2">Description of Material</th>
+  <th rowspan="2" style="width:48px">UOM</th>
+  <th rowspan="2" style="width:110px">Make</th>
+  <th rowspan="2" style="width:90px">Model / Rating</th>
+  <th colspan="2" class="c">Quantity</th>
+  <th colspan="2" class="c">Scope</th>
+</tr>
+<tr>
+  <th class="c" style="width:70px">Estimation</th>
+  <th class="c" style="width:60px">Actuals</th>
+  <th class="c" style="width:62px">Pragathi</th>
+  <th class="c" style="width:62px">Customer</th>
+</tr>
+</thead>
+<tbody>
+${rows}
+<tr class="tot"><td></td><td>Total Quantity</td><td class="c">Nos</td><td></td><td></td><td class="c">${totalQty || ''}</td><td class="c"></td><td></td><td></td></tr>
+</tbody>
+</table>`;
+}
+
+// Shared print styles for the letterhead + BOM table.
+const DOC_CSS = `
+.lh{display:flex;align-items:center;gap:12px;border-bottom:2px solid #000;padding-bottom:8px}
+.lh-logo{max-height:56px;object-fit:contain}
+.lh-txt{flex:1;text-align:center}
+.lh-name{font-size:23px;font-weight:800;letter-spacing:.3px;line-height:1.1}
+.lh-tag{font-size:10.5px;font-style:italic}
+.lh-since{font-size:12px;font-weight:700;white-space:nowrap;align-self:flex-start}
+.lh-sub{text-align:center;font-size:10px;margin:5px 0 10px}
+table.bom{width:100%;border-collapse:collapse;margin:0}
+table.bom th,table.bom td{border:1px solid #000;padding:3px 6px;font-size:10.5px;vertical-align:middle}
+table.bom th{background:#f0f0f0;font-weight:700;text-align:center}
+table.bom td.c{text-align:center}
+table.bom td.tick{font-size:12px;font-weight:700}
+table.bom tr.tot td{font-weight:700}
+.meta{width:100%;border-collapse:collapse;margin-top:8px}
+.meta td{border:1px solid #000;padding:4px 8px;font-size:11px}
+.meta .lbl{font-weight:700;white-space:nowrap}
+.bom-title{text-align:center;font-weight:700;font-size:14px;border:1px solid #000;border-bottom:none;padding:4px}
+@media print{table.bom th{background:#f0f0f0 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+`;
+
+// The header block above the table: Refered By / Source of Lead, then Customer
+// Name, PO No / Date and Amount, then USC NO — as on the printed sheet.
+function bomMetaHtml(po, lead) {
+  const e = escapeHtml;
+  const l = lead || {};
+  const m = poMeta(po, lead);
+  return `<table class="meta">
+<tr>
+  <td class="lbl" style="width:110px">Refered By</td><td>${e(m.referredBy)}</td>
+  <td class="lbl" style="width:110px">Source of Lead</td><td>${e(m.sourceOfLead)}</td>
+</tr>
+<tr>
+  <td class="lbl">Customer Name</td><td>${e(po.customerName || l.name || '')}</td>
+  <td class="lbl">PO No / Date</td><td>${e(po.poNumber || '')}${m.date ? ' / ' + e(formatDate(m.date)) : ''}</td>
+</tr>
+<tr>
+  <td class="lbl">USC NO</td><td>${e(m.uscNo)}</td>
+  <td class="lbl">Amount</td><td>${e(money(m.amount))}</td>
+</tr>
+</table>`;
+}
+
 export function buildPOHtml(po, lead) {
   const agreedPrice = Number(po.agreedPrice || po.totalValue || 0);
   const l = lead || {};
@@ -24,6 +145,8 @@ h2{text-align:center;margin:0 0 20px;font-size:18px;text-decoration:underline}
 .sig-block{text-align:center;min-width:200px}
 .sig-line{border-top:1px solid #000;margin-top:70px;padding-top:5px;font-size:12px}
 .footer{margin-top:40px;font-size:10px;color:#999;text-align:center;border-top:1px solid #ccc;padding-top:8px}
+.bom-page{page-break-before:always;margin-top:24px}
+${DOC_CSS}
 @media print{body{padding:20px 30px}.lead-box{background:#f8f9fa !important;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style>
 </head><body>
@@ -60,7 +183,10 @@ ${l.email ? `<span><strong>Email:</strong> ${e(l.email)}</span>` : ''}
 <span><strong>kW Required:</strong> ${e(po.kwRequired || l.kwRequired || '-')}</span>
 <span><strong>Monthly Bill:</strong> ${l.monthlyBill ? e(l.monthlyBill) + ' Units' : '-'}</span>
 ${l.expectedValue ? `<span><strong>Expected Value:</strong> \u20b9${Number(l.expectedValue).toLocaleString('en-IN')}</span>` : ''}
-<span><strong>Lead Source:</strong> ${e(l.leadReference || '-')}</span>
+<span><strong>Source of Lead:</strong> ${e(poMeta(po, lead).sourceOfLead || '-')}</span>
+<span><strong>Referred By:</strong> ${e(poMeta(po, lead).referredBy || '-')}</span>
+<span><strong>Amount:</strong> ${money(poMeta(po, lead).amount) || '-'}</span>
+<span><strong>Date:</strong> ${po.poDate ? e(formatDate(po.poDate)) : '-'}</span>
 ${l.assignedTo ? `<span><strong>Assigned To:</strong> ${e(l.assignedTo)}</span>` : ''}
 ${l.salesExecutive ? `<span><strong>Sales Executive:</strong> ${e(l.salesExecutive)}</span>` : ''}
 <span><strong>Site Visit:</strong> ${e(l.siteVisit || 'No')}${l.siteVisitDate ? ' (' + e(l.siteVisitDate) + ')' : ''}</span>
@@ -96,6 +222,12 @@ ${po.referenceNumber ? `<p><strong>Note-</strong> : All Technical specifications
 <tr><td>Installation Lead Time</td><td>:</td><td>${e(po.installationTerms || 'Within 10 days from the date of material received.')}</td></tr>
 <tr><td>Pay-term</td><td>:</td><td>${e(po.paymentTerms || '80% Advance along with PO, 20% Before dispatching the materials against PI.')}</td></tr>
 </table>
+<div class="bom-page">
+<div class="bom-title">Bill of Materials</div>
+${bomMetaHtml(po, lead)}
+${bomTableHtml(po)}
+<p style="font-size:11px;margin:10px 0 0">We hereby agreed and confirm that the above - Bill of Materials &amp; Scope of Works</p>
+</div>
 <p style="margin-top:30px">With Regards,</p>
 <div class="sig-section">
 <div class="sig-block"><div class="sig-line">${e(po.customerName || l.name || '___')}<br/>${e(po.customerAddress || l.address || '')}</div></div>
@@ -125,75 +257,26 @@ export function downloadPO(po, lead) {
 }
 
 export function buildBOMHtml(po, lead) {
-  const items = po.items || [];
-  const l = lead || {};
   const e = escapeHtml;
   return `<html><head><title>Bill of Materials - ${e(po.poNumber || '')}</title>
 <style>
-body{font-family:Arial,sans-serif;padding:20px 30px;font-size:12px;color:#000;line-height:1.5}
-.hdr{text-align:center;border-bottom:2px solid #000;padding-bottom:10px;margin-bottom:6px}
-.hdr p{margin:2px 0;font-size:11px}
-.gst-row{display:flex;justify-content:space-between;font-size:11px;font-weight:600;margin-bottom:10px}
-.addr-line{text-align:center;font-size:11px;margin-bottom:10px;line-height:1.6}
-.title{text-align:center;font-size:15px;font-weight:700;margin:14px 0;text-decoration:underline}
-.info-row{display:flex;justify-content:space-between;margin-bottom:12px;font-size:12px}
-table{width:100%;border-collapse:collapse;margin:10px 0}
-th,td{border:1px solid #000;padding:5px 8px;text-align:left;font-size:11px}
-th{background:#f0f0f0;font-weight:700}
-.scope-th{text-align:center}
-.scope-td{text-align:center;font-size:13px}
-.decl{margin-top:20px;font-size:11px;line-height:1.6}
-.sig-row{display:flex;justify-content:space-between;margin-top:50px}
-.sig-box{text-align:center;min-width:180px;font-size:11px}
-.sig-box .line{border-top:1px solid #000;margin-top:60px;padding-top:4px}
-.approvals{display:flex;justify-content:space-between;margin-top:50px;font-size:10px;text-align:center}
-.approvals div{border-top:1px solid #000;padding-top:4px;min-width:140px}
-@media print{body{padding:10px 15px}}
+body{font-family:Arial,Helvetica,sans-serif;padding:18px 24px;font-size:11px;color:#000;line-height:1.45}
+.bom-title{text-align:center;font-weight:700;font-size:15px;border:1px solid #000;border-bottom:none;padding:5px}
+.decl{margin-top:14px;font-size:11px}
+.sig-row{display:flex;justify-content:space-between;margin-top:46px}
+.sig-box{text-align:center;min-width:190px;font-size:11px}
+.sig-box .line{border-top:1px solid #000;margin-top:50px;padding-top:4px}
+.approvals{display:flex;justify-content:space-between;margin-top:42px;font-size:10px;text-align:center}
+.approvals div{border-top:1px solid #000;padding-top:4px;min-width:150px}
+${DOC_CSS}
+@media print{body{padding:10px 14px}}
 </style>
 </head><body>
-<div class="hdr">
-<img src="/logo.png" alt="Pragathi Power Solutions" style="max-height:60px;object-fit:contain" onerror="this.style.display='none'" />
-</div>
-<div class="gst-row">
-<span>GST : 37AAOFP6349K2ZG</span>
-<span>9700073796</span>
-</div>
-<div class="addr-line">19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-1, Mob: 9701461156 E-Mail: ppstirupathi@gmail.com</div>
-<div class="title">Bill of Materials</div>
-<div class="info-row">
-<div><strong>Customer / Vendor Details:</strong><br/>${e(po.customerName || l.name || '___')}<br/>${e(po.customerAddress || l.address || '')}<br/>Ph: ${e(po.customerPhone || l.phone || '')}</div>
-<div style="text-align:right"><strong>PO NO / Date :</strong><br/>${e(po.poNumber || '___')} / ${po.poDate ? e(formatDate(po.poDate)) : '___'}</div>
-</div>
-<table>
-<thead>
-<tr>
-<th rowspan="2" style="width:40px">Sl. No</th>
-<th rowspan="2">Description of Material</th>
-<th rowspan="2" style="width:50px">UOM</th>
-<th rowspan="2">Make</th>
-<th rowspan="2">Model / Rating</th>
-<th rowspan="2" style="width:55px">Quantity</th>
-<th colspan="2" class="scope-th">Scope</th>
-</tr>
-<tr><th class="scope-th" style="width:60px">Pragathi</th><th class="scope-th" style="width:60px">Customer</th></tr>
-</thead>
-<tbody>
-${items.map((item, i) => `<tr>
-<td>${i + 1}</td>
-<td>${e(item.materialName || '')}</td>
-<td>${e(item.unit || 'Nos')}</td>
-<td>${e(item.make || '')}</td>
-<td>${e(item.specification || '')}</td>
-<td>${item.quantity || ''}</td>
-<td class="scope-td">${item.scopePragathi ? '✓' : ''}</td>
-<td class="scope-td">${item.scopeCustomer ? '✓' : ''}</td>
-</tr>`).join('')}
-<tr style="font-weight:700"><td></td><td colspan="4" style="text-align:right">Total Quantity</td><td>${items.reduce((s, it) => s + Number(it.quantity || 0), 0)}</td><td></td><td></td></tr>
-</tbody>
-</table>
-<div class="decl">
-We hereby agreed and confirm that the above-Bill of Materials &amp; Scope of Works
-</div>
+${letterhead()}
+<div class="bom-title">Bill of Materials</div>
+${bomMetaHtml(po, lead)}
+${bomTableHtml(po)}
+<div class="decl">We hereby agreed and confirm that the above - Bill of Materials &amp; Scope of Works</div>
 <div class="sig-row">
 <div class="sig-box"><div class="line">Customer Signature</div></div>
 <div class="sig-box"><div class="line">Pragathi Sales Representative</div></div>

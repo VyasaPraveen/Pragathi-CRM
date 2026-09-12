@@ -13,7 +13,7 @@ const PAGE_SIZE = 20;
 
 export default function EmployeeTasks() {
   const { employeeTasks, team, users } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -42,6 +42,10 @@ export default function EmployeeTasks() {
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
 
+  // Who is assigning the work — included in the notification so the employee
+  // knows at a glance who gave them the task.
+  const assignedByName = user?.displayName || user?.email || 'a team leader';
+
   const handleSave = async (data, id) => {
     try {
       const cleaned = { ...data };
@@ -57,7 +61,7 @@ export default function EmployeeTasks() {
         toast('Task updated');
         // Notify assigned user if assignment changed
         if (cleaned.assignedTo && cleaned.assignedTo !== (prevTask?.assignedTo || '')) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Task Assigned to You', message: `Task "${cleaned.title}" has been assigned to you`, type: 'task', module: 'employeeTasks', relatedId: id });
+          createNotification({ forUser: cleaned.assignedTo, title: 'Task Assigned to You', message: `${assignedByName} assigned you the task "${cleaned.title}". Due: ${cleaned.dueDate || 'Not set'}${cleaned.priority ? ' · ' + cleaned.priority + ' priority' : ''}`, type: 'task', module: 'employeeTasks', relatedId: id });
         }
         // Notify admin when status changes (user updated their task)
         if (prevTask && cleaned.status !== prevTask.status) {
@@ -73,7 +77,7 @@ export default function EmployeeTasks() {
         toast('Task created');
         // Notify assigned user about new task
         if (cleaned.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'New Task Assigned', message: `Task "${cleaned.title}" has been assigned to you. Due: ${cleaned.dueDate || 'Not set'}`, type: 'task', module: 'employeeTasks', relatedId: newId });
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Task Assigned', message: `${assignedByName} assigned you the task "${cleaned.title}". Due: ${cleaned.dueDate || 'Not set'}${cleaned.priority ? ' · ' + cleaned.priority + ' priority' : ''}`, type: 'task', module: 'employeeTasks', relatedId: newId });
         }
         // Notify admins about new task
         notifyAdmins(users, { title: 'New Task Created', message: `Task "${cleaned.title}" assigned to ${cleaned.assignedTo || 'Unassigned'}`, type: 'task', module: 'employeeTasks', relatedId: newId });

@@ -7,6 +7,8 @@
 // ACTIONS (lead entry, PO record/recommend/approve, expenditure chain, etc.).
 // ============================================================================
 
+import { hasAccess } from './helpers';
+
 // The 9 canonical roles (order = display order in dropdowns)
 export const ROLES = [
   { key: 'executive', label: 'Executive' },
@@ -43,12 +45,21 @@ export const ACTIONS = {
   EXPENDITURE_VERIFIED: 'expenditure_verified',
   EXPENDITURE_APPROVE: 'expenditure_approve',
   PAYMENT_RELEASE: 'payment_release',
+  // Payment Request chain (Team Member → Team Leader → Admin/Management/
+  // Operation Manager → Accountant → Work Proposal / Pre-PO → Admin/Mgmt/OM)
+  PR_CREATE: 'pr_create',
+  PR_RECOMMEND: 'pr_recommend',
+  PR_APPROVE: 'pr_approve',
+  PR_TRANSFER: 'pr_transfer',
+  PR_PROPOSAL: 'pr_proposal',
+  PR_PROPOSAL_APPROVE: 'pr_proposal_approve',
 };
 
 export const ACTION_ROLES = {
   [ACTIONS.LEAD_ENTRY]: [...ALL_ROLE_KEYS], // all 1–9
   [ACTIONS.SITE_VISIT]: ['executive', 'technical_manager'],
-  [ACTIONS.PO_RECORD]: ['operation_manager', 'admin', 'warehouse_admin'],
+  // Sales Manager may add a PO directly (req: "Add PO option for Sales Manager")
+  [ACTIONS.PO_RECORD]: ['operation_manager', 'admin', 'warehouse_admin', 'sales_manager'],
   [ACTIONS.PO_RECOMMENDATION]: ['operation_manager', 'admin'],
   // Management permission is mandatory before a PO can be approved
   [ACTIONS.PO_MANAGEMENT_APPROVAL]: ['management'],
@@ -61,6 +72,13 @@ export const ACTION_ROLES = {
   [ACTIONS.EXPENDITURE_VERIFIED]: ['accountant'],   // Accountant review step
   [ACTIONS.EXPENDITURE_APPROVE]: ['management'],     // Management/Owner final approval
   [ACTIONS.PAYMENT_RELEASE]: ['accountant'],         // Accountant releases the payment
+  // Payment Request chain
+  [ACTIONS.PR_CREATE]: [...ALL_ROLE_KEYS],                                   // any team member
+  [ACTIONS.PR_RECOMMEND]: ['technical_manager', 'operation_manager', 'sales_manager'], // Team Leader
+  [ACTIONS.PR_APPROVE]: ['admin', 'management', 'operation_manager'],        // main approval
+  [ACTIONS.PR_TRANSFER]: ['accountant'],                                     // payment transfer
+  [ACTIONS.PR_PROPOSAL]: ['accountant'],                                     // Work Proposal / Pre-PO
+  [ACTIONS.PR_PROPOSAL_APPROVE]: ['admin', 'management', 'operation_manager'],
 };
 
 // Legacy role keys (from before the 9-role system) → nearest new role, so
@@ -144,3 +162,94 @@ export const EXP_STAGES = [
 ];
 
 export const nextExpStage = (status) => EXP_STAGES.find(s => s.from === status) || null;
+
+// ── Payment Request workflow ───────────────────────────────────────────────
+// Team Member → Generate Payment Request → Team Leader (Recommend) → Admin /
+// Management / Operation Manager (Main Approval) → Accountant (Payment
+// Transfer) → Accountant (one-shot Work Proposal / Pre-PO) → Admin /
+// Management / Operation Manager (final sign-off). A stage can only be taken
+// from the stage immediately before it, so nothing can be skipped.
+export const PR_STATUS = {
+  REQUESTED: 'Requested',
+  RECOMMENDED: 'Recommended',
+  APPROVED: 'Approved',
+  PAID: 'Paid',
+  PROPOSAL_SUBMITTED: 'Proposal Submitted',
+  CLOSED: 'Closed',
+  REJECTED: 'Rejected',
+};
+
+export const PR_STAGES = [
+  { from: PR_STATUS.REQUESTED, to: PR_STATUS.RECOMMENDED, action: ACTIONS.PR_RECOMMEND, label: 'Recommend', by: 'Team Leader', field: 'recommendedBy' },
+  { from: PR_STATUS.RECOMMENDED, to: PR_STATUS.APPROVED, action: ACTIONS.PR_APPROVE, label: 'Main Approval', by: 'Admin / Management / Operation Manager', field: 'approvedBy' },
+  { from: PR_STATUS.APPROVED, to: PR_STATUS.PAID, action: ACTIONS.PR_TRANSFER, label: 'Payment Transfer', by: 'Accountant', field: 'paidBy' },
+  { from: PR_STATUS.PAID, to: PR_STATUS.PROPOSAL_SUBMITTED, action: ACTIONS.PR_PROPOSAL, label: 'Work Proposal / Pre-PO', by: 'Accountant', field: 'proposalBy' },
+  { from: PR_STATUS.PROPOSAL_SUBMITTED, to: PR_STATUS.CLOSED, action: ACTIONS.PR_PROPOSAL_APPROVE, label: 'Approve Proposal & Close', by: 'Admin / Management / Operation Manager', field: 'closedBy' },
+];
+
+export const nextPrStage = (status) => PR_STAGES.find(s => s.from === (status || PR_STATUS.REQUESTED)) || null;
+
+// ── Per-user module / action permissions (Admin-controlled) ────────────────
+// Settings → Permission Management saves a { key: true|false } map on the user
+// record. A key that is ABSENT falls back to the role default below, so every
+// existing account keeps exactly the access it has today. Admin and above are
+// never restricted, so an Admin cannot lock themselves out of the app.
+export const PERMISSION_MODULES = [
+  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', group: 'Main' },
+  { key: 'leads', label: 'Leads', icon: 'leaderboard', group: 'Main' },
+  { key: 'customers', label: 'Customers', icon: 'people', group: 'Main' },
+  { key: 'tasks', label: 'Tasks', icon: 'task_alt', group: 'Main' },
+  { key: 'my_reports', label: 'My Reports & Planning', icon: 'insights', group: 'Main' },
+
+  { key: 'installations', label: 'Installations', icon: 'solar_power', group: 'Operations' },
+  { key: 'ongoing_work', label: 'Ongoing Work', icon: 'construction', group: 'Operations' },
+  { key: 'materials', label: 'Materials', icon: 'inventory_2', group: 'Operations' },
+  { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long', group: 'Operations' },
+  { key: 'new_po', label: 'New PO (create a PO)', icon: 'post_add', group: 'Operations', action: true },
+
+  { key: 'revenue', label: 'Revenue', icon: 'account_balance_wallet', group: 'Finance' },
+  { key: 'expenditure', label: 'Expenditure', icon: 'payments', group: 'Finance' },
+  { key: 'payment_requests', label: 'Payment Requests', icon: 'request_quote', group: 'Finance' },
+  { key: 'reports', label: 'Reports', icon: 'assessment', group: 'Finance' },
+
+  { key: 'team', label: 'Team', icon: 'groups', group: 'People' },
+  { key: 'attendance', label: 'Attendance', icon: 'how_to_reg', group: 'People' },
+  { key: 'tracking', label: 'Tracking', icon: 'schedule', group: 'People' },
+  { key: 'leave', label: 'Leave', icon: 'event_available', group: 'People' },
+  { key: 'reminders', label: 'Reminders', icon: 'notifications_active', group: 'People' },
+  { key: 'retailers', label: 'Retailers', icon: 'storefront', group: 'People' },
+  { key: 'influencers', label: 'Influencers', icon: 'campaign', group: 'People' },
+
+  { key: 'gallery', label: 'Gallery', icon: 'photo_library', group: 'Company' },
+  { key: 'about', label: 'About', icon: 'info', group: 'Company' },
+];
+
+export const PERMISSION_GROUPS = PERMISSION_MODULES
+  .map(m => m.group)
+  .filter((g, i, arr) => arr.indexOf(g) === i);
+
+// A Technician login is deliberately limited to the options their work needs.
+// Everything else (Leads, Revenue, Expenditure, New PO, …) stays OFF until an
+// Admin switches it on for that individual in Settings → Permission Management.
+export const TECHNICIAN_DEFAULT_MODULES = [
+  'dashboard', 'tasks', 'my_reports', 'installations', 'ongoing_work',
+  'materials', 'attendance', 'tracking', 'leave', 'reminders', 'gallery', 'about',
+];
+
+// The default state of a permission for a role, used when the Admin has not set
+// an explicit value for that user.
+export function defaultModuleAllowed(role, key) {
+  const r = normalizeRole(role);
+  if (key === 'new_po') return can(r, ACTIONS.PO_RECORD);
+  if (r === 'technician') return TECHNICIAN_DEFAULT_MODULES.includes(key);
+  return true;
+}
+
+// Is a module / action available to this user? Explicit per-user value wins,
+// then the role default. Admin and above always keep full access.
+export function hasModule(user, role, key) {
+  if (role === 'super_admin' || hasAccess(role, 'admin')) return true;
+  const p = user && user.permissions;
+  if (p && typeof p === 'object' && p[key] !== undefined && p[key] !== null) return !!p[key];
+  return defaultModuleAllowed(role, key);
+}

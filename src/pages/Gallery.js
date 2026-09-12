@@ -11,10 +11,14 @@ import { hasAccess, isSafeUrl } from '../services/helpers';
 // /upload endpoint, with an optional image-URL fallback for advanced users.
 export default function Gallery() {
   const { gallery } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
   const canEdit = hasAccess(role, 'coordinator');
+  // A photo can only be edited or removed by the employee who uploaded it
+  // (created_by holds the uploader's email). Admins keep it for moderation.
+  const isUploader = (g) => !!user?.email && String(g.createdBy || '').toLowerCase() === String(user.email).toLowerCase();
+  const canManage = (g) => isUploader(g) || hasAccess(role, 'admin');
 
   // items: array of { url, caption }. On edit we get exactly one; on add, one per photo.
   const handleSave = async (items, id) => {
@@ -51,7 +55,7 @@ export default function Gallery() {
                 <div className="gi" key={g.id} style={{ position: 'relative' }}>
                   {isSafeUrl(g.url) && <img src={g.url} alt={g.caption || ''} />}
                   {g.caption && <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, background: 'rgba(0,0,0,.6)', color: '#fff', padding: '6px 10px', fontSize: '.78rem' }}>{g.caption}</div>}
-                  {canEdit && <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4 }}>
+                  {canManage(g) && <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', gap: 4 }}>
                     <button className="btn bsm" onClick={() => setModal({ data: g, id: g.id })} style={{ background: 'rgba(0,0,0,.5)', color: '#fff', borderRadius: '50%', width: 28, height: 28, padding: 0 }}><span className="material-icons-round" style={{ fontSize: 14 }}>edit</span></button>
                     <button className="btn bsm" onClick={() => handleDelete(g.id)} style={{ background: 'rgba(231,76,60,.8)', color: '#fff', borderRadius: '50%', width: 28, height: 28, padding: 0 }}><span className="material-icons-round" style={{ fontSize: 14 }}>delete</span></button>
                   </div>}

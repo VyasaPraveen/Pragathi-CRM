@@ -6,7 +6,7 @@ import { addDocument, updateDocument, deleteDocument, createNotification, notify
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
-import { can, ACTIONS, PO_STATUS, advanceGate } from '../services/permissions';
+import { can, ACTIONS, PO_STATUS, advanceGate, hasModule } from '../services/permissions';
 
 const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
 const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
@@ -15,35 +15,30 @@ const priorities = ['Hot', 'Warm', 'Cold'];
 const payModes = ['PhonePe', 'Google Pay', 'Paytm', 'Cash', 'Bank Transfer', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
 
-const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
+const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', actualQuantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
 
 // Stable per-row keys so add/remove doesn't shuffle React DOM/focus (not persisted to Firestore)
 let bomKeyCounter = 0;
 const nextBomKey = () => 'bom_' + (bomKeyCounter++);
 
+// The material catalogue, in the order of the official Bill of Materials sheet.
+// The kW-specific inverter variants are kept at the end so nothing that could be
+// picked before has been taken away.
 const DEFAULT_BOM_MATERIALS = [
-  { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (2KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (3KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (4KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (5KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (5KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (6KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (8KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (10KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Others', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter', unit: 'Nos', make: 'Tata/Others' },
   { materialName: 'Junction Box / ACDB', unit: 'Nos', make: '' },
   { materialName: 'Junction Box / DCDB', unit: 'Nos', make: '' },
   { materialName: 'Earthing Rods', unit: 'Nos', make: '' },
+  { materialName: 'LA', unit: 'Nos', make: '' },
+  { materialName: 'MC4 Connectors', unit: 'Nos', make: '' },
   { materialName: 'Earth Chemical Bags', unit: 'Nos', make: '' },
   { materialName: 'Earth Chambers', unit: 'Nos', make: '' },
-  { materialName: 'MC4 Connectors', unit: 'Nos', make: '' },
   { materialName: 'DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'Earthing Cable', unit: 'Mtrs', make: 'Polycab/Others' },
-  { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOD DIP/Other' },
-  { materialName: 'If Any Elevated MMS (Mention Height)', unit: 'Nos', make: 'HOD DIP/Other' },
+  { materialName: 'MMS -2/4 (PPS Standard)', unit: 'Nos', make: 'HOT DIP/Other' },
+  { materialName: 'If Any Elevated MMS (Height)', unit: 'Nos', make: 'HOT DIP/Other' },
   { materialName: 'Additional AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'Additional DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'Additional Earth Cable', unit: 'Mtrs', make: 'Polycab/Others' },
@@ -53,12 +48,25 @@ const DEFAULT_BOM_MATERIALS = [
   { materialName: 'DISCOM Charges', unit: 'Rs.', make: '' },
   { materialName: 'Ladder (Height)', unit: 'Nos', make: '' },
   { materialName: 'MCS - Cleaning System', unit: 'Nos', make: '' },
+  { materialName: 'Additional Load', unit: '', make: '' },
+  { materialName: 'Any Misc / Others', unit: '', make: '' },
+  // kW-specific inverter variants (kept from the previous catalogue)
+  { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (2KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (3KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (4KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (6KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (8KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (10KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOT DIP/Other' },
 ];
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
   const { leads, customers, users, influencers } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -87,6 +95,10 @@ export default function Leads() {
   const hasMore = filtered.length > visibleCount;
   const detailLead = detailId ? leads.find(l => l.id === detailId) : null;
 
+  // Who is doing the assigning — included in the notification so the employee
+  // knows at a glance who gave them the lead.
+  const assignedByName = user?.displayName || user?.email || 'a team leader';
+
   const handleSave = async (data, id, prevStatus, prevExpectedSignUpDate) => {
     try {
       const cleaned = {
@@ -106,7 +118,7 @@ export default function Leads() {
         }
         // Notify new assignee if assignment changed
         if (cleaned.assignedTo && prevLead && cleaned.assignedTo !== prevLead.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Assigned to You', message: `Lead "${cleaned.name}" has been assigned to you`, type: 'lead', module: 'leads', relatedId: id });
+          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Assigned to You', message: `${assignedByName} assigned you the lead "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: id });
         }
         // Notify admin on status change
         if (prevStatus && cleaned.status !== prevStatus) {
@@ -117,7 +129,7 @@ export default function Leads() {
         toast('Lead added');
         // Notify assigned user on new lead
         if (cleaned.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `New lead "${cleaned.name}" has been assigned to you`, type: 'lead', module: 'leads', relatedId: newId });
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `${assignedByName} assigned you a new lead: "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: newId });
         }
         // Notify admins about new lead
         notifyAdmins(users, { title: 'New Lead Created', message: `New lead "${cleaned.name}" created`, type: 'lead', module: 'leads', relatedId: newId });
@@ -769,7 +781,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           {tab === 'pos' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-                {can(role, ACTIONS.PO_RECORD) && (
+                {can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po') && (
                   <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
                   </button>
@@ -927,6 +939,12 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   const [f, setF] = useState({
     poNumber: po.poNumber || autoNumber,
     poDate: po.poDate || new Date().toISOString().slice(0, 10),
+    // Printed on the quotation and on the Bill of Materials. Pre-filled from the
+    // lead where we already know it, and editable here.
+    referredBy: po.referredBy || lead.referredByName || '',
+    sourceOfLead: po.sourceOfLead || lead.leadReference || '',
+    amount: po.amount || '',
+    uscNo: po.uscNo || lead.customerServiceNumber || '',
     leadId: lead.id,
     leadName: lead.name,
     customerName: po.customerName || lead.name || '',
@@ -957,11 +975,14 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     status: po.status || 'Unapproved',
     notes: po.notes || ''
   });
+  // Only the materials actually chosen are rows — they are picked from the list
+  // below instead of scrolling through every material one by one.
   const [items, setItems] = useState(
     (po.items && po.items.length)
       ? po.items.map(it => ({ ...EMPTY_BOM_ITEM, ...it, _key: nextBomKey() }))
-      : DEFAULT_BOM_MATERIALS.map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))
+      : []
   );
+  const [matSearch, setMatSearch] = useState('');
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const [poSaving, setPoSaving] = useState(false);
 
@@ -978,6 +999,32 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   const addItem = () => setItems(prev => [...prev, { ...EMPTY_BOM_ITEM, _key: nextBomKey() }]);
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
   const totalValue = items.reduce((s, it) => s + toNumber(it.amount), 0);
+
+  // Tick a material to add it to the BOM, untick to take it out again. A row
+  // that already has figures in it asks first, so nothing is lost by a mis-tap.
+  const isPicked = (name) => items.some(it => it.materialName === name);
+  const toggleMaterial = (m) => {
+    const existing = items.find(it => it.materialName === m.materialName);
+    if (existing) {
+      const hasData = toNumber(existing.quantity) > 0 || toNumber(existing.rate) > 0 || existing.specification;
+      if (hasData && !window.confirm(`Remove "${m.materialName}" and the details entered for it?`)) return;
+      setItems(prev => prev.filter(it => it.materialName !== m.materialName));
+    } else {
+      setItems(prev => [...prev, { ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }]);
+    }
+  };
+  const pickAllStandard = () => {
+    setItems(prev => {
+      const have = new Set(prev.map(it => it.materialName));
+      return [...prev, ...DEFAULT_BOM_MATERIALS.filter(m => !have.has(m.materialName)).map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))];
+    });
+  };
+  const clearPicked = () => {
+    if (items.length && !window.confirm('Remove all selected materials?')) return;
+    setItems([]);
+  };
+  const visibleMaterials = DEFAULT_BOM_MATERIALS.filter(m =>
+    !matSearch || m.materialName.toLowerCase().includes(matSearch.toLowerCase()));
   const extraChargesTotal = toNumber(f.discomCharges) + toNumber(f.civilWork) + toNumber(f.upvcPipes) + toNumber(f.additionalRelay) + toNumber(f.elevatedStructure) + toNumber(f.additionalBom) + toNumber(f.otherCharges);
   const autoScope = 'Supply and installation of ' + (f.kwRequired || '___') + ' Solar PV On-Grid System as per BOM.';
 
@@ -1044,10 +1091,12 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               specification: it.specification || '',
               scopePragathi: !!it.scopePragathi,
               scopeCustomer: !!it.scopeCustomer,
+              actualQuantity: it.actualQuantity === '' || it.actualQuantity == null ? '' : toNumber(it.actualQuantity),
               rate: toNumber(it.rate),
               amount: toNumber(it.quantity) * toNumber(it.rate)
             })),
             totalValue,
+            amount: toNumber(f.amount),
             discomCharges: toNumber(f.discomCharges),
             civilWork: toNumber(f.civilWork),
             upvcPipes: toNumber(f.upvcPipes),
@@ -1083,6 +1132,17 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
             </div>
             <div className="fg"><label>Plant Location / Building</label><input className="fi" value={f.plantLocation} onChange={e => set('plantLocation', e.target.value)} placeholder="Residential Building / location" /></div>
 
+            {/* Details that also print on the quotation and the Bill of Materials */}
+            <div className="fr">
+              <div className="fg"><label>Referred By</label><input className="fi" value={f.referredBy} onChange={e => set('referredBy', e.target.value)} placeholder="Who referred this customer" /></div>
+              <div className="fg"><label>Source of Lead</label><input className="fi" value={f.sourceOfLead} onChange={e => set('sourceOfLead', e.target.value)} list="lead-sources" placeholder="e.g. Referral, Website" /></div>
+            </div>
+            <div className="fr">
+              <div className="fg"><label>Amount (₹)</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder={totalValue ? String(totalValue) : '0'} /></div>
+              <div className="fg"><label>USC No</label><input className="fi" value={f.uscNo} onChange={e => set('uscNo', e.target.value)} placeholder="Service connection no." /></div>
+            </div>
+            <datalist id="lead-sources">{refs.map(r => <option key={r} value={r} />)}</datalist>
+
             {/* BOM Section with Templates */}
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 8 }}>
@@ -1102,33 +1162,68 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
                 </div>
               </div>
 
-              {items.map((item, i) => (
-                <div key={item._key || i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                    <div className="fg" style={{ flex: 3, marginBottom: 0 }}>{i === 0 && <label>Description of Material</label>}<input className="fi" value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" placeholder="Material name" /></div>
-                    <div className="fg" style={{ flex: 0.6, marginBottom: 0 }}>{i === 0 && <label>UOM</label>}<input className="fi" value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></div>
-                    <div className="fg" style={{ flex: 1.2, marginBottom: 0 }}>{i === 0 && <label>Make</label>}<input className="fi" value={item.make} onChange={e => setItem(i, 'make', e.target.value)} placeholder="Brand / Make" /></div>
-                    <div className="fg" style={{ flex: 1.2, marginBottom: 0 }}>{i === 0 && <label>Model / Rating</label>}<input className="fi" value={item.specification} onChange={e => setItem(i, 'specification', e.target.value)} placeholder="Model / Rating" /></div>
-                    <div className="fg" style={{ flex: 0.7, marginBottom: 0 }}>{i === 0 && <label>Qty</label>}<input type="number" className="fi" value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></div>
-                    {items.length > 1 && <button type="button" className="btn bsm bo" onClick={() => removeItem(i)} style={{ color: 'var(--err)', marginBottom: 0 }}><span className="material-icons-round" style={{ fontSize: 16 }}>close</span></button>}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Rate</label>}<input type="number" className="fi" style={{ fontSize: '.85rem' }} value={item.rate} onChange={e => setItem(i, 'rate', e.target.value)} placeholder="Rate" /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Amount</label>}<input className="fi" style={{ fontSize: '.85rem' }} value={formatCurrency(toNumber(item.quantity) * toNumber(item.rate))} disabled /></div>
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flex: 1.2, paddingTop: i === 0 ? 18 : 0 }}>
-                      {i === 0 && <label style={{ fontSize: '.76rem', position: 'absolute', marginTop: -34 }}>Scope</label>}
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.82rem', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={!!item.scopePragathi} onChange={e => setItem(i, 'scopePragathi', e.target.checked)} /> Pragathi
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.82rem', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={!!item.scopeCustomer} onChange={e => setItem(i, 'scopeCustomer', e.target.checked)} /> Customer
-                      </label>
-                    </div>
-                  </div>
+              {/* Pick the materials needed — every material in one place */}
+              <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: 10, marginBottom: 12, background: '#fafbfc' }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <input className="fi" style={{ flex: 1, minWidth: 160, padding: '6px 10px', fontSize: '.84rem' }} value={matSearch} onChange={e => setMatSearch(e.target.value)} placeholder="Search materials..." />
+                  <button type="button" className="btn bsm bo" onClick={pickAllStandard}>Select All</button>
+                  <button type="button" className="btn bsm bo" onClick={clearPicked}>Clear</button>
+                  <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{items.length} selected</span>
                 </div>
-              ))}
-              <button type="button" className="btn bsm bo" onClick={addItem} style={{ marginTop: 6 }}>
-                <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Item
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))', gap: 4, maxHeight: 190, overflowY: 'auto' }}>
+                  {visibleMaterials.map(m => {
+                    const on = isPicked(m.materialName);
+                    return (
+                      <label key={m.materialName} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 6, cursor: 'pointer', fontSize: '.82rem', border: '1px solid ' + (on ? 'var(--pri)' : 'var(--bor)'), background: on ? 'rgba(39,174,96,.07)' : '#fff' }}>
+                        <input type="checkbox" checked={on} onChange={() => toggleMaterial(m)} style={{ accentColor: 'var(--pri)' }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.materialName}>{m.materialName}</span>
+                      </label>
+                    );
+                  })}
+                  {!visibleMaterials.length && <span style={{ fontSize: '.82rem', color: 'var(--muted)', padding: 6 }}>No material matches "{matSearch}".</span>}
+                </div>
+              </div>
+
+              {/* Fill the details for the selected materials, right here */}
+              {items.length > 0 && (
+                <div className="tw" style={{ border: '1px solid var(--bor)', borderRadius: 8 }}>
+                  <table style={{ fontSize: '.8rem' }}>
+                    <thead><tr>
+                      <th style={{ minWidth: 150 }}>Material</th>
+                      <th style={{ width: 62 }}>UOM</th>
+                      <th style={{ width: 110 }}>Make</th>
+                      <th style={{ width: 110 }}>Model / Rating</th>
+                      <th style={{ width: 74 }}>Qty (Est.)</th>
+                      <th style={{ width: 74 }}>Actuals</th>
+                      <th style={{ width: 84 }}>Rate</th>
+                      <th style={{ width: 96 }}>Amount</th>
+                      <th style={{ width: 62, textAlign: 'center' }}>Pragathi</th>
+                      <th style={{ width: 66, textAlign: 'center' }}>Customer</th>
+                      <th style={{ width: 34 }}></th>
+                    </tr></thead>
+                    <tbody>
+                      {items.map((item, i) => (
+                        <tr key={item._key || i}>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" /></td>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></td>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.make} onChange={e => setItem(i, 'make', e.target.value)} /></td>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.specification} onChange={e => setItem(i, 'specification', e.target.value)} /></td>
+                          <td><input type="number" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></td>
+                          <td><input type="number" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.actualQuantity} onChange={e => setItem(i, 'actualQuantity', e.target.value)} /></td>
+                          <td><input type="number" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.rate} onChange={e => setItem(i, 'rate', e.target.value)} /></td>
+                          <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{formatCurrency(toNumber(item.quantity) * toNumber(item.rate))}</td>
+                          <td style={{ textAlign: 'center' }}><input type="checkbox" checked={!!item.scopePragathi} onChange={e => setItem(i, 'scopePragathi', e.target.checked)} /></td>
+                          <td style={{ textAlign: 'center' }}><input type="checkbox" checked={!!item.scopeCustomer} onChange={e => setItem(i, 'scopeCustomer', e.target.checked)} /></td>
+                          <td><button type="button" className="btn bsm bo" onClick={() => removeItem(i)} title="Remove" style={{ padding: '2px 6px', color: 'var(--err)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>close</span></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {!items.length && <p style={{ fontSize: '.82rem', color: 'var(--muted)', margin: '4px 2px' }}>Tick the materials above to add them to this Bill of Materials.</p>}
+              <button type="button" className="btn bsm bo" onClick={addItem} style={{ marginTop: 8 }}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add custom material
               </button>
               <datalist id="bom-materials">{allMaterials.map(m => <option key={m} value={m} />)}</datalist>
               <div style={{ textAlign: 'right', fontWeight: 700, fontSize: '1rem', marginTop: 10 }}>Total: {formatCurrency(totalValue)}</div>

@@ -34,16 +34,29 @@ messaging.onBackgroundMessage((payload) => {
   });
 });
 
-// Focus an existing tab (or open one) when the user taps the notification.
+// Tapping the notification must land the employee on the screen it is about:
+// focus an open tab and navigate it to the link, or open a new tab on the link.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const link = (event.notification.data && event.notification.data.link) || '/';
+  const url = new URL(link, self.location.origin).href;
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((wins) => {
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (wins) => {
       for (const w of wins) {
-        if ('focus' in w) return w.focus();
+        if (!('focus' in w)) continue;
+        try {
+          const focused = await w.focus();
+          const target = focused || w;
+          // Same-origin client → route it to the deep link. `navigate` is not
+          // available in every browser, so fall back to telling the app to route.
+          if (typeof target.navigate === 'function') {
+            try { await target.navigate(url); return; } catch (e) { /* fall through */ }
+          }
+          if (typeof target.postMessage === 'function') target.postMessage({ type: 'pps:navigate', link });
+          return;
+        } catch (e) { /* try the next window */ }
       }
-      if (self.clients.openWindow) return self.clients.openWindow(link);
+      if (self.clients.openWindow) return self.clients.openWindow(url);
     })
   );
 });

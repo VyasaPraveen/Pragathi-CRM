@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, moduleRoute } from '../services/helpers';
 import { updateDocument } from '../services/firestore';
 
 const titles = {
@@ -75,6 +75,14 @@ export default function Topbar({ onMenuClick }) {
     try { await updateDocument('notifications', id, { read: true }); } catch (e) { console.warn('Failed to mark notification read:', e.message); }
   };
 
+  // Open the screen a notification is about, and mark it read on the way.
+  const openNotification = (n) => {
+    if (!n.read) markAsRead(n.id);
+    setShowPanel(false);
+    const to = moduleRoute(n.module);
+    if (to !== '/') navigate(to);
+  };
+
   const markAllRead = async () => {
     await Promise.all(myNotifications.filter(n => !n.read).map(n =>
       updateDocument('notifications', n.id, { read: true }).catch(e => console.warn('Failed to mark notification read:', e.message))
@@ -124,7 +132,7 @@ export default function Topbar({ onMenuClick }) {
                   </div>
                 ) : (
                   myNotifications.slice(0, 50).map(n => (
-                    <div key={n.id} onClick={() => { if (!n.read) markAsRead(n.id); }}
+                    <div key={n.id} onClick={() => openNotification(n)}
                       style={{
                         padding: '12px 16px', borderBottom: '1px solid #f3f4f6', cursor: 'pointer',
                         background: n.read ? '#fff' : 'rgba(59,130,246,.04)',

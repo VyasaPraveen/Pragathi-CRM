@@ -24,6 +24,7 @@ export function DataProvider({ children }) {
   const [employeeTasks, setEmployeeTasks] = useState([]);
   const [leadPOs, setLeadPOs] = useState([]);
   const [expenditures, setExpenditures] = useState([]);
+  const [paymentRequests, setPaymentRequests] = useState([]);
   const [bomTemplates, setBomTemplates] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [notifications, setNotifications] = useState([]);
@@ -47,7 +48,8 @@ export function DataProvider({ children }) {
       ['income', setIncome, 'date', 'desc'], ['expenses', setExpenses, 'date', 'desc'],
       ['reminders', setReminders], ['gallery', setGallery], ['purchaseOrders', setPurchaseOrders],
       ['retailers', setRetailers], ['influencers', setInfluencers], ['employeeTasks', setEmployeeTasks],
-      ['leadPOs', setLeadPOs], ['expenditures', setExpenditures], ['bomTemplates', setBomTemplates],
+      ['leadPOs', setLeadPOs], ['expenditures', setExpenditures], ['paymentRequests', setPaymentRequests],
+      ['bomTemplates', setBomTemplates],
       ['activityLog', setActivityLog], ['notifications', setNotifications],
       ['leaveRequests', setLeaveRequests], ['attendance', setAttendance], ['tracking', setTracking],
     ];
@@ -111,7 +113,7 @@ export function DataProvider({ children }) {
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
-      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, bomTemplates, activityLog, notifications, users,
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, paymentRequests, bomTemplates, activityLog, notifications, users,
       leaveRequests, attendance, tracking, settings
     }}>
       {children}

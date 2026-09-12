@@ -1,8 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, deleteDocument } from '../services/firestore';
+import { addDocument, deleteDocument, createNotification } from '../services/firestore';
 import { apiUpload } from '../services/api';
 import { formatDate, safeStr, hasAccess, isSafeUrl } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
@@ -10,8 +10,24 @@ import { Modal, EmptyState } from '../components/SharedUI';
 const PAGE_SIZE = 30;
 const today = () => new Date().toISOString().slice(0, 10);
 
+// Marking attendance sends the phone to the camera app, and a low-memory phone
+// can reload the page while that happens — which used to throw the employee back
+// to the list and lose the location and photo they had already captured. The
+// half-finished mark is kept here so the flow picks up exactly where it left off.
+const DRAFT_KEY = 'pps_attendance_draft';
+const readDraft = () => {
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    const d = raw ? JSON.parse(raw) : null;
+    // A draft is only valid for the day it was started on.
+    return d && d.date === today() ? d : null;
+  } catch { return null; }
+};
+const writeDraft = (d) => { try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, date: today() })); } catch { /* private mode */ } };
+const clearDraft = () => { try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
+
 export default function Attendance() {
-  const { attendance } = useData();
+  const { attendance, users } = useData();
   const { user, role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(false);
@@ -39,15 +55,57 @@ export default function Attendance() {
   const displayed = visible.slice(0, visibleCount);
   const hasMore = visible.length > visibleCount;
 
+  // A mark that was interrupted (phone reloaded the page while the camera was
+  // open) reopens itself so the employee can finish it instead of starting over.
+  useEffect(() => {
+    if (readDraft()) setModal(true);
+  }, []);
+
+  // Attendance counts — these come straight off the live attendance list, so they
+  // update on their own the moment a mark is saved.
+  const counts = useMemo(() => {
+    const d = today();
+    const month = d.slice(0, 7);
+    const todays = attendance.filter(a => a.date === d);
+    const mine = attendance.filter(a => a.employeeEmail === myEmail);
+    return {
+      presentToday: new Set(todays.filter(a => a.type === 'Check In').map(a => a.employeeEmail || a.employeeName)).size,
+      marksToday: todays.length,
+      myMonth: new Set(mine.filter(a => a.type === 'Check In' && String(a.date || '').startsWith(month)).map(a => a.date)).size,
+      myTotal: mine.filter(a => a.type === 'Check In').length,
+    };
+  }, [attendance, myEmail]);
+
+  // Tell the Sales Manager and the other concerned members, with the photo and
+  // the map link, so they can open the record straight from the notification.
+  const notifyConcerned = (rec, who) => {
+    const targets = (users || []).filter(u => ['sales_manager', 'admin', 'super_admin', 'management', 'operation_manager'].includes(u.role));
+    const seen = new Set();
+    targets.forEach(u => {
+      const key = u.displayName || u.email;
+      if (!key || seen.has(key) || key === who) return;
+      seen.add(key);
+      createNotification({
+        forUser: key,
+        title: `Attendance — ${rec.type}: ${who}`,
+        message: `${who} marked ${rec.type} at ${rec.time} on ${formatDate(rec.date)}${rec.accuracy ? ` (±${Math.round(rec.accuracy)}m)` : ''}. Photo and location are on the Attendance screen.`,
+        type: 'status_update', module: 'attendance', relatedId: rec.id || '',
+      });
+    });
+  };
+
   const handleSave = async (rec) => {
     try {
-      await addDocument('attendance', {
+      const full = {
         ...rec,
         employeeName: myName || myEmail,
         employeeEmail: myEmail,
         date: today(),
         time: new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
-      });
+      };
+      const newId = await addDocument('attendance', full);
+      clearDraft();
+      notifyConcerned({ ...full, id: newId }, myName || myEmail);
       toast(`${rec.type} marked`);
       setModal(false);
     } catch (e) { toast(e.message, 'er'); }
@@ -77,6 +135,22 @@ export default function Attendance() {
         <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>Next: <strong>{suggestedType}</strong></span>
       </div></div>
 
+      {/* Attendance counts — refresh automatically as marks come in */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>
+        {[
+          canSeeAll ? ['Present Today', counts.presentToday, 'groups', '#27ae60'] : null,
+          canSeeAll ? ['Marks Today', counts.marksToday, 'fact_check', 'var(--pri)'] : null,
+          ['My Days This Month', counts.myMonth, 'calendar_month', '#6c5ce7'],
+          ['My Total Check-Ins', counts.myTotal, 'how_to_reg', '#e8830c'],
+        ].filter(Boolean).map(([label, val, icon, color]) => (
+          <div className="card" key={label}><div className="cb" style={{ textAlign: 'center', padding: '14px 10px' }}>
+            <span className="material-icons-round" style={{ fontSize: 26, color, display: 'block', marginBottom: 4 }}>{icon}</span>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700 }}>{val}</div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{label}</div>
+          </div></div>
+        ))}
+      </div>
+
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
         <th>Employee</th><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Photo</th>{admin && <th style={{ textAlign: 'right' }}>Actions</th>}
       </tr></thead><tbody>
@@ -100,19 +174,20 @@ export default function Attendance() {
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({visible.length - visibleCount} remaining)</button></div>}
       </div></div>
 
-      {modal && <MarkModal suggestedType={suggestedType} onSave={handleSave} onClose={() => setModal(false)} />}
+      {modal && <MarkModal suggestedType={suggestedType} onSave={handleSave} onClose={() => { clearDraft(); setModal(false); }} />}
     </>
   );
 }
 
 function MarkModal({ suggestedType, onSave, onClose }) {
   const { toast } = useToast();
-  const [type, setType] = useState(suggestedType);
-  const [loc, setLoc] = useState(null);      // { lat, lng, accuracy }
+  const draft = readDraft();
+  const [type, setType] = useState(draft?.type || suggestedType);
+  const [loc, setLoc] = useState(draft?.loc || null);      // { lat, lng, accuracy }
   const [locStatus, setLocStatus] = useState('');
   const [locating, setLocating] = useState(false);
-  const [photo, setPhoto] = useState(null);  // { file, preview }
-  const [photoUrl, setPhotoUrl] = useState('');
+  const [photo, setPhoto] = useState(null);                // { file, preview }
+  const [photoUrl, setPhotoUrl] = useState(draft?.photoUrl || '');
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -134,6 +209,15 @@ function MarkModal({ suggestedType, onSave, onClose }) {
     );
   };
 
+  // Ask for the location as soon as the screen opens, so it is already captured
+  // by the time the employee takes the photo — no separate step to forget.
+  useEffect(() => {
+    if (!loc) captureLocation();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the half-finished mark so a reload during the camera does not lose it.
+  useEffect(() => { writeDraft({ type, loc, photoUrl }); }, [type, loc, photoUrl]);
+
   const onPickPhoto = async (e) => {
     const file = (e.target.files || [])[0];
     if (!file) return;
@@ -143,6 +227,9 @@ function MarkModal({ suggestedType, onSave, onClose }) {
       setUploading(true);
       const res = await apiUpload(file, 'attendance');
       setPhotoUrl(res.url);
+      // The camera can take a while; if location was refused or timed out
+      // earlier, try again now so the record is never saved without it.
+      if (!loc) captureLocation();
     } catch (err) { toast(err.message || 'Photo upload failed', 'er'); setPhoto(null); }
     finally { setUploading(false); }
   };
@@ -171,7 +258,7 @@ function MarkModal({ suggestedType, onSave, onClose }) {
 
           {/* Step 1 — GPS (mandatory) */}
           <div className="fg">
-            <label>1. Location {loc && <span style={{ color: 'var(--ok)' }}>✓</span>}</label>
+            <label>1. Location (captured automatically) {loc && <span style={{ color: 'var(--ok)' }}>✓</span>}</label>
             <button type="button" className="btn bo" onClick={captureLocation} disabled={locating} style={{ display: 'inline-flex', gap: 6 }}>
               <span className="material-icons-round" style={{ fontSize: 18 }}>my_location</span>{locating ? 'Locating…' : (loc ? 'Re-capture location' : 'Capture location')}
             </button>
@@ -187,7 +274,12 @@ function MarkModal({ suggestedType, onSave, onClose }) {
               <input type="file" accept="image/*" capture="environment" onChange={onPickPhoto} style={{ display: 'none' }} />
             </label>
             {uploading && <small className="lg-hint">Uploading photo…</small>}
-            {photo && <div style={{ marginTop: 8 }}><img src={photo.preview} alt="Attendance" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} /></div>}
+            {(photo || (photoUrl && isSafeUrl(photoUrl))) && (
+              <div style={{ marginTop: 8 }}>
+                <img src={photo ? photo.preview : photoUrl} alt="Attendance" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} />
+                {!photo && <div style={{ fontSize: '.76rem', color: 'var(--ok)', marginTop: 4 }}>Photo restored — carry on where you left off.</div>}
+              </div>
+            )}
           </div>
 
           {!ready && <p style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Both live location and a photo are required to mark attendance.</p>}

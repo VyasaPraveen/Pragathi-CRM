@@ -3,38 +3,42 @@ import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { getInitials, hasAccess } from '../services/helpers';
+import { hasModule } from '../services/permissions';
 
+// `perm` = the per-user permission key an Admin can switch off for an individual
+// user (Settings → Permission Management). `minRole` is the role floor.
 const sections = [
   { title: 'Main', items: [
-    { to: '/', icon: 'dashboard', label: 'Dashboard' },
-    { to: '/leads', icon: 'leaderboard', label: 'Leads', badgeKey: 'leads' },
-    { to: '/customers', icon: 'people', label: 'Customers' },
-    { to: '/tasks', icon: 'task_alt', label: 'Tasks' },
-    { to: '/my-reports', icon: 'insights', label: 'My Reports & Planning' },
+    { to: '/', icon: 'dashboard', label: 'Dashboard', perm: 'dashboard' },
+    { to: '/leads', icon: 'leaderboard', label: 'Leads', badgeKey: 'leads', perm: 'leads' },
+    { to: '/customers', icon: 'people', label: 'Customers', perm: 'customers' },
+    { to: '/tasks', icon: 'task_alt', label: 'Tasks', perm: 'tasks' },
+    { to: '/my-reports', icon: 'insights', label: 'My Reports & Planning', perm: 'my_reports' },
   ]},
   { title: 'Operations', items: [
-    { to: '/installations', icon: 'solar_power', label: 'Installations' },
-    { to: '/ongoing', icon: 'construction', label: 'Ongoing Work' },
-    { to: '/materials', icon: 'inventory_2', label: 'Materials' },
-    { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders' },
+    { to: '/installations', icon: 'solar_power', label: 'Installations', perm: 'installations' },
+    { to: '/ongoing', icon: 'construction', label: 'Ongoing Work', perm: 'ongoing_work' },
+    { to: '/materials', icon: 'inventory_2', label: 'Materials', perm: 'materials' },
+    { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders', perm: 'purchase_orders' },
   ]},
   { title: 'Finance', items: [
-    { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue' },
-    { to: '/expenditure', icon: 'payments', label: 'Expenditure' },
-    { to: '/reports', icon: 'assessment', label: 'Reports', minRole: 'coordinator' },
+    { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue', perm: 'revenue' },
+    { to: '/expenditure', icon: 'payments', label: 'Expenditure', perm: 'expenditure' },
+    { to: '/payment-requests', icon: 'request_quote', label: 'Payment Requests', perm: 'payment_requests' },
+    { to: '/reports', icon: 'assessment', label: 'Reports', minRole: 'coordinator', perm: 'reports' },
   ]},
   { title: 'People', items: [
-    { to: '/team', icon: 'groups', label: 'Team' },
-    { to: '/attendance', icon: 'how_to_reg', label: 'Attendance' },
-    { to: '/tracking', icon: 'schedule', label: 'Tracking' },
-    { to: '/leave', icon: 'event_available', label: 'Leave' },
-    { to: '/reminders', icon: 'notifications_active', label: 'Reminders', badgeKey: 'reminders' },
-    { to: '/retailers', icon: 'storefront', label: 'Retailers' },
-    { to: '/influencers', icon: 'campaign', label: 'Influencers' },
+    { to: '/team', icon: 'groups', label: 'Team', perm: 'team' },
+    { to: '/attendance', icon: 'how_to_reg', label: 'Attendance', perm: 'attendance' },
+    { to: '/tracking', icon: 'schedule', label: 'Tracking', perm: 'tracking' },
+    { to: '/leave', icon: 'event_available', label: 'Leave', perm: 'leave' },
+    { to: '/reminders', icon: 'notifications_active', label: 'Reminders', badgeKey: 'reminders', perm: 'reminders' },
+    { to: '/retailers', icon: 'storefront', label: 'Retailers', perm: 'retailers' },
+    { to: '/influencers', icon: 'campaign', label: 'Influencers', perm: 'influencers' },
   ]},
   { title: 'Company', items: [
-    { to: '/about', icon: 'info', label: 'About' },
-    { to: '/gallery', icon: 'photo_library', label: 'Gallery' },
+    { to: '/about', icon: 'info', label: 'About', perm: 'about' },
+    { to: '/gallery', icon: 'photo_library', label: 'Gallery', perm: 'gallery' },
     { to: '/user-management', icon: 'admin_panel_settings', label: 'User Management', minRole: 'admin' },
     { to: '/activity-log', icon: 'history', label: 'Activity Log', minRole: 'admin' },
     { to: '/settings', icon: 'settings', label: 'Settings', minRole: 'coordinator' },
@@ -53,6 +57,13 @@ export default function Sidebar({ open, onClose }) {
     return 0;
   };
 
+  // A nav item shows only when the role floor AND the user's own permission allow it.
+  const visible = (item) => {
+    if (item.minRole && !hasAccess(role, item.minRole)) return false;
+    if (item.perm && !hasModule(user, role, item.perm)) return false;
+    return true;
+  };
+
   return (
     <>
       <aside className={`sb ${open ? 'open' : ''}`}>
@@ -65,11 +76,13 @@ export default function Sidebar({ open, onClose }) {
           <div className="sb-brand">Pragathi Power<br /><small>Solar CRM</small></div>
         </div>
         <nav className="sb-nav">
-          {sections.map(sec => (
+          {sections.map(sec => {
+            const items = sec.items.filter(visible);
+            if (!items.length) return null; // hide an empty section heading
+            return (
             <div key={sec.title}>
               <div className="ns-t">{sec.title}</div>
-              {sec.items.map(item => {
-                if (item.minRole && !hasAccess(role, item.minRole)) return null;
+              {items.map(item => {
                 const badge = item.badgeKey ? getBadge(item.badgeKey) : 0;
                 return (
                   <NavLink key={item.to} to={item.to} end={item.to === '/'} className={({ isActive }) => `ni ${isActive ? 'act' : ''}`} onClick={onClose}>
@@ -80,7 +93,8 @@ export default function Sidebar({ open, onClose }) {
                 );
               })}
             </div>
-          ))}
+            );
+          })}
         </nav>
         <div className="sb-f">
           <div className="ui">

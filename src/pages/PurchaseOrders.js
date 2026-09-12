@@ -7,7 +7,7 @@ import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, o
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
 import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
-import { can, ACTIONS } from '../services/permissions';
+import { can, ACTIONS, hasModule } from '../services/permissions';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
 const PAGE_SIZE = 20;
@@ -30,7 +30,7 @@ const DEFAULT_BOM_MATERIALS = [
 
 export default function PurchaseOrders() {
   const { purchaseOrders, leadPOs, leads } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -38,7 +38,9 @@ export default function PurchaseOrders() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expanded, setExpanded] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
-  const canEdit = can(role, ACTIONS.PO_RECORD);
+  // Creating a PO needs the role action AND the per-user "New PO" permission
+  // an Admin can switch on/off for an individual employee.
+  const canEdit = can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po');
 
   // Merge both collections with a source tag (memoized so typing in search doesn't re-merge/re-sort)
   const allPOs = useMemo(() => {
