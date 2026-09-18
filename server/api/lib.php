@@ -125,7 +125,7 @@ function require_auth(): array {
 }
 
 // ── RBAC (server-side mirror of src/services/permissions.js) ─────────────────
-const ALL_ROLES = ['executive','technical_manager','operation_manager','accountant','admin','management','bco','technician','sales_manager','warehouse_admin'];
+const ALL_ROLES = ['executive','technical_manager','operation_manager','accountant','admin','management','bco','technician','team_leader','sales_manager','warehouse_admin'];
 const ACTION_ROLES = [
   'lead_entry'                 => ALL_ROLES,
   'site_visit'                 => ['executive','technical_manager'],
@@ -141,7 +141,7 @@ const ACTION_ROLES = [
   // Payment Request chain: Team Member → Team Leader → Admin/Management/
   // Operation Manager → Accountant → Work Proposal / Pre-PO → Admin/Mgmt/OM
   'pr_create'                  => ALL_ROLES,
-  'pr_recommend'               => ['technical_manager','operation_manager','sales_manager'],
+  'pr_recommend'               => ['team_leader','technical_manager','operation_manager','sales_manager'],
   'pr_approve'                 => ['admin','management','operation_manager'],
   'pr_transfer'                => ['accountant'],
   'pr_proposal'                => ['accountant'],
@@ -162,7 +162,7 @@ function can(?string $role, string $action): bool {
 const ROLE_LEVELS = [
   'super_admin'=>7,'management'=>6,'admin'=>5,
   'manager'=>4,'operation_manager'=>4,'technical_manager'=>4,'sales_manager'=>4,'warehouse_admin'=>4,
-  'coordinator'=>3,'accountant'=>3,'bco'=>3,
+  'coordinator'=>3,'accountant'=>3,'bco'=>3,'team_leader'=>3,
   'engineer'=>2,'executive'=>2,'technician'=>2,'staff'=>1,
 ];
 function has_access(?string $role, string $min): bool {
@@ -193,10 +193,15 @@ function user_perm(?string $uid, string $key): ?bool {
 // TECHNICIAN_DEFAULT_MODULES in src/services/permissions.js.
 const TECHNICIAN_DEFAULT_MODULES = ['dashboard','tasks','my_reports','installations','ongoing_work','materials','attendance','tracking','leave','reminders','gallery','about'];
 
+// A Team Leader starts with a Technician's options plus the Team section and
+// payment requests. Mirrors TEAM_LEADER_DEFAULT_MODULES in permissions.js.
+const TEAM_LEADER_EXTRA_MODULES = ['team','team_members','team_attendance','team_tracking','team_tasks','team_leave','payment_requests'];
+
 function default_module_allowed(?string $role, string $key): bool {
   $r = normalize_role($role);
   if ($key === 'new_po') return can($r, 'po_record');
   if ($r === 'technician') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true);
+  if ($r === 'team_leader') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true) || in_array($key, TEAM_LEADER_EXTRA_MODULES, true);
   return true;
 }
 
@@ -209,6 +214,19 @@ function may_module(array $claims, string $key): bool {
   $explicit = user_perm($claims['sub'] ?? null, $key);
   if ($explicit !== null) return $explicit;
   return default_module_allowed($role, $key);
+}
+
+// The Team Leader a user reports to (their leader's email), or '' when none is
+// assigned. Stored on the user's data JSON by an Admin; this is the server's
+// authority for routing a payment request to the right Team Leader.
+function team_leader_of(string $email): string {
+  if (trim($email) === '') return '';
+  $st = db()->prepare('SELECT data FROM users WHERE email = ? LIMIT 1');
+  $st->execute([strtolower(trim($email))]);
+  $r = $st->fetch();
+  if (!$r || !$r['data']) return '';
+  $d = json_decode($r['data'], true);
+  return is_array($d) && !empty($d['teamLeader']) ? strtolower(trim((string)$d['teamLeader'])) : '';
 }
 
 // ── Collection → table allowlist ─────────────────────────────────────────────

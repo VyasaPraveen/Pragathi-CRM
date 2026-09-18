@@ -5,21 +5,23 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, hasAccess } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
-import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage } from '../services/permissions';
+import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf } from '../services/permissions';
 
 // Payment Request — the step-by-step approval & payment workflow:
-// Team Member → Generate Payment Request → Team Leader (Recommend) → Admin /
-// Management / Operation Manager (Main Approval) → Accountant (Payment
-// Transfer) → Accountant (one-shot Work Proposal / Pre-PO) → Admin /
-// Management / Operation Manager (final sign-off). A request moves to the next
-// stage only after the required action on the current stage is completed.
+// Team Member → Generate Payment Request → their own Team Leader (Recommend
+// only) → final approval by ANY ONE of Operation Manager / Management / Admin /
+// Owner → Accountant (Payment Transfer) → Accountant (one-shot Work Proposal /
+// Pre-PO) → Admin / Management / Operation Manager (sign-off).
+// A Team Leader raising their own request skips the recommendation step, and
+// nobody may recommend or approve a request they raised themselves.
 const PAYMENT_MODES = ['Bank Transfer', 'UPI', 'Cash', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
 
-// Who may reject at the stage the request is currently sitting on.
-const canRejectAtStage = (role, status) => {
-  const stage = nextPrStage(status);
-  return !!stage && can(role, stage.action);
+// Who may reject: whoever owns the stage the request is sitting on — and never
+// the person who raised it.
+const canRejectPr = (pr, user, role) => {
+  const stage = nextPrStage(pr.status, pr);
+  return !!stage && canTakePrStage(stage, pr, user, role);
 };
 
 export default function PaymentRequests() {
@@ -33,6 +35,11 @@ export default function PaymentRequests() {
 
   const canRequest = can(role, ACTIONS.PR_CREATE);
   const me = user?.displayName || user?.email || 'unknown';
+  // The Team Leader this request has to go to, from the team structure.
+  const myLeaderEmail = leaderOf(users, user?.email);
+  const myLeader = (users || []).find(u => String(u.email || '').toLowerCase() === myLeaderEmail);
+  const iAmMyOwnLeader = !!myLeaderEmail && myLeaderEmail === String(user?.email || '').toLowerCase();
+  const needsRecommendation = !!myLeaderEmail && !iAmMyOwnLeader;
 
   // Hand the request to whoever must act on the given stage — this is how it
   // "moves to" the next person in the chain.
@@ -49,6 +56,24 @@ export default function PaymentRequests() {
         title: `Payment Request needs your ${label}`,
         message: `"${pr.purpose || ''}" (${formatCurrency(pr.amount)}) raised by ${pr.requestedByName || pr.requestedBy || 'a team member'} is awaiting your ${label.toLowerCase()}`,
         type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+      });
+    });
+  };
+
+  // Operation Manager, Management, Admin and Owner see every request from the
+  // moment it is raised, so nothing sits unnoticed.
+  const notifyConcerned = (pr) => {
+    const seen = new Set();
+    (users || []).forEach(u => {
+      if (!['operation_manager', 'management', 'admin', 'super_admin'].includes(u.role)) return;
+      const key = u.displayName || u.email;
+      if (!key || seen.has(key) || key === me) return;
+      seen.add(key);
+      createNotification({
+        forUser: key,
+        title: 'New Payment Request raised',
+        message: `${pr.requestedByName || me} raised "${pr.purpose || ''}" (${formatCurrency(pr.amount)})${pr.teamLeaderName ? ` — with ${pr.teamLeaderName} for recommendation` : ' — awaiting final approval'}`,
+        type: 'info', module: 'paymentRequests', relatedId: pr.id,
       });
     });
   };
@@ -93,20 +118,38 @@ export default function PaymentRequests() {
         cleaned.requestedBy = user?.email || 'unknown';
         cleaned.requestedByName = me;
         cleaned.requestedDate = new Date().toISOString().slice(0, 10);
+        // The server decides these from the team structure on file; sent here so
+        // the row reads correctly straight away.
+        cleaned.teamLeaderEmail = needsRecommendation ? myLeaderEmail : '';
+        cleaned.teamLeaderName = needsRecommendation ? (myLeader?.displayName || myLeaderEmail) : '';
+        cleaned.needsRecommendation = needsRecommendation;
         const newId = await addDocument('paymentRequests', cleaned);
-        notifyAdmins(users, { title: 'New Payment Request', message: `${cleaned.purpose} — ${formatCurrency(cleaned.amount)} (by ${me})`, type: 'info', module: 'paymentRequests', relatedId: newId });
-        // Step 1 of the flow: it goes to the Team Leader for recommendation.
-        notifyActors(ACTIONS.PR_RECOMMEND, 'Recommendation', { ...cleaned, id: newId });
-        toast('Payment request generated');
+        const full = { ...cleaned, id: newId };
+        // Everyone concerned is told as soon as it is raised: the requester's own
+        // Team Leader, plus Operation Manager, Management, Admin and the Owner.
+        notifyConcerned(full);
+        if (needsRecommendation && myLeader) {
+          createNotification({
+            forUser: myLeader.displayName || myLeader.email,
+            title: 'Payment Request needs your Recommendation',
+            message: `${me} raised "${cleaned.purpose}" (${formatCurrency(cleaned.amount)}). You are their Team Leader — please recommend it.`,
+            type: 'status_update', module: 'paymentRequests', relatedId: newId,
+          });
+        } else {
+          // No recommendation due — it goes straight for final approval.
+          notifyActors(ACTIONS.PR_APPROVE, 'Final Approval', full);
+        }
+        toast(needsRecommendation ? 'Payment request sent to your Team Leader' : 'Payment request sent for final approval');
       }
       setModal(null);
     } catch (e) { toast(e.message, 'er'); }
   };
 
   const advanceStage = async (pr) => {
-    const stage = nextPrStage(pr.status);
+    const stage = nextPrStage(pr.status, pr);
     if (!stage) return;
-    if (!can(role, stage.action)) { toast(`You are not authorised to ${stage.label.toLowerCase()}`, 'er'); return; }
+    if (isOwnRequest(pr, user)) { toast('You cannot act on your own payment request', 'er'); return; }
+    if (!canTakePrStage(stage, pr, user, role)) { toast(`You are not authorised to ${stage.label.toLowerCase()}`, 'er'); return; }
     const extra = {};
 
     if (stage.to === PR_STATUS.PAID) {
@@ -139,7 +182,7 @@ export default function PaymentRequests() {
           type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
         });
       }
-      const next = nextPrStage(stage.to);
+      const next = nextPrStage(stage.to, pr);
       if (next) notifyActors(next.action, next.label, pr);
       else notifyAdmins(users, { title: 'Payment Request Closed', message: `"${pr.purpose || ''}" — ${formatCurrency(pr.amount)} is fully closed`, type: 'status_update', module: 'paymentRequests', relatedId: pr.id });
       toast(`Payment request ${stage.to.toLowerCase()}`);
@@ -147,6 +190,7 @@ export default function PaymentRequests() {
   };
 
   const rejectRequest = async (pr) => {
+    if (isOwnRequest(pr, user)) { toast('You cannot reject your own payment request', 'er'); return; }
     if (!window.confirm('Reject this payment request? This stops the approval chain.')) return;
     try {
       await updateDocument('paymentRequests', pr.id, {
@@ -167,14 +211,30 @@ export default function PaymentRequests() {
     catch (e) { toast(e.message, 'er'); }
   };
 
-  // Compact "who has acted so far" trail for the table.
-  const trail = (pr) => [
-    pr.recommendedBy && 'Recommended',
-    pr.approvedBy && 'Approved',
-    pr.paidBy && 'Paid',
-    pr.proposalBy && 'Proposal sent',
-    pr.closedBy && 'Closed',
-  ].filter(Boolean).join(' → ') || 'Awaiting Team Leader recommendation';
+  // What has happened and what it is waiting on — shown on every row so the
+  // requester can always see exactly where their request has stopped.
+  const trail = (pr) => {
+    const p = prProgress(pr);
+    return (
+      <>
+        {p.done.map(d => (
+          <div key={d.label} style={{ whiteSpace: 'nowrap' }}>
+            <span className="material-icons-round" style={{ fontSize: 13, color: 'var(--ok)', verticalAlign: 'middle' }}>check_circle</span>{' '}
+            {d.label} by <strong>{d.by}</strong>{d.date ? ` · ${formatDate(d.date)}` : ''}
+          </div>
+        ))}
+        {p.rejected && <div style={{ color: 'var(--err)' }}>Rejected by <strong>{p.rejectedBy || '-'}</strong></div>}
+        {!p.rejected && p.waitingOn && (
+          <div style={{ color: '#e8830c' }}>
+            <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: 'middle' }}>hourglass_top</span>{' '}
+            Pending with <strong>{p.waitingOn}</strong>
+          </div>
+        )}
+        {!p.rejected && !p.waitingOn && !p.done.length && <span style={{ color: 'var(--muted)' }}>Just raised</span>}
+        {!p.rejected && !p.waitingOn && !!p.done.length && <div style={{ color: 'var(--ok)' }}>Completed</div>}
+      </>
+    );
+  };
 
   return (
     <>
@@ -208,9 +268,9 @@ export default function PaymentRequests() {
         <th>Payment For / Paid To</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
       </tr></thead><tbody>
         {displayed.map(pr => {
-          const stage = nextPrStage(pr.status);
-          const canAct = stage && pr.status !== PR_STATUS.REJECTED && can(role, stage.action);
-          const isOwner = pr.requestedBy === user?.email;
+          const stage = nextPrStage(pr.status, pr);
+          const canAct = canTakePrStage(stage, pr, user, role);
+          const isOwner = isOwnRequest(pr, user);
           return (
             <tr key={pr.id}>
               <td>
@@ -223,7 +283,7 @@ export default function PaymentRequests() {
               <td style={{ fontSize: '.82rem' }}>{pr.requestedByName || pr.requestedBy || '-'}</td>
               <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(pr.requestedDate)}</td>
               <td><StatusBadge status={pr.status} /></td>
-              <td style={{ fontSize: '.76rem', color: 'var(--muted)', minWidth: 160 }}>{trail(pr)}</td>
+              <td style={{ fontSize: '.74rem', color: 'var(--muted)', minWidth: 200, lineHeight: 1.6 }}>{trail(pr)}</td>
               <td style={{ textAlign: 'right' }}>
                 <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   {canAct && (
@@ -231,7 +291,7 @@ export default function PaymentRequests() {
                       <span className="material-icons-round" style={{ fontSize: 15 }}>arrow_forward</span> {stage.label}
                     </button>
                   )}
-                  {pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED && canRejectAtStage(role, pr.status) && (
+                  {pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED && canRejectPr(pr, user, role) && (
                     <button className="btn bsm bo" onClick={() => rejectRequest(pr)} title="Reject" style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
                       <span className="material-icons-round" style={{ fontSize: 15 }}>block</span>
                     </button>
@@ -262,7 +322,9 @@ export default function PaymentRequests() {
           <span className="material-icons-round" style={{ fontSize: 15 }}>info</span>
           <strong>Flow:</strong> Team Member generates the request
           {PR_STAGES.map(s => <span key={s.to}>→ {s.label} ({s.by})</span>)}
-          · no stage can be skipped and each step is role-restricted.
+          · final approval needs any ONE of Operation Manager / Management / Admin / Owner.
+          A Team Leader&rsquo;s own request skips the recommendation step, and nobody can
+          recommend or approve a request they raised themselves.
         </div>
       </div></div>
 

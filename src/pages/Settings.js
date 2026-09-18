@@ -49,6 +49,7 @@ export default function Settings() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [perms, setPerms] = useState({});
   const [saving, setSaving] = useState(false);
+  const [leaderSaving, setLeaderSaving] = useState(false);
 
   // Global workflow-gating toggle (company-wide)
   const [gatingEnabled, setGatingEnabled] = useState(true);
@@ -94,6 +95,23 @@ export default function Settings() {
         : defaultModuleAllowed(u.role, m.key);
     });
     setPerms(p);
+  };
+
+  // Who this user reports to. This one field drives the whole Team Leader ->
+  // Team Member structure: the leader's "My Team" list and the routing of their
+  // payment requests for recommendation.
+  const setTeamLeader = async (leaderEmail) => {
+    if (!selectedUser) return;
+    setLeaderSaving(true);
+    try {
+      await apiPatch('/auth/users/' + selectedUser.id, { teamLeader: leaderEmail });
+      setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, teamLeader: leaderEmail } : u));
+      setSelectedUser(prev => ({ ...prev, teamLeader: leaderEmail }));
+      toast(leaderEmail ? 'Team Leader assigned' : 'Team Leader cleared');
+    } catch (err) {
+      toast('Failed to save: ' + err.message, 'er');
+    }
+    setLeaderSaving(false);
   };
 
   const togglePerm = (key) => {
@@ -339,6 +357,35 @@ export default function Settings() {
                           <button className="btn" onClick={() => toggleAll(true)} style={{ padding: '4px 10px', fontSize: '.76rem' }}>Select All</button>
                           <button className="btn" onClick={() => toggleAll(false)} style={{ padding: '4px 10px', fontSize: '.76rem' }}>Deselect All</button>
                         </div>
+                      </div>
+
+                      {/* Team structure: who this person reports to */}
+                      <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, background: 'var(--bg)' }}>
+                        <label style={{ fontSize: '.78rem', fontWeight: 700, display: 'block', marginBottom: 6 }}>Reports to (Team Leader)</label>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <select
+                            className="fi"
+                            style={{ maxWidth: 320 }}
+                            value={selectedUser.teamLeader || ''}
+                            disabled={leaderSaving}
+                            onChange={e => setTeamLeader(e.target.value)}
+                          >
+                            <option value="">— No Team Leader —</option>
+                            {users.filter(u => u.id !== selectedUser.id).map(u => (
+                              <option key={u.id} value={u.email}>{u.displayName || u.email}{u.designation ? ' · ' + u.designation : ''}</option>
+                            ))}
+                          </select>
+                          {leaderSaving && <span className="ssm"></span>}
+                          {(() => {
+                            const led = users.filter(u => (u.teamLeader || '').toLowerCase() === (selectedUser.email || '').toLowerCase());
+                            return led.length
+                              ? <span style={{ fontSize: '.78rem', color: 'var(--ok)' }}>Leads {led.length} member{led.length === 1 ? '' : 's'}: {led.map(u => u.displayName || u.email).join(', ')}</span>
+                              : <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>No members assigned under this user yet.</span>;
+                          })()}
+                        </div>
+                        <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: '6px 0 0' }}>
+                          The Team options below only appear for someone who has members assigned under them.
+                        </p>
                       </div>
 
                       {/* Permission toggles, grouped the same way as the sidebar */}

@@ -87,7 +87,7 @@ export const ROLE_LEVELS = {
   // Manager-tier (level 4)
   manager: 4, operation_manager: 4, technical_manager: 4, sales_manager: 4, warehouse_admin: 4,
   // Coordinator-tier (level 3)
-  coordinator: 3, accountant: 3, bco: 3,
+  coordinator: 3, accountant: 3, bco: 3, team_leader: 3,
   // Field/operational-tier (level 2)
   engineer: 2, executive: 2, technician: 2,
   staff: 1
@@ -110,6 +110,7 @@ export const DESIGNATIONS = [
   { label: 'Accountant', role: 'accountant' },
   { label: 'BCO', role: 'bco' },
   { label: 'Executive', role: 'executive' },
+  { label: 'Team Leader', role: 'team_leader' },
   { label: 'Technician', role: 'technician' },
   { label: 'Warehouse Admin', role: 'warehouse_admin' },
 ];

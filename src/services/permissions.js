@@ -19,6 +19,7 @@ export const ROLES = [
   { key: 'management', label: 'Management' },
   { key: 'bco', label: 'BCO' },
   { key: 'technician', label: 'Technician' },
+  { key: 'team_leader', label: 'Team Leader' },
   { key: 'sales_manager', label: 'Sales Manager' },
   { key: 'warehouse_admin', label: 'Warehouse Admin' },
 ];
@@ -74,7 +75,9 @@ export const ACTION_ROLES = {
   [ACTIONS.PAYMENT_RELEASE]: ['accountant'],         // Accountant releases the payment
   // Payment Request chain
   [ACTIONS.PR_CREATE]: [...ALL_ROLE_KEYS],                                   // any team member
-  [ACTIONS.PR_RECOMMEND]: ['technical_manager', 'operation_manager', 'sales_manager'], // Team Leader
+  // The requester's own Team Leader recommends (see prRecommenders); these
+  // roles stand in for staff who have no Team Leader assigned.
+  [ACTIONS.PR_RECOMMEND]: ['team_leader', 'technical_manager', 'operation_manager', 'sales_manager'],
   [ACTIONS.PR_APPROVE]: ['admin', 'management', 'operation_manager'],        // main approval
   [ACTIONS.PR_TRANSFER]: ['accountant'],                                     // payment transfer
   [ACTIONS.PR_PROPOSAL]: ['accountant'],                                     // Work Proposal / Pre-PO
@@ -187,7 +190,83 @@ export const PR_STAGES = [
   { from: PR_STATUS.PROPOSAL_SUBMITTED, to: PR_STATUS.CLOSED, action: ACTIONS.PR_PROPOSAL_APPROVE, label: 'Approve Proposal & Close', by: 'Admin / Management / Operation Manager', field: 'closedBy' },
 ];
 
-export const nextPrStage = (status) => PR_STAGES.find(s => s.from === (status || PR_STATUS.REQUESTED)) || null;
+// The next stage for a request. When the requester has no Team Leader to
+// recommend it (they are a Team Leader themselves, or none is assigned), the
+// recommendation step is skipped and it goes straight for final approval.
+export function nextPrStage(status, pr) {
+  const from = status || PR_STATUS.REQUESTED;
+  if (pr && pr.needsRecommendation === false && from === PR_STATUS.REQUESTED) {
+    const approve = PR_STAGES.find(s => s.to === PR_STATUS.APPROVED);
+    return approve ? { ...approve, from: PR_STATUS.REQUESTED } : null;
+  }
+  return PR_STAGES.find(s => s.from === from) || null;
+}
+
+// ── Team Leader → Team Member structure ─────────────────────────────────
+// A member's user record carries `teamLeader` (their leader's email). A Team
+// Leader is anyone who has members pointing at them, which keeps the structure
+// in one place instead of duplicating it on both sides.
+export const teamMembersOf = (users, leaderEmail) => {
+  const key = String(leaderEmail || '').toLowerCase();
+  if (!key) return [];
+  return (users || []).filter(u => String(u.teamLeader || '').toLowerCase() === key);
+};
+
+export const isTeamLeader = (users, email) => teamMembersOf(users, email).length > 0;
+
+// The leader who should recommend this person's requests, if any.
+export const leaderOf = (users, email) => {
+  const me = (users || []).find(u => String(u.email || '').toLowerCase() === String(email || '').toLowerCase());
+  return me && me.teamLeader ? String(me.teamLeader).toLowerCase() : '';
+};
+
+// Nobody may recommend or approve their own payment request.
+export const isOwnRequest = (pr, user) => {
+  if (!pr || !user) return false;
+  const email = String(user.email || '').toLowerCase();
+  return String(pr.requestedBy || '').toLowerCase() === email;
+};
+
+// May this user take the given stage on this request?
+export function canTakePrStage(stage, pr, user, role) {
+  if (!stage || !pr) return false;
+  if (pr.status === PR_STATUS.REJECTED) return false;
+  if (isOwnRequest(pr, user)) return false; // never your own request
+  if (stage.to === PR_STATUS.RECOMMENDED) {
+    // Their own Team Leader recommends. A Team Leader has no say over another
+    // leader's members, so only the managers below can stand in.
+    const mine = !!pr.teamLeaderEmail &&
+      String(pr.teamLeaderEmail).toLowerCase() === String(user?.email || '').toLowerCase();
+    if (mine) return true;
+    if (normalizeRole(role) === 'team_leader') return false;
+    return can(role, ACTIONS.PR_RECOMMEND);
+  }
+  return can(role, stage.action);
+}
+
+// A plain-English trail of what has happened and what the request is waiting on
+// — the requester must always be able to see where it is stopped.
+export function prProgress(pr) {
+  const done = [];
+  if (pr.recommendedBy) done.push({ label: 'Recommended', by: pr.recommendedBy, date: pr.recommendedByDate });
+  if (pr.approvedBy) done.push({ label: 'Approved', by: pr.approvedBy, date: pr.approvedByDate });
+  if (pr.paidBy) done.push({ label: 'Payment transferred', by: pr.paidBy, date: pr.paidByDate });
+  if (pr.proposalBy) done.push({ label: 'Work Proposal / Pre-PO sent', by: pr.proposalBy, date: pr.proposalByDate });
+  if (pr.closedBy) done.push({ label: 'Closed', by: pr.closedBy, date: pr.closedByDate });
+  if (pr.status === PR_STATUS.REJECTED) {
+    return { done, waitingOn: null, rejected: true, rejectedBy: pr.rejectedBy, summary: `Rejected by ${pr.rejectedBy || 'a reviewer'}` };
+  }
+  const stage = nextPrStage(pr.status, pr);
+  const waitingOn = stage
+    ? (stage.to === PR_STATUS.RECOMMENDED && pr.teamLeaderName ? `${stage.by} (${pr.teamLeaderName})` : stage.by)
+    : null;
+  return {
+    done,
+    waitingOn,
+    rejected: false,
+    summary: stage ? `Pending ${stage.label.toLowerCase()} with ${waitingOn}` : 'Completed — no action pending',
+  };
+}
 
 // ── Per-user module / action permissions (Admin-controlled) ────────────────
 // Settings → Permission Management saves a { key: true|false } map on the user
@@ -213,6 +292,11 @@ export const PERMISSION_MODULES = [
   { key: 'reports', label: 'Reports', icon: 'assessment', group: 'Finance' },
 
   { key: 'team', label: 'Team', icon: 'groups', group: 'People' },
+  { key: 'team_members', label: 'My Team — member list', icon: 'supervisor_account', group: 'Team' },
+  { key: 'team_attendance', label: 'My Team — attendance', icon: 'how_to_reg', group: 'Team' },
+  { key: 'team_tracking', label: 'My Team — tracking', icon: 'schedule', group: 'Team' },
+  { key: 'team_tasks', label: 'My Team — tasks', icon: 'task_alt', group: 'Team' },
+  { key: 'team_leave', label: 'My Team — leave', icon: 'event_available', group: 'Team' },
   { key: 'attendance', label: 'Attendance', icon: 'how_to_reg', group: 'People' },
   { key: 'tracking', label: 'Tracking', icon: 'schedule', group: 'People' },
   { key: 'leave', label: 'Leave', icon: 'event_available', group: 'People' },
@@ -238,10 +322,20 @@ export const TECHNICIAN_DEFAULT_MODULES = [
 
 // The default state of a permission for a role, used when the Admin has not set
 // an explicit value for that user.
+// A Team Leader starts with what a Technician gets, plus the Team section and
+// the ability to raise a payment request. Anything more is the Admin's call.
+export const TEAM_LEADER_DEFAULT_MODULES = [
+  ...TECHNICIAN_DEFAULT_MODULES,
+  'team', 'team_members', 'team_attendance', 'team_tracking', 'team_tasks', 'team_leave',
+  'payment_requests',
+];
+
 export function defaultModuleAllowed(role, key) {
   const r = normalizeRole(role);
   if (key === 'new_po') return can(r, ACTIONS.PO_RECORD);
   if (r === 'technician') return TECHNICIAN_DEFAULT_MODULES.includes(key);
+  if (r === 'team_leader') return TEAM_LEADER_DEFAULT_MODULES.includes(key);
+  // The Team options only mean anything to someone who has members assigned.
   return true;
 }
 

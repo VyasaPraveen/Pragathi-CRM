@@ -131,11 +131,17 @@ function handle_auth(array $seg, string $method): void {
   //    assignment and admin-notification targeting. No phone/permissions leaked.
   if ($action === 'directory' && $method === 'GET') {
     require_auth();
-    $rows = db()->query('SELECT id, email, display_name, role, designation, approved FROM users WHERE approved = 1')->fetchAll();
-    $out = array_map(fn($r) => [
-      'id' => $r['id'], 'email' => $r['email'], 'displayName' => $r['display_name'],
-      'role' => $r['role'], 'designation' => $r['designation'], 'approved' => (bool)$r['approved'],
-    ], $rows);
+    // `teamLeader` travels with the directory so a Team Leader's own screen can
+    // show the members assigned to them. No phone, permissions or profile data.
+    $rows = db()->query('SELECT id, email, display_name, role, designation, approved, data FROM users WHERE approved = 1')->fetchAll();
+    $out = array_map(function ($r) {
+      $d = $r['data'] ? json_decode($r['data'], true) : [];
+      return [
+        'id' => $r['id'], 'email' => $r['email'], 'displayName' => $r['display_name'],
+        'role' => $r['role'], 'designation' => $r['designation'], 'approved' => (bool)$r['approved'],
+        'teamLeader' => is_array($d) && !empty($d['teamLeader']) ? $d['teamLeader'] : '',
+      ];
+    }, $rows);
     json_out(['users' => $out]);
   }
 
@@ -180,6 +186,9 @@ function handle_auth(array $seg, string $method): void {
       // Extra profile fields live in the data JSON column (merged, not replaced).
       $extra = [];
       foreach (['address', 'department', 'notes'] as $k) { if (array_key_exists($k, $b)) $extra[$k] = $b[$k]; }
+      // teamLeader is an email used as a key, so it is normalised; the free-text
+      // fields above keep whatever casing the user typed.
+      if (array_key_exists('teamLeader', $b)) $extra['teamLeader'] = strtolower(trim((string)$b['teamLeader']));
       if ($extra) {
         $rowq = db()->prepare('SELECT data FROM users WHERE id = ?'); $rowq->execute([$uid]); $r = $rowq->fetch();
         $cur = ($r && $r['data']) ? json_decode($r['data'], true) : [];

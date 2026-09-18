@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatCurrency, getInitials, toNumber, getDaysInMonth, hasAccess, DESIGNATIONS } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import MyTeamPanel from '../components/MyTeamPanel';
 
 const roles = DESIGNATIONS.map(d => d.label);
 const statusOptions = ['Active', 'On Leave', 'Inactive'];
@@ -55,6 +56,9 @@ export default function Team() {
 
   return (
     <>
+      {/* A Team Leader's own members come first; renders nothing for everyone else */}
+      <MyTeamPanel />
+
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 18 }}>
         <div className="card" style={{ cursor: 'pointer', border: filterStatus === 'all' ? '2px solid var(--pri)' : undefined }} onClick={() => setFilterStatus('all')}>

@@ -49,6 +49,14 @@ function handle_collections(string $collection, string $id, string $method): voi
       $data['status'] = $initialStatus[$collection];
       if ($collection === 'leaveRequests') $data['replacementStatus'] = 'Pending';
     }
+    // Who must recommend this payment request is decided here, from the team
+    // structure on file — not from whatever the client sent. A Team Leader's own
+    // request (or one from someone with no leader assigned) skips that step.
+    if ($collection === 'paymentRequests') {
+      $tl = team_leader_of($email);
+      $data['teamLeaderEmail'] = $tl;
+      $data['needsRecommendation'] = ($tl !== '' && $tl !== strtolower(trim($email)));
+    }
     $newId = gen_id();
     $st = db()->prepare("INSERT INTO `$table` (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)");
     $st->execute([$newId, json_encode($data, JSON_UNESCAPED_UNICODE), $email]);
@@ -70,7 +78,7 @@ function handle_collections(string $collection, string $id, string $method): voi
 
     $patch = body();
     unset($patch['id'], $patch['createdAt'], $patch['updatedAt']);
-    enforce_status_transition($collection, $role, $patch, $existing);
+    enforce_status_transition($collection, $role, $patch, $existing, $email);
 
     $merged = array_merge($existing, $patch);
     $st = db()->prepare("UPDATE `$table` SET data = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?");
@@ -164,7 +172,7 @@ function enforce_create(string $collection, array $claims): void {
 }
 
 // Enforce the approval-chain transitions server-side (can't be forged via API).
-function enforce_status_transition(string $collection, string $role, array $patch, array $existing): void {
+function enforce_status_transition(string $collection, string $role, array $patch, array $existing, string $email = ''): void {
   // A patch with no `status` key is a plain field edit. For approval-chain
   // collections, lock those once the record has left its initial stage so
   // amounts/details can't be altered after review/approval (only Admin/Owner may
@@ -219,22 +227,41 @@ function enforce_status_transition(string $collection, string $role, array $patc
   // Operation Manager (Main Approval) -> Accountant (Payment Transfer) ->
   // Accountant (Work Proposal / Pre-PO) -> Admin/Management/Operation Manager.
   if ($collection === 'paymentRequests') {
+    $me = strtolower(trim($email));
+    $requester = strtolower(trim((string)($existing['requestedBy'] ?? '')));
+    $needsRec = ($existing['needsRecommendation'] ?? true) !== false;
+
+    // A requester may never move their own request along.
+    if ($requester !== '' && $requester === $me && $to !== 'Rejected') {
+      fail(403, 'You cannot recommend or approve your own payment request.');
+    }
+
+    if ($to === 'Recommended') {
+      if (!$needsRec) fail(409, 'This request does not need a Team Leader recommendation.');
+      // Their own Team Leader recommends. A Team Leader has no say over another
+      // leader's members, so only the stand-in managers may cover.
+      $tl = strtolower(trim((string)($existing['teamLeaderEmail'] ?? '')));
+      if (!($tl !== '' && $tl === $me)) {
+        if (normalize_role($role) === 'team_leader') fail(403, 'You can only recommend requests from your own team members');
+        if (!can($role, 'pr_recommend')) fail(403, 'Only the Team Leader of this team member can recommend this request');
+      }
+    }
     $gate = [
-      'Recommended'        => ['pr_recommend',        'Not authorised to recommend payment requests'],
-      'Approved'           => ['pr_approve',          'Only Admin / Management / Operation Manager can give the main approval'],
+      'Approved'           => ['pr_approve',          'Only Operation Manager / Management / Admin / Owner can give the final approval'],
       'Paid'               => ['pr_transfer',         'Only the Accountant can transfer the payment'],
       'Proposal Submitted' => ['pr_proposal',         'Only the Accountant can submit the Work Proposal / Pre-PO'],
       'Closed'             => ['pr_proposal_approve', 'Only Admin / Management / Operation Manager can close the request'],
     ];
     if (isset($gate[$to]) && !can($role, $gate[$to][0])) fail(403, $gate[$to][1]);
-    // Strict step-by-step ordering - no stage can be skipped.
-    $prev = ['Recommended' => 'Requested', 'Approved' => 'Recommended', 'Paid' => 'Approved', 'Proposal Submitted' => 'Paid', 'Closed' => 'Proposal Submitted'];
+    // Strict step-by-step ordering - no stage can be skipped. When no Team
+    // Leader recommendation is due, final approval follows the request itself.
+    $prev = ['Recommended' => 'Requested', 'Approved' => ($needsRec ? 'Recommended' : 'Requested'), 'Paid' => 'Approved', 'Proposal Submitted' => 'Paid', 'Closed' => 'Proposal Submitted'];
     if (isset($prev[$to])) {
       $from = $existing['status'] ?? 'Requested';
       if ($from !== $prev[$to]) fail(409, "Out of order: this payment request must be '{$prev[$to]}' before it can move to '{$to}'.");
     }
     if ($to === 'Rejected') {
-      $stageAction = ['Requested' => 'pr_recommend', 'Recommended' => 'pr_approve', 'Approved' => 'pr_transfer', 'Paid' => 'pr_proposal', 'Proposal Submitted' => 'pr_proposal_approve'];
+      $stageAction = ['Requested' => ($needsRec ? 'pr_recommend' : 'pr_approve'), 'Recommended' => 'pr_approve', 'Approved' => 'pr_transfer', 'Paid' => 'pr_proposal', 'Proposal Submitted' => 'pr_proposal_approve'];
       $cur = $existing['status'] ?? 'Requested';
       if (in_array($cur, ['Closed', 'Rejected'], true)) fail(409, 'A closed or already-rejected payment request cannot be rejected.');
       $act = $stageAction[$cur] ?? '';
