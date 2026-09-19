@@ -9,14 +9,13 @@ import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
 import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromPO } from '../services/quotation';
+import { getOptions, withCurrent } from '../services/options';
 
-// The lead-reference names that come as standard. The field also takes a name
-// typed by hand, for a referrer who is not on the list.
-const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
-const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
+// Lead Reference, Follow-up Status, Priority and Mode of Payment now come from
+// Settings → Manage Options (src/services/options.js holds the same defaults).
+// Lead Status stays fixed: "Converted" creates the customer record, so the app's
+// behaviour hangs off these exact four values.
 const sts = ['Interested', 'Not Interested', 'Converted', 'Not Converted'];
-const priorities = ['Hot', 'Warm', 'Cold'];
-const payModes = ['PhonePe', 'Google Pay', 'Paytm', 'Cash', 'Bank Transfer', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
 // The filter tab holding leads whose quotation was not accepted and that are
 // waiting for their next follow-up.
@@ -316,6 +315,9 @@ function LeadModal({ data, id, onSave, onClose }) {
   const { leads, customers, team, retailers, influencers, users, settings } = useData();
   // The tariff used to convert a monthly bill amount into units, and back.
   const ebTariff = toNumber(settings?.ebTariff) || DEFAULT_TARIFF;
+  // Dropdown choices come from Settings → Manage Options. Whatever this lead
+  // already holds stays on its list, even if the Admin has since removed it.
+  const opt = (key, current) => withCurrent(getOptions(settings, key), current);
   // B1 fix: track previous status to detect first conversion
   const prevStatus = data.status;
   const [form, setForm] = useState({
@@ -503,13 +505,13 @@ function LeadModal({ data, id, onSave, onClose }) {
             </div>
             <div className="fg"><label>District</label><input className="fi" value={form.district} onChange={e => set('district', e.target.value)} placeholder="District" /></div>
           </div>
-          <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{priorities.map(o => <option key={o}>{o}</option>)}</select></div></div>
+          <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{opt('priority', form.priority).map(o => <option key={o}>{o}</option>)}</select></div></div>
           <div className="fr">
             <div className="fg">
               <label>Lead Reference <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}>pick a name or type your own</span></label>
               <input className="fi" list="lead-reference-names" value={form.leadReference} onChange={e => set('leadReference', e.target.value)} placeholder="Select or enter a name" />
               <datalist id="lead-reference-names">
-                {[...new Set([...refs, ...leads.map(l => l.leadReference).filter(Boolean)])].map(o => <option key={o} value={o} />)}
+                {[...new Set([...getOptions(settings, 'leadReference'), ...leads.map(l => l.leadReference).filter(Boolean)])].map(o => <option key={o} value={o} />)}
               </datalist>
             </div>
             <div className="fg"><label>Date Generated</label><DateInput value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div>
@@ -532,7 +534,7 @@ function LeadModal({ data, id, onSave, onClose }) {
               }
             </div>
           )}
-          <div className="fr"><div className="fg"><label>Last Follow-up</label><DateInput value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>
+          <div className="fr"><div className="fg"><label>Last Follow-up</label><DateInput value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{opt('followUpStatus', form.followUpStatus).map(o => <option key={o}>{o}</option>)}</select></div></div>
           {/* Leads go to the Sales/Team members under the chosen Team Leader —
               the technical team is never offered here. */}
           <div className="fr3">
@@ -604,7 +606,7 @@ function LeadModal({ data, id, onSave, onClose }) {
             <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
           )}
           <div className="fr">
-            <div className="fg"><label>Mode of Payment</label><select className="fi" value={form.modeOfPayment} onChange={e => set('modeOfPayment', e.target.value)}><option value="">-- Select --</option>{payModes.map(o => <option key={o}>{o}</option>)}</select></div>
+            <div className="fg"><label>Mode of Payment</label><select className="fi" value={form.modeOfPayment} onChange={e => set('modeOfPayment', e.target.value)}><option value="">-- Select --</option>{opt('modeOfPayment', form.modeOfPayment).map(o => <option key={o}>{o}</option>)}</select></div>
             {form.modeOfPayment === 'Other'
               ? <div className="fg"><label>Specify Payment Mode</label><input className="fi" value={form.modeOfPaymentOther} onChange={e => set('modeOfPaymentOther', e.target.value)} placeholder="Enter payment method" /></div>
               : <div className="fg" />}
@@ -612,11 +614,11 @@ function LeadModal({ data, id, onSave, onClose }) {
           {form.siteVisit === 'Yes' && (
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
               <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Site Visit Details</label>
-              <div className="fr"><div className="fg"><label>Visit Date</label><DateInput value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div></div>
+              <div className="fr"><div className="fg"><label>Visit Date</label><DateInput value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option>{opt('roofType', form.roofType).map(o => <option key={o}>{o}</option>)}</select></div></div>
               {form.roofType === 'Elevated' && (
                 <div className="fr"><div className="fg"><label>North Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedNorthHeight} onChange={e => set('elevatedNorthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div><div className="fg"><label>South Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedSouthHeight} onChange={e => set('elevatedSouthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div></div>
               )}
-              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option><option>Flat</option><option>Sloped</option></select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option><option>Single Phase</option><option>Three Phase</option><option>CT Meter</option><option>HT Meter</option></select></div></div>
+              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option>{opt('structureType', form.structureType).map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option>{opt('existingConnection', form.existingConnection).map(o => <option key={o}>{o}</option>)}</select></div></div>
               <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft) <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Min: {toNumber(form.kwRequired) > 0 ? (toNumber(form.kwRequired) * 70) + ' sq.ft' : 'kW × 70'}</span></label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder={toNumber(form.kwRequired) > 0 ? `Min ${toNumber(form.kwRequired) * 70} sq.ft` : 'e.g. 200'} /></div></div>
               <div className="fg"><label>Customer Service Number</label><input className="fi" value={form.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} placeholder="Service number from electricity bill" /></div>
               <div className="fg"><label>Site Visit Notes</label><textarea className="fi" value={form.siteVisitNotes} onChange={e => set('siteVisitNotes', e.target.value)} rows="2" placeholder="Observations from site visit..." /></div>
@@ -634,7 +636,7 @@ function LeadModal({ data, id, onSave, onClose }) {
 /* ============ LEAD DETAIL MODAL (NEW) ============ */
 function LeadDetailModal({ lead, initialTab, onClose }) {
   const [tab, setTab] = useState(initialTab || 'overview');
-  const { leadPOs, installations, users, quotations } = useData();
+  const { leadPOs, installations, users, quotations, settings } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [poModal, setPOModal] = useState(null);
@@ -925,7 +927,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       <label>Status *</label>
                       <select className="fi" value={fupData.status} onChange={e => setFupData(p => ({ ...p, status: e.target.value }))}>
                         <option value="">-- Select --</option>
-                        {fups.map(f => <option key={f}>{f}</option>)}
+                        {withCurrent(getOptions(settings, 'followUpStatus'), fupData.status).map(f => <option key={f}>{f}</option>)}
                       </select>
                     </div>
                   </div>
@@ -1129,7 +1131,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
 
 /* ============ LEAD PO CREATE/EDIT MODAL (NEW) ============ */
 function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
-  const { bomTemplates } = useData();
+  const { bomTemplates, settings } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const canManageTemplates = hasAccess(role, 'manager');
@@ -1215,21 +1217,30 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   const pickAllStandard = () => {
     setItems(prev => {
       const have = new Set(prev.map(it => it.materialName));
-      return [...prev, ...DEFAULT_BOM_MATERIALS.filter(m => !have.has(m.materialName)).map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))];
+      return [...prev, ...materialCatalogue.filter(m => !have.has(m.materialName)).map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))];
     });
   };
   const clearPicked = () => {
     if (items.length && !window.confirm('Remove all selected materials?')) return;
     setItems([]);
   };
-  const visibleMaterials = DEFAULT_BOM_MATERIALS.filter(m =>
+  // The standard catalogue plus anything the Admin added under
+  // Settings → Manage Options → BOM Materials.
+  const materialCatalogue = (() => {
+    const have = new Set(DEFAULT_BOM_MATERIALS.map(m => m.materialName.toLowerCase()));
+    const extra = getOptions(settings, 'bomMaterials')
+      .filter(n => !have.has(String(n).toLowerCase()))
+      .map(n => ({ materialName: n, unit: 'Nos', make: '' }));
+    return [...DEFAULT_BOM_MATERIALS, ...extra];
+  })();
+  const visibleMaterials = materialCatalogue.filter(m =>
     !matSearch || m.materialName.toLowerCase().includes(matSearch.toLowerCase()));
   const extraChargesTotal = toNumber(f.discomCharges) + toNumber(f.civilWork) + toNumber(f.upvcPipes) + toNumber(f.additionalRelay) + toNumber(f.elevatedStructure) + toNumber(f.additionalBom) + toNumber(f.otherCharges);
   const autoScope = 'Supply and installation of ' + (f.kwRequired || '___') + ' Solar PV On-Grid System as per BOM.';
 
   /* Combined material suggestions: defaults + saved template materials */
   const allMaterials = [...new Set([
-    ...DEFAULT_BOM_MATERIALS.map(m => m.materialName),
+    ...materialCatalogue.map(m => m.materialName),
     ...bomTemplates.flatMap(t => (t.items || []).map(it => it.materialName).filter(Boolean))
   ])];
 
@@ -1340,7 +1351,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               <div className="fg"><label>Amount (₹)</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder={totalValue ? String(totalValue) : '0'} /></div>
               <div className="fg"><label>USC No</label><input className="fi" value={f.uscNo} onChange={e => set('uscNo', e.target.value)} placeholder="Service connection no." /></div>
             </div>
-            <datalist id="lead-sources">{refs.map(r => <option key={r} value={r} />)}</datalist>
+            <datalist id="lead-sources">{getOptions(settings, 'leadReference').map(r => <option key={r} value={r} />)}</datalist>
 
             {/* BOM Section with Templates */}
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>

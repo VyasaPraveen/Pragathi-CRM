@@ -5,6 +5,7 @@ import { hasAccess } from '../services/helpers';
 import { apiGet, apiPatch } from '../services/api';
 import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../services/permissions';
 import { DEFAULT_TARIFF } from '../services/quotation';
+import OptionListsEditor from '../components/OptionListsEditor';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -60,6 +61,7 @@ export default function Settings() {
     apiGet('/settings')
       .then(s => {
         if (!s) return;
+        setCompanySettings(s);
         setGatingEnabled(s.workflowGatingEnabled !== false);
         setEbTariff(String(s.ebTariff || DEFAULT_TARIFF));
       })
@@ -68,6 +70,7 @@ export default function Settings() {
 
   // Electricity tariff used across the app: it turns a customer's monthly bill
   // into units on the lead form, and drives the savings on the quotation.
+  const [companySettings, setCompanySettings] = useState({});
   const [ebTariff, setEbTariff] = useState('');
   const [tariffSaving, setTariffSaving] = useState(false);
   const saveTariff = async () => {
@@ -500,6 +503,16 @@ export default function Settings() {
                       : <><span className="material-icons-round" style={{ fontSize: 16 }}>lock</span> Enforce workflow locking</>)}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Dropdown options — admin only */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>tune</span>Manage Options</h3></div>
+          <div className="cb">
+            <OptionListsEditor settings={companySettings} onSaved={setCompanySettings} />
           </div>
         </div>
       )}

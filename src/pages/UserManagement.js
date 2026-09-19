@@ -6,6 +6,7 @@ import { useData } from '../context/DataContext';
 import { DESIGNATIONS, getRoleFromDesignation, hasAccess } from '../services/helpers';
 import { useToast } from '../context/ToastContext';
 import { Modal } from '../components/SharedUI';
+import PasswordManager, { PASSWORD_NOTE } from '../components/PasswordManager';
 
 // Default temp password for admin-provisioned accounts (staff should change it).
 const TEMP_PASSWORD = (phone) => {
@@ -24,6 +25,7 @@ export default function UserManagement() {
   const [editModal, setEditModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
   const [addModal, setAddModal] = useState(false);
+  const [pwdModal, setPwdModal] = useState(null);   // the user whose password is being set
 
   const handleCreateUser = async (data) => {
     await apiPost('/auth/users', data);
@@ -342,6 +344,9 @@ export default function UserManagement() {
                             <button className="btn" onClick={() => setEditModal(u)} style={{ padding: '4px 10px', fontSize: '.78rem' }} title="Edit User">
                               <span className="material-icons-round" style={{ fontSize: 15 }}>edit</span>
                             </button>
+                            <button className="btn" onClick={() => setPwdModal(u)} style={{ padding: '4px 10px', fontSize: '.78rem', color: '#6c5ce7' }} title="Set / reset password">
+                              <span className="material-icons-round" style={{ fontSize: 15 }}>key</span>
+                            </button>
                             {u.approved && (
                               <button className="btn" onClick={() => handleRevoke(u.id)} style={{ padding: '4px 10px', fontSize: '.78rem', color: '#e8830c' }} title="Revoke Access">
                                 <span className="material-icons-round" style={{ fontSize: 15 }}>block</span>
@@ -371,9 +376,12 @@ export default function UserManagement() {
       {/* User Detail Modal */}
       {detailModal && (
         <Modal title="User Details" onClose={() => setDetailModal(null)}>
-          <UserDetailView user={detailModal} onEdit={() => { setEditModal(detailModal); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} onRevoke={() => handleRevoke(detailModal.id)} onApprove={() => { handleApprove(detailModal.id); setDetailModal(null); }} isSelf={detailModal.id === currentUser?.uid} />
+          <UserDetailView user={detailModal} onEdit={() => { setEditModal(detailModal); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} onRevoke={() => handleRevoke(detailModal.id)} onApprove={() => { handleApprove(detailModal.id); setDetailModal(null); }} onPassword={() => { setPwdModal(detailModal); setDetailModal(null); }} isSelf={detailModal.id === currentUser?.uid} />
         </Modal>
       )}
+
+      {/* Set / reset a password — the new one is shown once so it can be passed on */}
+      {pwdModal && <PasswordManager user={pwdModal} onClose={() => setPwdModal(null)} onDone={fetchUsers} />}
     </>
   );
 }
@@ -491,7 +499,7 @@ function EditUserModal({ user, onSave, onClose }) {
 }
 
 /* ── User Detail View ── */
-function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, isSelf }) {
+function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, onPassword, isSelf }) {
   const detailRow = (icon, label, value) => (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--bor)' }}>
       <span className="material-icons-round" style={{ fontSize: 18, color: 'var(--muted)', marginTop: 1 }}>{icon}</span>
@@ -528,6 +536,7 @@ function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, isSelf })
         {detailRow('location_on', 'Address', user.address)}
         {detailRow('calendar_today', 'Joined', user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '-')}
         {detailRow('schedule', 'Last Login', user.lastLogin ? new Date(user.lastLogin).toLocaleString('en-IN') : '-')}
+        {detailRow('key', 'Password', PASSWORD_NOTE)}
         {user.notes && detailRow('notes', 'Admin Notes', user.notes)}
       </div>
 
@@ -536,6 +545,9 @@ function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, isSelf })
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
           <button className="btn bp" onClick={onEdit} style={{ padding: '6px 16px', fontSize: '.84rem' }}>
             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit
+          </button>
+          <button className="btn" onClick={onPassword} style={{ padding: '6px 16px', fontSize: '.84rem', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.4)' }}>
+            <span className="material-icons-round" style={{ fontSize: 16 }}>key</span> Set Password
           </button>
           {!user.approved && (
             <button className="btn" onClick={onApprove} style={{ padding: '6px 16px', fontSize: '.84rem', color: '#27ae60', borderColor: '#27ae60' }}>
