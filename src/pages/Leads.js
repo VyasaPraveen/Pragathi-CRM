@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, supportingTeamOptions } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
@@ -409,6 +409,30 @@ function LeadModal({ data, id, onSave, onClose }) {
 
   // Team Leaders to pick from, and the sales-side members under the chosen one.
   const leaderOptions = teamLeaders(users);
+  // Names already used in a field above — they cannot also be supporting team.
+  const leaderName = (() => {
+    const u = users.find(x => String(x.email || '').toLowerCase() === String(form.teamLeader || '').toLowerCase());
+    return u ? (u.displayName || u.email) : '';
+  })();
+  const usedAbove = [form.salesExecutive, form.assignedTo, leaderName].map(norm).filter(Boolean);
+  const supportOptions = supportingTeamOptions(team, usedAbove, form.supportingTeam);
+  // A typed name is held to the same rule as a picked one.
+  const addSupportName = () => {
+    const nm = supportName.trim();
+    setSupportName('');
+    if (!nm) return;
+    if (usedAbove.includes(norm(nm))) { toast(`${nm} is already named in a field above`, 'er'); return; }
+    if ((form.supportingTeam || []).some(x => norm(x) === norm(nm))) return;
+    set('supportingTeam', [...(form.supportingTeam || []), nm]);
+  };
+
+  // Taking someone on above removes them from the supporting list.
+  const dropFromSupport = (name) => {
+    const k = norm(name);
+    if (!k) return;
+    const cur = form.supportingTeam || [];
+    if (cur.some(x => norm(x) === k)) set('supportingTeam', cur.filter(x => norm(x) !== k));
+  };
   const assignOptions = (() => {
     const list = salesMembersOf(users, form.teamLeader).map(u => u.displayName || u.email).filter(Boolean);
     // Whoever the lead is already assigned to stays selectable, even if they
@@ -439,7 +463,15 @@ function LeadModal({ data, id, onSave, onClose }) {
           return;
         }
         setSaving(true);
-        try { await onSave(form, id, prevStatus, data.expectedSignUpDate || ''); }
+        try {
+          // Anyone named in a field above is not also supporting team — this
+          // tidies older leads that carry the same person twice.
+          const cleanedForm = {
+            ...form,
+            supportingTeam: (form.supportingTeam || []).filter(n => !usedAbove.includes(norm(n))),
+          };
+          await onSave(cleanedForm, id, prevStatus, data.expectedSignUpDate || '');
+        }
         finally { setSaving(false); }
       }}>
         <div className="mb">
@@ -505,13 +537,19 @@ function LeadModal({ data, id, onSave, onClose }) {
               the technical team is never offered here. */}
           <div className="fr3">
             <div className="fg"><label>Team Leader</label>
-              <select className="fi" value={form.teamLeader} onChange={e => { set('teamLeader', e.target.value); set('assignedTo', ''); }}>
+              <select className="fi" value={form.teamLeader} onChange={e => {
+                const email = e.target.value;
+                set('teamLeader', email);
+                set('assignedTo', '');
+                const u = users.find(x => String(x.email || '').toLowerCase() === email.toLowerCase());
+                if (u) dropFromSupport(u.displayName || u.email);
+              }}>
                 <option value="">-- All sales members --</option>
                 {leaderOptions.map(u => <option key={u.id || u.email} value={u.email}>{u.displayName || u.email}</option>)}
               </select>
             </div>
             <div className="fg"><label>Assigned To</label>
-              <select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}>
+              <select className="fi" value={form.assignedTo} onChange={e => { set('assignedTo', e.target.value); dropFromSupport(e.target.value); }}>
                 <option value="">-- Unassigned --</option>
                 {assignOptions.map(n => <option key={n} value={n}>{n}</option>)}
               </select>
@@ -529,7 +567,7 @@ function LeadModal({ data, id, onSave, onClose }) {
             const val = e.target.value;
             set('salesExecutive', val);
             // Dedup: the selected Sales Executive should not also appear in Supporting Team
-            if (val) set('supportingTeam', (form.supportingTeam || []).filter(n => n !== val));
+            dropFromSupport(val);
           }}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
           <div className="fg"><label>Supporting Team / Names</label>
             {/* Selected supporting names (team members + custom) as removable chips */}
@@ -543,11 +581,22 @@ function LeadModal({ data, id, onSave, onClose }) {
                 ))}
               </div>
             )}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 12px', border: '1px solid var(--bor)', borderRadius: 8, minHeight: 38, background: '#fff' }}>{team.filter(t => t.status === 'Active' && t.name !== form.salesExecutive).map(t => (<label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.84rem', cursor: 'pointer' }}><input type="checkbox" checked={(form.supportingTeam || []).includes(t.name)} onChange={e => { const cur = form.supportingTeam || []; if (e.target.checked) set('supportingTeam', [...cur, t.name]); else set('supportingTeam', cur.filter(n => n !== t.name)); }} />{t.name}</label>))}{team.filter(t => t.status === 'Active' && t.name !== form.salesExecutive).length === 0 && <span style={{ color: 'var(--muted)', fontSize: '.82rem' }}>No other active team members</span>}</div>
+            {/* Pick a name from the list. Anyone already named in a field above
+                (Team Leader, Assigned To, Sales Executive) is not offered, and
+                neither is someone already on the list. */}
+            <select className="fi" value="" onChange={e => {
+              const n = e.target.value;
+              if (n && !(form.supportingTeam || []).some(x => norm(x) === norm(n))) {
+                set('supportingTeam', [...(form.supportingTeam || []), n]);
+              }
+            }}>
+              <option value="">{supportOptions.length ? '-- Select a supporting member --' : '-- No other names available --'}</option>
+              {supportOptions.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
             {/* Add a custom supporting name not in the team list */}
             <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
-              <input className="fi" value={supportName} onChange={e => setSupportName(e.target.value)} placeholder="Add a supporting name..." onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const nm = supportName.trim(); if (nm && !(form.supportingTeam || []).includes(nm)) set('supportingTeam', [...(form.supportingTeam || []), nm]); setSupportName(''); } }} />
-              <button type="button" className="btn bsm bo" onClick={() => { const nm = supportName.trim(); if (nm && !(form.supportingTeam || []).includes(nm)) set('supportingTeam', [...(form.supportingTeam || []), nm]); setSupportName(''); }}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Name</button>
+              <input className="fi" value={supportName} onChange={e => setSupportName(e.target.value)} placeholder="Or type a name not on the list..." onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSupportName(); } }} />
+              <button type="button" className="btn bsm bo" onClick={addSupportName}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Name</button>
             </div>
           </div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>

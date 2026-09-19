@@ -224,6 +224,26 @@ export function compressImage(file, maxDim = 1600, quality = 0.82) {
   });
 }
 
+// Names compare as people type them, so casing and stray spaces never leave the
+// same person on two lists at once.
+export const normName = (v) => String(v || '').trim().toLowerCase();
+
+// The names offered as Supporting Team on a lead: the active team members,
+// minus anyone already named in a field above (Team Leader / Assigned To /
+// Sales Executive) and anyone already on the list.
+export function supportingTeamOptions(team, usedAbove = [], selected = []) {
+  const blocked = [...usedAbove, ...selected].map(normName).filter(Boolean);
+  const out = [];
+  (team || []).forEach(t => {
+    const name = t && t.name;
+    if (!name || t.status !== 'Active') return;
+    const k = normName(name);
+    if (blocked.includes(k) || out.some(n => normName(n) === k)) return;
+    out.push(name);
+  });
+  return out;
+}
+
 // Q5 fix: dynamic days-in-month instead of hardcoded 30
 export function getDaysInMonth(date = new Date()) {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
