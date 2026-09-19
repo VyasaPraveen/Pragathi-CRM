@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
@@ -6,6 +6,7 @@ import { addDocument, deleteDocument, createNotification } from '../services/fir
 import { apiUpload } from '../services/api';
 import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
+import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser } from '../services/attendance';
 
 const PAGE_SIZE = 30;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -58,7 +59,7 @@ export default function Attendance() {
     attendance.filter(a => (a.employeeEmail === myEmail) && a.date === today()).sort((a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0)),
     [attendance, myEmail]);
   // Suggest the next action: first mark = Check In, then Check Out.
-  const suggestedType = myToday.some(a => a.type === 'Check In') && !myToday.some(a => a.type === 'Check Out') ? 'Check Out' : 'Check In';
+  const suggestedType = suggestedMarkType(myToday);
 
   const displayed = visible.slice(0, visibleCount);
   const hasMore = visible.length > visibleCount;
@@ -71,40 +72,18 @@ export default function Attendance() {
 
   // My Attendance — every mark of mine, folded into one row per day with the
   // first check-in, the last check-out and the hours between them.
-  const myDays = useMemo(() => {
-    const mine = attendance.filter(a => (a.employeeEmail && a.employeeEmail === myEmail) ||
-      (!a.employeeEmail && a.employeeName === myName));
-    const byDate = new Map();
-    mine.forEach(a => {
-      if (!a.date) return;
-      const d = byDate.get(a.date) || { date: a.date, marks: [] };
-      d.marks.push(a);
-      byDate.set(a.date, d);
-    });
-    return [...byDate.values()].map(d => {
-      const ordered = [...d.marks].sort((x, y) => new Date(x.createdAt || 0) - new Date(y.createdAt || 0));
-      const inMark = ordered.find(m => m.type === 'Check In') || null;
-      const outMark = [...ordered].reverse().find(m => m.type === 'Check Out') || null;
-      let hours = null;
-      if (inMark?.createdAt && outMark?.createdAt) {
-        const diff = new Date(outMark.createdAt) - new Date(inMark.createdAt);
-        if (diff > 0) hours = Math.round((diff / 3600000) * 100) / 100;
-      }
-      return { ...d, in: inMark, out: outMark, hours, present: !!inMark };
-    }).sort((a, b) => (a.date < b.date ? 1 : -1));
-  }, [attendance, myEmail, myName]);
+  const myDays = useMemo(
+    () => foldAttendanceDays(attendance, { email: myEmail, name: myName }),
+    [attendance, myEmail, myName]);
 
   const monthDays = myDays.filter(d => String(d.date).startsWith(month));
-  const mySummary = useMemo(() => {
-    const worked = monthDays.filter(d => d.hours != null);
-    const totalHours = worked.reduce((s, d) => s + d.hours, 0);
-    return {
-      present: monthDays.filter(d => d.present).length,
-      incomplete: monthDays.filter(d => d.present && !d.out).length,
-      totalHours: Math.round(totalHours * 10) / 10,
-      avgHours: worked.length ? Math.round((totalHours / worked.length) * 10) / 10 : 0,
-    };
-  }, [monthDays]);
+  // Where the employee stands right now — the question they actually open this
+  // screen to answer.
+  const standing = todayStanding(myDays, today());
+  const todayRow = standing.row;
+  const TONE = { pending: '#e67e22', done: '#27ae60', active: 'var(--pri)' };
+  const todayStatus = { label: standing.label, icon: standing.icon, colour: TONE[standing.tone] };
+  const mySummary = useMemo(() => attendanceSummary(monthDays), [monthDays]);
 
   // The months the employee actually has marks in, newest first.
   const myMonths = useMemo(() => {
@@ -115,18 +94,9 @@ export default function Attendance() {
 
   // Attendance counts — these come straight off the live attendance list, so they
   // update on their own the moment a mark is saved.
-  const counts = useMemo(() => {
-    const d = today();
-    const month = d.slice(0, 7);
-    const todays = attendance.filter(a => a.date === d);
-    const mine = attendance.filter(a => a.employeeEmail === myEmail);
-    return {
-      presentToday: new Set(todays.filter(a => a.type === 'Check In').map(a => a.employeeEmail || a.employeeName)).size,
-      marksToday: todays.length,
-      myMonth: new Set(mine.filter(a => a.type === 'Check In' && String(a.date || '').startsWith(month)).map(a => a.date)).size,
-      myTotal: mine.filter(a => a.type === 'Check In').length,
-    };
-  }, [attendance, myEmail]);
+  const counts = useMemo(
+    () => teamCounts(attendance, today(), { email: myEmail, name: myName }),
+    [attendance, myEmail, myName]);
 
   // Tell the Sales Manager and the other concerned members, with the photo and
   // the map link, so they can open the record straight from the notification.
@@ -218,6 +188,19 @@ export default function Attendance() {
               {myMonths.map(m => <option key={m} value={m}>{new Date(m + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</option>)}
             </select>
           </div>
+
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, marginBottom: 12, background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)' }}>
+            <span className="material-icons-round" style={{ fontSize: 18, color: todayStatus.colour }}>{todayStatus.icon}</span>
+            <div style={{ flex: 1, minWidth: 140 }}>
+              <div style={{ fontWeight: 600, fontSize: '.86rem', color: todayStatus.colour }}>{todayStatus.label}</div>
+              <div style={{ fontSize: '.76rem', color: 'var(--muted)' }}>
+                {todayRow
+                  ? [todayRow.in ? 'In ' + todayRow.in.time : null, todayRow.out ? 'Out ' + todayRow.out.time : null].filter(Boolean).join('  ·  ')
+                  : 'Use Mark Attendance above to check in.'}
+                {todayRow?.hours != null ? '  ·  ' + todayRow.hours + ' h' : ''}
+              </div>
+            </div>
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10, marginBottom: 14 }}>
             {[
               ['Days Present', mySummary.present, '#27ae60'],
@@ -233,11 +216,12 @@ export default function Attendance() {
           </div>
           {monthDays.length ? (
             <div className="tw"><table><thead><tr>
-              <th>Date</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Location</th><th>Photo</th>
+              <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Location</th><th>Photo</th>
             </tr></thead><tbody>
               {monthDays.map(d => (
                 <tr key={d.date}>
                   <td style={{ whiteSpace: 'nowrap', fontSize: '.82rem' }}>{formatDate(d.date)}</td>
+                  <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }}>{d.status}</span></td>
                   <td style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
                   <td style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
                   <td style={{ fontSize: '.82rem', fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>
@@ -286,6 +270,26 @@ export default function Attendance() {
   );
 }
 
+/* ============================================================================
+   Mark Attendance.
+
+   The photo is taken INSIDE the page from the camera stream, not by handing off
+   to the phone's camera app. Handing off is what made this fail: the camera app
+   is a separate, memory-hungry process, so Android frees room by evicting the
+   browser tab — which is why the screen "went back" on its own and why the
+   phone showed "Unable to complete previous operation due to low memory".
+   Staying in the page means nothing is ever switched away from, and the frame we
+   keep is a ~1280px JPEG instead of a 12-megapixel file.
+
+   Picking a photo from the device is still there as a fallback for any browser
+   that will not give us a camera stream.
+   ========================================================================== */
+
+// How big the captured frame is allowed to be — the memory cost is the square
+// of this, so it is deliberately modest.
+const MAX_EDGE = 1280;
+const JPEG_QUALITY = 0.75;
+
 function MarkModal({ suggestedType, onSave, onClose }) {
   const { toast } = useToast();
   const draft = readDraft();
@@ -293,88 +297,185 @@ function MarkModal({ suggestedType, onSave, onClose }) {
   const [loc, setLoc] = useState(draft?.loc || null);      // { lat, lng, accuracy }
   const [locStatus, setLocStatus] = useState('');
   const [locating, setLocating] = useState(false);
-  const [photo, setPhoto] = useState(null);                // { file, preview }
   const [photoUrl, setPhotoUrl] = useState(draft?.photoUrl || '');
+  const [preview, setPreview] = useState('');              // object URL of the small JPEG
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [canRetry, setCanRetry] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [camState, setCamState] = useState('idle');        // idle | starting | live | error
+  const [camError, setCamError] = useState('');
+  const inApp = detectInAppBrowser();
 
-  const captureLocation = () => {
+  const videoRef = useRef(null);
+  const streamRef = useRef(null);
+  const lastBlobRef = useRef(null);                        // kept only for "retry upload"
+  const previewRef = useRef('');
+
+  /* -- camera stream ---------------------------------------------------- */
+  const stopCamera = useCallback(() => {
+    const s = streamRef.current;
+    if (s) {
+      s.getTracks().forEach(t => { try { t.stop(); } catch { /* already gone */ } });
+      streamRef.current = null;
+    }
+    const v = videoRef.current;
+    if (v) { try { v.pause(); v.srcObject = null; } catch { /* ignore */ } }
+  }, []);
+
+  const startCamera = useCallback(async () => {
+    setCamError('');
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCamState('error');
+      setCamError('This browser will not open the camera inside the page. Use "Choose a photo instead" below.');
+      return;
+    }
+    setCamState('starting');
+    try {
+      // A 1280x960 frame is plenty for an attendance check and costs a fraction
+      // of the memory of a full-resolution capture.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: MAX_EDGE }, height: { ideal: 960 } },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCamState('live');
+      const v = videoRef.current;
+      if (v) {
+        v.srcObject = stream;
+        v.setAttribute('playsinline', 'true');   // iOS must not go full screen
+        try { await v.play(); } catch { /* autoplay guard — the frame still arrives */ }
+      }
+    } catch (err) {
+      stopCamera();
+      setCamState('error');
+      const name = (err && err.name) || '';
+      setCamError(
+        name === 'NotAllowedError' ? 'Camera permission was refused. Allow camera access, then tap Start camera again.'
+          : name === 'NotFoundError' ? 'No camera was found on this device.'
+            : name === 'NotReadableError' ? 'The camera is busy in another app. Close that app and tap Start camera again.'
+              : 'The camera could not be opened here. Use "Choose a photo instead" below.'
+      );
+    }
+  }, [stopCamera]);
+
+  // Free the camera and any preview the moment this screen goes away — a live
+  // stream left running is exactly the sort of thing that starves the tab.
+  useEffect(() => () => {
+    stopCamera();
+    if (previewRef.current) { try { URL.revokeObjectURL(previewRef.current); } catch { /* ignore */ } }
+  }, [stopCamera]);
+
+  const setPreviewUrl = (blob) => {
+    if (previewRef.current) { try { URL.revokeObjectURL(previewRef.current); } catch { /* ignore */ } }
+    const url = blob ? URL.createObjectURL(blob) : '';
+    previewRef.current = url;
+    setPreview(url);
+  };
+
+  /* -- location --------------------------------------------------------- */
+  const captureLocation = useCallback(() => {
     if (!('geolocation' in navigator)) { setLocStatus('Location is not supported on this device.'); return; }
     setLocating(true); setLocStatus('Getting your location…');
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude, accuracy } = pos.coords;
         setLoc({ lat: +latitude.toFixed(6), lng: +longitude.toFixed(6), accuracy });
-        setLocStatus(`Location captured (±${Math.round(accuracy)}m)`);
+        setLocStatus('Location captured (±' + Math.round(accuracy) + 'm)');
         setLocating(false);
       },
       (err) => {
         setLocating(false);
-        setLocStatus(err.code === 1 ? 'Location permission denied — please allow location access.' : 'Could not get location. Try again outdoors.');
+        setLocStatus(err.code === 1
+          ? 'Location permission denied — allow location access and tap again.'
+          : 'Could not get location. Try again, outdoors if you can.');
       },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
     );
-  };
+  }, []);
 
-  // Ask for the location as soon as the screen opens, so it is already captured
-  // by the time the employee takes the photo — no separate step to forget.
-  useEffect(() => {
-    if (!loc) captureLocation();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Keep the half-finished mark so a reload during the camera does not lose it.
-  useEffect(() => { writeDraft({ type, loc, photoUrl }); }, [type, loc, photoUrl]);
-
-  const onPickPhoto = async (e) => {
-    const file = (e.target.files || [])[0];
-    if (!file) return;
-    setPhoto({ file, preview: URL.createObjectURL(file) });
+  /* -- upload ----------------------------------------------------------- */
+  const upload = useCallback(async (blob) => {
+    lastBlobRef.current = blob;
     setUploadError('');
+    setCanRetry(false);
+    setUploading(true);
     try {
-      setUploading(true);
-      // A phone photo is far bigger than this needs to be; sending it whole is
-      // slow on mobile data and is rejected outright above 10 MB.
-      const small = await compressImage(file);
-      if (small.size > 10 * 1024 * 1024) {
-        throw new Error('Photo is too large even after compression. Take the photo at a lower resolution.');
-      }
+      const file = blob instanceof File ? blob : new File([blob], 'attendance.jpg', { type: 'image/jpeg' });
       let res;
       try {
-        res = await apiUpload(small, 'attendance');
-      } catch (first) {
-        // One retry — a dropped connection as the camera closes is common.
-        res = await apiUpload(small, 'attendance');
+        res = await apiUpload(file, 'attendance');
+      } catch {
+        res = await apiUpload(file, 'attendance');   // one retry: mobile connections drop
       }
       setPhotoUrl(res.url);
-      // The camera can take a while; if location was refused or timed out
-      // earlier, try again now so the record is never saved without it.
-      if (!loc) captureLocation();
+      lastBlobRef.current = null;   // the bytes are on the server; let them go
+      return true;
     } catch (err) {
-      const msg = err.message || 'Photo upload failed';
-      setUploadError(msg);
-      toast(msg, 'er');
-      // The picked photo stays on screen so "Retry upload" can use it without
-      // sending the employee back to the camera.
-    }
-    finally { setUploading(false); }
+      setUploadError(err.message || 'Photo upload failed');
+      setCanRetry(true);
+      toast(err.message || 'Photo upload failed', 'er');
+      return false;
+    } finally { setUploading(false); }
+  }, [toast]);
+
+  /* -- take the frame --------------------------------------------------- */
+  const capture = async () => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth) { toast('The camera is not ready yet — give it a moment', 'er'); return; }
+    const scale = Math.min(1, MAX_EDGE / Math.max(v.videoWidth, v.videoHeight));
+    const w = Math.max(1, Math.round(v.videoWidth * scale));
+    const h = Math.max(1, Math.round(v.videoHeight * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    canvas.getContext('2d').drawImage(v, 0, 0, w, h);
+    // The stream is stopped before the upload, not after: the camera is the
+    // single biggest thing holding memory while we work.
+    stopCamera();
+    setCamState('idle');
+    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', JPEG_QUALITY));
+    canvas.width = 0; canvas.height = 0;   // release the backing store
+    if (!blob) { toast('Could not save the photo — try again', 'er'); return; }
+    setPreviewUrl(blob);
+    await upload(blob);
+    if (!loc) captureLocation();
   };
 
-  // Retry the upload of the photo already taken, without re-opening the camera.
-  const retryUpload = async () => {
-    if (!photo?.file || uploading) return;
-    setUploadError('');
+  /* -- fallback: pick a photo from the device --------------------------- */
+  const onPickPhoto = async (e) => {
+    const file = (e.target.files || [])[0];
+    e.target.value = '';                 // let the same file be chosen again
+    if (!file) return;
     try {
-      setUploading(true);
-      const small = await compressImage(photo.file);
-      const res = await apiUpload(small, 'attendance');
-      setPhotoUrl(res.url);
+      const small = await compressImage(file, MAX_EDGE, JPEG_QUALITY);
+      if (small.size > 10 * 1024 * 1024) {
+        toast('That photo is too large even after shrinking. Take a new one with the camera.', 'er');
+        return;
+      }
+      setPreviewUrl(small);
+      await upload(small);
       if (!loc) captureLocation();
     } catch (err) {
-      const msg = err.message || 'Photo upload failed';
-      setUploadError(msg); toast(msg, 'er');
-    } finally { setUploading(false); }
+      setUploadError(err.message || 'Could not read that photo');
+      toast(err.message || 'Could not read that photo', 'er');
+    }
   };
+
+  const retryUpload = () => { if (lastBlobRef.current) upload(lastBlobRef.current); };
+
+  const retake = () => {
+    setPhotoUrl('');
+    setPreviewUrl(null);
+    setUploadError('');
+    setCanRetry(false);
+    startCamera();
+  };
+
+  // Location first, so it is already in hand by the time the photo is taken.
+  useEffect(() => { if (!loc) captureLocation(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the half-finished mark, so even a browser restart cannot lose it.
+  useEffect(() => { writeDraft({ type, loc, photoUrl }); }, [type, loc, photoUrl]);
 
   const submit = async (e) => {
     e.preventDefault();
@@ -382,23 +483,38 @@ function MarkModal({ suggestedType, onSave, onClose }) {
     if (!photoUrl) { toast('Capture a photo first', 'er'); return; }
     setSaving(true);
     try {
-      await onSave({ type, lat: loc.lat, lng: loc.lng, accuracy: loc.accuracy, mapLink: `https://www.google.com/maps?q=${loc.lat},${loc.lng}`, photoUrl });
+      stopCamera();
+      await onSave({
+        type, lat: loc.lat, lng: loc.lng, accuracy: loc.accuracy,
+        mapLink: 'https://www.google.com/maps?q=' + loc.lat + ',' + loc.lng,
+        photoUrl,
+      });
     } finally { setSaving(false); }
   };
 
+  const close = () => { stopCamera(); onClose(); };
   const ready = loc && photoUrl && !uploading;
+  const shownPhoto = preview || (isSafeUrl(photoUrl) ? photoUrl : '');
 
   return (
-    <Modal title="Mark Attendance" onClose={onClose}>
+    <Modal title="Mark Attendance" onClose={close}>
       <form onSubmit={submit}>
         <div className="mb">
+          {inApp && (
+            <div style={{ background: 'rgba(243,156,18,.1)', border: '1px solid rgba(243,156,18,.35)', borderRadius: 8, padding: '8px 12px', fontSize: '.8rem', color: '#a86a08', marginBottom: 12 }}>
+              <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 4 }}>open_in_browser</span>
+              You are inside {inApp}, which is short on memory and may refuse the camera.
+              Tap its menu and choose <strong>Open in browser / Chrome</strong> before marking attendance.
+            </div>
+          )}
+
           <div className="fg"><label>Type</label>
             <select className="fi" value={type} onChange={e => setType(e.target.value)}>
               <option>Check In</option><option>Check Out</option>
             </select>
           </div>
 
-          {/* Step 1 — GPS (mandatory) */}
+          {/* Step 1 — GPS */}
           <div className="fg">
             <label>1. Location (captured automatically) {loc && <span style={{ color: 'var(--ok)' }}>✓</span>}</label>
             <button type="button" className="btn bo" onClick={captureLocation} disabled={locating} style={{ display: 'inline-flex', gap: 6 }}>
@@ -408,28 +524,58 @@ function MarkModal({ suggestedType, onSave, onClose }) {
             {loc && <div style={{ fontSize: '.78rem', color: 'var(--muted)', marginTop: 4 }}>Lat {loc.lat}, Lng {loc.lng}</div>}
           </div>
 
-          {/* Step 2 — Photo (mandatory) */}
+          {/* Step 2 — photo, taken inside the page */}
           <div className="fg">
             <label>2. Photo {photoUrl && <span style={{ color: 'var(--ok)' }}>✓</span>}</label>
-            <label className="btn bo" style={{ display: 'inline-flex', gap: 6, cursor: 'pointer' }}>
-              <span className="material-icons-round" style={{ fontSize: 18 }}>photo_camera</span>{photo ? 'Retake photo' : 'Capture photo'}
-              <input type="file" accept="image/*" capture="environment" onChange={onPickPhoto} style={{ display: 'none' }} />
-            </label>
+
+            {/* The live camera, kept mounted so the stream has somewhere to go */}
+            <div style={{ display: camState === 'live' ? 'block' : 'none' }}>
+              <video ref={videoRef} playsInline muted autoPlay
+                style={{ width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, background: '#000' }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <button type="button" className="btn bp" onClick={capture} disabled={uploading} style={{ display: 'inline-flex', gap: 6 }}>
+                  <span className="material-icons-round" style={{ fontSize: 18 }}>camera</span> Take photo
+                </button>
+                <button type="button" className="btn bo" onClick={() => { stopCamera(); setCamState('idle'); }}>Cancel camera</button>
+              </div>
+            </div>
+
+            {camState !== 'live' && !shownPhoto && (
+              <>
+                <button type="button" className="btn bo" onClick={startCamera} disabled={camState === 'starting'} style={{ display: 'inline-flex', gap: 6 }}>
+                  <span className="material-icons-round" style={{ fontSize: 18 }}>photo_camera</span>
+                  {camState === 'starting' ? 'Opening camera…' : 'Start camera'}
+                </button>
+                {camError && <small style={{ color: 'var(--err)', display: 'block', marginTop: 6 }}>{camError}</small>}
+                <label className="btn bo" style={{ display: 'inline-flex', gap: 6, cursor: 'pointer', marginTop: 8 }}>
+                  <span className="material-icons-round" style={{ fontSize: 18 }}>image</span> Choose a photo instead
+                  <input type="file" accept="image/*" onChange={onPickPhoto} style={{ display: 'none' }} />
+                </label>
+              </>
+            )}
+
             {uploading && <small className="lg-hint">Uploading photo…</small>}
+
+            {shownPhoto && (
+              <div style={{ marginTop: 8 }}>
+                <img src={shownPhoto} alt="Attendance" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} />
+                {!preview && photoUrl && <div style={{ fontSize: '.76rem', color: 'var(--ok)', marginTop: 4 }}>Photo restored — carry on where you left off.</div>}
+                <div style={{ marginTop: 6 }}>
+                  <button type="button" className="btn bsm bo" onClick={retake} disabled={uploading}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>refresh</span> Retake
+                  </button>
+                </div>
+              </div>
+            )}
+
             {uploadError && !uploading && (
               <div style={{ marginTop: 6 }}>
                 <small style={{ color: 'var(--err)', display: 'block', marginBottom: 4 }}>{uploadError}</small>
-                {photo?.file && (
+                {canRetry && (
                   <button type="button" className="btn bsm bo" onClick={retryUpload}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>refresh</span> Retry upload
                   </button>
                 )}
-              </div>
-            )}
-            {(photo || (photoUrl && isSafeUrl(photoUrl))) && (
-              <div style={{ marginTop: 8 }}>
-                <img src={photo ? photo.preview : photoUrl} alt="Attendance" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} />
-                {!photo && <div style={{ fontSize: '.76rem', color: 'var(--ok)', marginTop: 4 }}>Photo restored — carry on where you left off.</div>}
               </div>
             )}
           </div>
@@ -437,8 +583,8 @@ function MarkModal({ suggestedType, onSave, onClose }) {
           {!ready && <p style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Both live location and a photo are required to mark attendance.</p>}
         </div>
         <div className="mf">
-          <button type="button" className="btn bo" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="submit" className="btn bp" disabled={!ready || saving}>{saving ? 'Saving…' : `Mark ${type}`}</button>
+          <button type="button" className="btn bo" onClick={close} disabled={saving}>Cancel</button>
+          <button type="submit" className="btn bp" disabled={!ready || saving}>{saving ? 'Saving…' : 'Mark ' + type}</button>
         </div>
       </form>
     </Modal>

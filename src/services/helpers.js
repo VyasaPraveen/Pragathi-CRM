@@ -189,41 +189,6 @@ export function openHtmlSafely(html, shouldPrint = false) {
   setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
-// Phone cameras produce 4–12 MB photos, which the upload endpoint rejects at
-// 10 MB and which crawl over mobile data — the most common reason an attendance
-// mark never completed. The picture is scaled down and re-encoded before it is
-// sent; if anything at all goes wrong the original file is used unchanged.
-export function compressImage(file, maxDim = 1600, quality = 0.82) {
-  return new Promise((resolve) => {
-    try {
-      if (!file || !/^image\//.test(file.type) || typeof document === 'undefined') { resolve(file); return; }
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        try {
-          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
-          // A small photo is already fine — don't re-encode it for nothing.
-          if (scale >= 1 && file.size <= 2 * 1024 * 1024) { URL.revokeObjectURL(url); resolve(file); return; }
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.max(1, Math.round(img.width * scale));
-          canvas.height = Math.max(1, Math.round(img.height * scale));
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          canvas.toBlob((blob) => {
-            URL.revokeObjectURL(url);
-            if (!blob || blob.size >= file.size) { resolve(file); return; }
-            const name = (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
-            try { resolve(new File([blob], name, { type: 'image/jpeg' })); }
-            catch { blob.name = name; resolve(blob); }
-          }, 'image/jpeg', quality);
-        } catch { URL.revokeObjectURL(url); resolve(file); }
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
-      img.src = url;
-    } catch { resolve(file); }
-  });
-}
-
 // Names compare as people type them, so casing and stray spaces never leave the
 // same person on two lists at once.
 export const normName = (v) => String(v || '').trim().toLowerCase();
@@ -242,6 +207,75 @@ export function supportingTeamOptions(team, usedAbove = [], selected = []) {
     out.push(name);
   });
   return out;
+}
+
+// Shrink a picked photo before it is uploaded.
+//
+// Phone photos are 4–12 MB and 12 megapixels. Decoding one the obvious way —
+// `new Image()` onto a full-size canvas — allocates roughly width x height x 4
+// bytes (about 48 MB for a 12 MP shot) before anything is scaled down, and on a
+// phone that is already short on memory that allocation is what tips it over.
+// `createImageBitmap` with resize options decodes straight to the size we want,
+// so the big bitmap never exists. The old path is kept for browsers without it,
+// and any failure at all just returns the original file.
+export async function compressImage(file, maxDim = 1600, quality = 0.82) {
+  try {
+    if (!file || !/^image\//.test(file.type) || typeof document === 'undefined') return file;
+    // A small photo is already fine — don't re-encode it for nothing.
+    if (file.size <= 512 * 1024) return file;
+
+    const toJpeg = async (canvas) => {
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+      canvas.width = 0; canvas.height = 0;            // release the backing store
+      if (!blob || blob.size >= file.size) return file;
+      const name = (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+      try { return new File([blob], name, { type: 'image/jpeg' }); }
+      catch { return blob; }
+    };
+
+    if (typeof createImageBitmap === 'function') {
+      // Decode at the target size. resizeWidth alone keeps the aspect ratio,
+      // and the browser picks the smaller edge for us.
+      let bmp;
+      try {
+        bmp = await createImageBitmap(file, { resizeWidth: maxDim, resizeQuality: 'medium' });
+        // A portrait photo comes back taller than maxDim; scale it down again.
+        if (bmp.height > maxDim) {
+          const shrunk = await createImageBitmap(file, { resizeHeight: maxDim, resizeQuality: 'medium' });
+          bmp.close();
+          bmp = shrunk;
+        }
+      } catch {
+        bmp = await createImageBitmap(file);           // no resize support
+      }
+      const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bmp.width * scale));
+      canvas.height = Math.max(1, Math.round(bmp.height * scale));
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      bmp.close();
+      return await toJpeg(canvas);
+    }
+
+    // Older browsers: decode through an <img>, which costs more memory.
+    return await new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = async () => {
+        try {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          resolve(await toJpeg(canvas));
+        } catch { URL.revokeObjectURL(url); resolve(file); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  } catch { return file; }
 }
 
 // Q5 fix: dynamic days-in-month instead of hardcoded 30
