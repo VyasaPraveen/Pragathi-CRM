@@ -6,14 +6,21 @@ import { addDocument, updateDocument, deleteDocument, createNotification, notify
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
-import { can, ACTIONS, PO_STATUS, advanceGate, hasModule } from '../services/permissions';
+import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
+import QuotationPanel from '../components/QuotationPanel';
+import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromPO } from '../services/quotation';
 
+// The lead-reference names that come as standard. The field also takes a name
+// typed by hand, for a referrer who is not on the list.
 const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
 const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
 const sts = ['Interested', 'Not Interested', 'Converted', 'Not Converted'];
 const priorities = ['Hot', 'Warm', 'Cold'];
 const payModes = ['PhonePe', 'Google Pay', 'Paytm', 'Cash', 'Bank Transfer', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
+// The filter tab holding leads whose quotation was not accepted and that are
+// waiting for their next follow-up.
+const PENDING_FOLLOWUP = 'Pending Follow-up';
 
 const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', actualQuantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
 
@@ -65,7 +72,7 @@ const DEFAULT_BOM_MATERIALS = [
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads, customers, users, influencers } = useData();
+  const { leads, customers, users, influencers, team } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -75,8 +82,18 @@ export default function Leads() {
   const [detailId, setDetailId] = useState(null);
   const [detailTab, setDetailTab] = useState(null);
 
-  // When 'all', exclude Converted leads (they move to Customers); Converted tab shows only converted
-  let filtered = leads.filter(l => filter === 'all' ? l.status !== 'Converted' : l.status === filter);
+  // A lead belongs to the person it is assigned to: they, the people working it
+  // and the hierarchy above them see it — nobody else (19-Sep requirement 6).
+  const myLeads = leads.filter(l => canSeeLead(l, user, role, users, team));
+
+  // When 'all', exclude Converted leads (they move to Customers); Converted tab
+  // shows only converted; "Pending Follow-up" holds the leads whose quotation
+  // the customer did not accept, with a follow-up date recorded.
+  let filtered = myLeads.filter(l => {
+    if (filter === 'all') return l.status !== 'Converted';
+    if (filter === PENDING_FOLLOWUP) return !!l.pendingFollowUp && l.status !== 'Converted';
+    return l.status === filter;
+  });
   // B4 fix: null-safe search using safeStr
   if (search) {
     const q = search.toLowerCase();
@@ -94,6 +111,7 @@ export default function Leads() {
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
   const detailLead = detailId ? leads.find(l => l.id === detailId) : null;
+  const pendingFollowUpCount = myLeads.filter(l => l.pendingFollowUp && l.status !== 'Converted').length;
 
   // Who is doing the assigning — included in the notification so the employee
   // knows at a glance who gave them the lead.
@@ -105,6 +123,7 @@ export default function Leads() {
         ...data,
         expectedValue: toNumber(data.expectedValue),
         monthlyBill: toNumber(data.monthlyBill),
+        monthlyBillAmount: toNumber(data.monthlyBillAmount),
         floors: toNumber(data.floors),
         sanctionedLoad: toNumber(data.sanctionedLoad)
       };
@@ -233,7 +252,12 @@ export default function Leads() {
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search leads..." value={search} onChange={e => setSearch(e.target.value)} /></div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {['all', ...sts].map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
+            {['all', ...sts, PENDING_FOLLOWUP].map(s => (
+              <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>
+                {s === 'all' ? 'All' : s}
+                {s === PENDING_FOLLOWUP && pendingFollowUpCount > 0 ? ` (${pendingFollowUpCount})` : ''}
+              </span>
+            ))}
           </div>
           <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Lead</button>
         </div>
@@ -249,13 +273,28 @@ export default function Leads() {
             <td style={{ textAlign: 'center' }}>{l.siteVisit === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Done</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
             <td style={{ textAlign: 'center' }}>{l.quotationSent === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Sent</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
             <td style={{ textAlign: 'center' }}>{l.advancePaid === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Paid</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td><StatusBadge status={l.status} /></td>
+            <td>
+              <StatusBadge status={l.status} />
+              {l.pendingFollowUp && l.status !== 'Converted' && (() => {
+                // Two days ahead of the follow-up date the chip turns red, which
+                // is the same point the reminder pops up.
+                const d = daysUntil(l.nextFollowUpDate);
+                const soon = d != null && d <= FOLLOWUP_REMIND_DAYS;
+                return (
+                  <span className={`st ${soon ? 'st-r' : 'st-o'}`} style={{ padding: '2px 6px', fontSize: '.68rem', display: 'block', marginTop: 3 }}
+                    title={l.notAcceptedReason || 'Pending follow-up'}>
+                    {d == null ? 'Follow-up' : d < 0 ? `Follow-up overdue ${-d}d` : d === 0 ? 'Follow-up today' : `Follow-up in ${d}d`}
+                  </span>
+                );
+              })()}
+            </td>
             <td style={{ fontSize: '.76rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td>
             <td style={{ fontSize: '.78rem', fontWeight: 600 }}>{daysSince(l.dateGenerated) != null ? daysSince(l.dateGenerated) + 'd' : '-'}</td>
             <td><div style={{ display: 'flex', gap: 3 }}>
               {l.phone && <button className="btn bsm bo" onClick={() => makeCall(l.phone)} title="Call" style={{ padding: '5px 8px', color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>call</span></button>}
               {l.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(l.phone, `Hi ${l.name}, this is from Pragathi Power Solutions regarding your solar enquiry.`)} title="WhatsApp" style={{ padding: '5px 8px', color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>chat</span></button>}
               <button className="btn bsm bo" onClick={() => setDetailId(l.id)} title="View Details" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>visibility</span></button>
+              <button className="btn bsm bo" onClick={() => { setDetailTab('quotation'); setDetailId(l.id); }} title="Quotation" style={{ padding: '5px 8px', color: 'var(--pri)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>description</span></button>
               <button className="btn bsm bo" onClick={() => { setDetailTab('pos'); setDetailId(l.id); }} title="PO & BOM" style={{ padding: '5px 8px', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>receipt_long</span></button>
               <button className="btn bsm bo" onClick={() => setModal({ data: l, id: l.id })} title="Edit" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>
               {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(l.id)} title="Delete" style={{ padding: '5px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
@@ -274,7 +313,9 @@ export default function Leads() {
 
 /* ============ EDIT MODAL (UNCHANGED) ============ */
 function LeadModal({ data, id, onSave, onClose }) {
-  const { leads, customers, team, retailers, influencers } = useData();
+  const { leads, customers, team, retailers, influencers, users, settings } = useData();
+  // The tariff used to convert a monthly bill amount into units, and back.
+  const ebTariff = toNumber(settings?.ebTariff) || DEFAULT_TARIFF;
   // B1 fix: track previous status to detect first conversion
   const prevStatus = data.status;
   const [form, setForm] = useState({
@@ -292,6 +333,8 @@ function LeadModal({ data, id, onSave, onClose }) {
     referredByName: data.referredByName || '',
     pincode: data.pincode || '', city: data.city || '', district: data.district || '',
     monthlyBill: data.monthlyBill || '',
+    monthlyBillAmount: data.monthlyBillAmount || '',
+    teamLeader: data.teamLeader || '',
     expectedSignUpDate: data.expectedSignUpDate || '',
     salesExecutive: data.salesExecutive || '',
     supportingTeam: data.supportingTeam || [],
@@ -333,17 +376,46 @@ function LeadModal({ data, id, onSave, onClose }) {
     }
   };
 
-  // Auto-calculate KW from monthly bill: KW = Total Consumption / 140
+  // Auto-calculate KW from monthly consumption: KW = Total Consumption / 140
+  const applyUnits = (units) => {
+    const u = toNumber(units);
+    if (u > 0 && u <= 100000) set('kwRequired', (u / 140).toFixed(2));
+  };
+
+  // Some customers know their units, others only remember the bill amount.
+  // Either one fills the other in, using the system tariff.
   const handleMonthlyBillChange = (val) => {
     set('monthlyBill', val);
-    const bill = toNumber(val);
-    if (bill > 0 && bill <= 100000) {
-      set('kwRequired', (bill / 140).toFixed(2));
+    const units = toNumber(val);
+    if (units > 0) set('monthlyBillAmount', String(Math.round(units * ebTariff)));
+    else set('monthlyBillAmount', '');
+    applyUnits(val);
+  };
+
+  const handleMonthlyBillAmountChange = (val) => {
+    set('monthlyBillAmount', val);
+    const amount = toNumber(val);
+    if (amount > 0 && ebTariff > 0) {
+      const units = Math.round(amount / ebTariff);
+      set('monthlyBill', String(units));
+      applyUnits(units);
+    } else {
+      set('monthlyBill', '');
     }
   };
 
   // Duplicate phone detection
   const duplicatePhone = form.phone && leads.find(l => l.id !== id && l.phone === form.phone);
+
+  // Team Leaders to pick from, and the sales-side members under the chosen one.
+  const leaderOptions = teamLeaders(users);
+  const assignOptions = (() => {
+    const list = salesMembersOf(users, form.teamLeader).map(u => u.displayName || u.email).filter(Boolean);
+    // Whoever the lead is already assigned to stays selectable, even if they
+    // have no login or sit under a different leader.
+    if (form.assignedTo && !list.includes(form.assignedTo)) list.unshift(form.assignedTo);
+    return [...new Set(list)];
+  })();
 
   return (
     <Modal title={id ? 'Edit Lead' : 'Add New Lead'} onClose={onClose} wide>
@@ -373,7 +445,14 @@ function LeadModal({ data, id, onSave, onClose }) {
         <div className="mb">
           <div className="fr"><div className="fg"><label>Full Name *</label><input className="fi" value={form.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={form.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
           {duplicatePhone && <div style={{ background: 'rgba(243,156,18,.1)', border: '1px solid rgba(243,156,18,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#d68910', marginBottom: 10 }}>Duplicate phone: already exists for <strong>{duplicatePhone.name}</strong></div>}
-          <div className="fr3"><div className="fg"><label>Email</label><input type="email" className="fi" value={form.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Monthly Bill (Units)</label><input type="number" className="fi" value={form.monthlyBill} onChange={e => handleMonthlyBillChange(e.target.value)} placeholder="e.g. 350" /></div><div className="fg"><label>kW Required</label><input className="fi" value={form.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="Auto or manual" /></div></div>
+          <div className="fg"><label>Email</label><input type="email" className="fi" value={form.email} onChange={e => set('email', e.target.value)} /></div>
+          {/* Either figure fills the other in — some customers know their units,
+              others only remember what the bill comes to. */}
+          <div className="fr3">
+            <div className="fg"><label>Monthly Units</label><input type="number" className="fi" value={form.monthlyBill} onChange={e => handleMonthlyBillChange(e.target.value)} placeholder="e.g. 350" /></div>
+            <div className="fg"><label>Monthly Current Bill (₹) <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}>@ ₹{ebTariff}/unit</span></label><input type="number" className="fi" value={form.monthlyBillAmount} onChange={e => handleMonthlyBillAmountChange(e.target.value)} placeholder="e.g. 2800" /></div>
+            <div className="fg"><label>kW Required</label><input className="fi" value={form.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="Auto or manual" /></div>
+          </div>
           <div className="fg"><label>Address</label><input className="fi" value={form.address} onChange={e => set('address', e.target.value)} /></div>
           <div className="fr3">
             <div className="fg"><label>Pincode</label><input className="fi" value={form.pincode} onChange={e => handlePincodeChange(e.target.value)} maxLength={6} placeholder="e.g. 500001" /></div>
@@ -393,7 +472,16 @@ function LeadModal({ data, id, onSave, onClose }) {
             <div className="fg"><label>District</label><input className="fi" value={form.district} onChange={e => set('district', e.target.value)} placeholder="District" /></div>
           </div>
           <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{priorities.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Lead Reference</label><select className="fi" value={form.leadReference} onChange={e => set('leadReference', e.target.value)}>{refs.map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Date Generated</label><DateInput value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div></div>
+          <div className="fr">
+            <div className="fg">
+              <label>Lead Reference <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}>pick a name or type your own</span></label>
+              <input className="fi" list="lead-reference-names" value={form.leadReference} onChange={e => set('leadReference', e.target.value)} placeholder="Select or enter a name" />
+              <datalist id="lead-reference-names">
+                {[...new Set([...refs, ...leads.map(l => l.leadReference).filter(Boolean)])].map(o => <option key={o} value={o} />)}
+              </datalist>
+            </div>
+            <div className="fg"><label>Date Generated</label><DateInput value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div>
+          </div>
           {form.leadReference === 'Other' && (
             <div className="fg"><label>Specify Other Source</label><input className="fi" value={form.leadReferenceOther} onChange={e => set('leadReferenceOther', e.target.value)} placeholder="Enter lead source details..." /></div>
           )}
@@ -413,7 +501,30 @@ function LeadModal({ data, id, onSave, onClose }) {
             </div>
           )}
           <div className="fr"><div className="fg"><label>Last Follow-up</label><DateInput value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><DateInput value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
+          {/* Leads go to the Sales/Team members under the chosen Team Leader —
+              the technical team is never offered here. */}
+          <div className="fr3">
+            <div className="fg"><label>Team Leader</label>
+              <select className="fi" value={form.teamLeader} onChange={e => { set('teamLeader', e.target.value); set('assignedTo', ''); }}>
+                <option value="">-- All sales members --</option>
+                {leaderOptions.map(u => <option key={u.id || u.email} value={u.email}>{u.displayName || u.email}</option>)}
+              </select>
+            </div>
+            <div className="fg"><label>Assigned To</label>
+              <select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}>
+                <option value="">-- Unassigned --</option>
+                {assignOptions.map(n => <option key={n} value={n}>{n}</option>)}
+              </select>
+              <small style={{ fontSize: '.72rem', color: 'var(--muted)' }}>
+                {form.teamLeader
+                  ? (assignOptions.length === 0
+                      ? 'No members report to this Team Leader yet (Settings → Reports to).'
+                      : 'Members of this Team Leader’s team.')
+                  : 'All sales-side staff — the technical team is not listed.'}
+              </small>
+            </div>
+            <div className="fg"><label>Next Follow-up Date</label><DateInput value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div>
+          </div>
           <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => {
             const val = e.target.value;
             set('salesExecutive', val);
@@ -474,7 +585,7 @@ function LeadModal({ data, id, onSave, onClose }) {
 /* ============ LEAD DETAIL MODAL (NEW) ============ */
 function LeadDetailModal({ lead, initialTab, onClose }) {
   const [tab, setTab] = useState(initialTab || 'overview');
-  const { leadPOs, installations, users } = useData();
+  const { leadPOs, installations, users, quotations } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [poModal, setPOModal] = useState(null);
@@ -483,6 +594,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
 
   const myPOs = leadPOs.filter(po => po.leadId === lead.id);
   const history = lead.followUpHistory || [];
+  // PO and BOM are the stage after the customer accepts the quotation.
+  const myQuote = quotations.find(q => q.leadId === lead.id) || null;
+  const quoteAccepted = myQuote ? myQuote.status === QT_STATUS.ACCEPTED : null;
 
   /* Follow-up logging */
   const handleLogFollowUp = async () => {
@@ -495,6 +609,14 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         lastFollowUp: fupData.date,
         followUpStatus: fupData.status
       });
+      // The concerned hierarchy — Operation Manager, Management, Admin, Owner —
+      // must be able to track the follow-ups the Executive performs.
+      quotationApprovers(users).forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: 'Follow-up Logged',
+        message: `${user?.displayName || user?.email || 'An executive'} logged a follow-up on "${lead.name}" — ${fupData.status}${fupData.notes ? ': ' + fupData.notes : ''}`,
+        type: 'lead', module: 'leads', relatedId: lead.id,
+      }));
       toast('Follow-up logged');
       setFupForm(false);
       setFupData({ date: new Date().toISOString().slice(0, 10), status: '', notes: '' });
@@ -588,6 +710,17 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         approvedBy: user?.email || 'unknown',
         approvalDate: new Date().toISOString().slice(0, 10)
       });
+      // The quotation carried a default BOM while it was still a proposal — now
+      // that the PO is approved, the actual PO/BOM details take its place.
+      if (myQuote && (po.items || []).length) {
+        const actual = bomFromPO(po);
+        if (actual.length) {
+          try {
+            await updateDocument('quotations', myQuote.id, { bomItems: actual, bomSource: 'po', poId: po.id });
+            toast('Quotation BOM updated with the actual PO details');
+          } catch { /* the quotation is not blocked by this */ }
+        }
+      }
       // Tell the PO creator it's approved, and notify admins for visibility.
       if (po.createdBy) createNotification({ forUser: po.createdBy, title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       notifyAdmins(users, { title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
@@ -605,6 +738,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
 
   const tabs = [
     ['overview', 'Overview', 'info'],
+    ['quotation', myQuote ? 'Quotation (' + myQuote.status + ')' : 'Quotation', 'description'],
     ['followups', 'Follow-ups (' + history.length + ')', 'history'],
     ['pos', 'Purchase Orders (' + myPOs.length + ')', 'receipt_long']
   ];
@@ -653,7 +787,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <button className="btn bsm bo" onClick={() => printLeadSummary(lead)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print Lead
                 </button>
-                <button className="btn bsm bp" onClick={() => generateQuotation(lead)}>
+                <button className="btn bsm bp" onClick={() => setTab('quotation')}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>description</span> Quotation
                 </button>
               </div>
@@ -698,6 +832,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
               </div>
             </div>
           )}
+
+          {/* -------- QUOTATION TAB -------- */}
+          {tab === 'quotation' && <QuotationPanel lead={lead} />}
 
           {/* -------- FOLLOW-UPS TAB -------- */}
           {tab === 'followups' && (
@@ -780,8 +917,21 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           {/* -------- PURCHASE ORDERS TAB -------- */}
           {tab === 'pos' && (
             <div>
+              {/* PO → BOM open once the customer has accepted the quotation. */}
+              {quoteAccepted === false && (
+                <div style={{ background: 'rgba(243,156,18,.08)', border: '1px solid rgba(243,156,18,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#d68910', marginBottom: 12 }}>
+                  <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>lock</span>
+                  Quotation {quotationRef(myQuote)} is <strong>{myQuote.status}</strong>. PO and BOM open once the customer accepts it.
+                </div>
+              )}
+              {quoteAccepted === null && (
+                <div style={{ background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: 'var(--muted)', marginBottom: 12 }}>
+                  <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>info</span>
+                  No quotation has been raised for this lead. The proper order is Quotation &rarr; Approval &rarr; Customer Acceptance &rarr; PO &rarr; BOM.
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-                {can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po') && (
+                {can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po') && quoteAccepted !== false && (
                   <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
                   </button>
@@ -1305,106 +1455,8 @@ function generatePONumber(existingPOs) {
   return 'PO-PPSPO-' + String(maxNum + 1).padStart(4, '0') + '/' + dateStr;
 }
 
-function generateQuotation(lead) {
-  const l = lead || {};
-  const e = escapeHtml;
-  const kw = e(l.kwRequired || '___');
-  const price = l.expectedValue ? Number(l.expectedValue).toLocaleString('en-IN') : '___________';
-  const html = `<html><head><title>Quotation - ${e(l.name)}</title>
-<style>
-body{font-family:'Times New Roman',Times,serif;padding:40px 50px;line-height:1.7;font-size:14px;color:#000}
-.hdr{text-align:center;border-bottom:2px solid #000;padding-bottom:12px;margin-bottom:16px}
-.hdr img{max-height:60px;object-fit:contain}
-.hdr p{margin:2px 0;font-size:11px}
-h2{text-align:center;margin:10px 0 18px;font-size:17px;text-decoration:underline}
-.date-line{text-align:right;margin-bottom:16px;font-size:13px}
-.ref-line{margin-bottom:16px;font-size:13px}
-.to-block{margin-bottom:16px;font-size:13px;line-height:1.6}
-.to-block strong{font-size:14px}
-.section{margin:16px 0;font-size:13px;line-height:1.8}
-table{width:100%;border-collapse:collapse;margin:12px 0}
-th,td{border:1px solid #000;padding:6px 10px;text-align:left;font-size:12px}
-th{background:#f0f0f0;font-weight:700}
-.terms td{border:none;padding:4px 10px 4px 0;font-size:12px;vertical-align:top}
-.terms td:first-child{font-weight:600;white-space:nowrap}
-.sig-section{margin-top:50px;display:flex;justify-content:space-between}
-.sig-block{text-align:center;min-width:180px}
-.sig-line{border-top:1px solid #000;margin-top:60px;padding-top:5px;font-size:11px}
-.footer{margin-top:40px;font-size:10px;color:#999;text-align:center;border-top:1px solid #ccc;padding-top:8px}
-@media print{body{padding:20px 30px}}
-</style>
-</head><body>
-<div class="hdr">
-<img src="/logo.png" alt="Pragathi Power Solutions" style="max-height:60px;object-fit:contain;margin-bottom:4px" onerror="this.style.display='none'" />
-<p>19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-517501 | Mob: 9701426440 | Email: ppstirupathi@gmail.com</p>
-<p style="font-weight:600">GST: 37AAOFP6349K2ZG</p>
-</div>
-<h2>QUOTATION</h2>
-<div class="date-line">Date: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
-<div class="ref-line">Ref: PPS/QTN/${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}</div>
-<div class="to-block">
-<strong>To,</strong><br/>
-${e(l.name || '___________')},<br/>
-${e(l.address || '___________')}${l.city ? ', ' + e(l.city) : ''}${l.district ? ', ' + e(l.district) : ''}${l.pincode ? ' - ' + e(l.pincode) : ''}<br/>
-Ph: ${e(l.phone || '___________')}${l.email ? '<br/>Email: ' + e(l.email) : ''}
-</div>
-<div class="section">
-<p><strong>Sub:</strong> Quotation for Supply &amp; Installation of <strong>${kw} kW</strong> Grid Connected Rooftop Solar Power Plant.</p>
-<p>Dear Sir/Madam,</p>
-<p>Thank you for showing interest in Solar Energy. We are pleased to submit our quotation for the supply and installation of a <strong>${kw} kW On-Grid Solar Power Plant</strong> at your premises.</p>
-</div>
-
-<table>
-<thead><tr><th>Sl.</th><th>Description</th><th>Specification</th><th>Qty</th></tr></thead>
-<tbody>
-<tr><td>1</td><td>Solar Modules</td><td>545 Wp / 550 Wp Mono PERC (Tier-1)</td><td>${(!isNaN(Number(kw)) && Number(kw) > 0) ? Math.ceil(Number(kw) * 1000 / 545) : '___'}</td></tr>
-<tr><td>2</td><td>Solar Inverter</td><td>${kw} kW On-Grid String Inverter</td><td>1</td></tr>
-<tr><td>3</td><td>Module Mounting Structure</td><td>Hot-Dip Galvanized / Anodized Aluminum</td><td>1 Set</td></tr>
-<tr><td>4</td><td>DC Cables</td><td>4 sq.mm / 6 sq.mm Solar DC Cable</td><td>As Required</td></tr>
-<tr><td>5</td><td>AC Cables</td><td>As per inverter capacity</td><td>As Required</td></tr>
-<tr><td>6</td><td>Earthing Kit</td><td>LA & Module Earthing</td><td>1 Set</td></tr>
-<tr><td>7</td><td>AC/DC Distribution Box</td><td>SPD, MCB, Isolator</td><td>1 Set</td></tr>
-<tr><td>8</td><td>Net Meter</td><td>Bi-directional (by DISCOM)</td><td>1</td></tr>
-</tbody>
-</table>
-
-<p style="font-size:14px;margin-top:16px"><strong>Total Price: Rs. ${price}/- (Including GST)</strong></p>
-
-<p style="margin-top:18px"><strong>Terms & Conditions:</strong></p>
-<table class="terms">
-<tr><td>Taxes</td><td>:</td><td>GST Included in the above price</td></tr>
-<tr><td>Warranty</td><td>:</td><td>25 Years Performance Warranty on Solar Modules, 5 Years on Inverter</td></tr>
-<tr><td>Payment Terms</td><td>:</td><td>80% Advance along with PO, 20% Before dispatch</td></tr>
-<tr><td>Delivery</td><td>:</td><td>3-4 Weeks from the date of PO receipt</td></tr>
-<tr><td>Installation</td><td>:</td><td>Within 10 days from material delivery</td></tr>
-<tr><td>Validity</td><td>:</td><td>This quotation is valid for 15 days from the date of issue</td></tr>
-<tr><td>Subsidy</td><td>:</td><td>Eligible under PM Surya Ghar / State Subsidy (subject to DISCOM approval)</td></tr>
-</table>
-
-${l.siteVisit === 'Yes' ? `
-<p style="margin-top:16px"><strong>Site Details:</strong></p>
-<table class="terms">
-${l.roofType ? '<tr><td>Roof Type</td><td>:</td><td>' + e(l.roofType) + '</td></tr>' : ''}
-${l.structureType ? '<tr><td>Tilt</td><td>:</td><td>' + e(l.structureType) + '</td></tr>' : ''}
-${l.roofType === 'Elevated' && (l.elevatedNorthHeight || l.elevatedHeight) ? '<tr><td>North Pole Height</td><td>:</td><td>' + e(l.elevatedNorthHeight || l.elevatedHeight) + ' ft</td></tr>' : ''}
-${l.roofType === 'Elevated' && l.elevatedSouthHeight ? '<tr><td>South Pole Height</td><td>:</td><td>' + e(l.elevatedSouthHeight) + ' ft</td></tr>' : ''}
-${l.existingConnection ? '<tr><td>Existing Connection</td><td>:</td><td>' + e(l.existingConnection) + '</td></tr>' : ''}
-${l.sanctionedLoad ? '<tr><td>Sanctioned Load</td><td>:</td><td>' + e(l.sanctionedLoad) + ' kW</td></tr>' : ''}
-${l.floors ? '<tr><td>Floors</td><td>:</td><td>' + e(l.floors) + '</td></tr>' : ''}
-${l.availableSpace ? '<tr><td>Available Space</td><td>:</td><td>' + e(l.availableSpace) + ' sq.ft</td></tr>' : ''}
-${(l.customerServiceNumber || l.meterNumber) ? '<tr><td>Customer Service No</td><td>:</td><td>' + e(l.customerServiceNumber || l.meterNumber) + '</td></tr>' : ''}
-</table>` : ''}
-
-<p style="margin-top:20px">We hope you find our offer competitive. Please feel free to contact us for any further clarification.</p>
-<p>Thanking you,</p>
-<div class="sig-section">
-<div class="sig-block"><div class="sig-line">For Pragathi Power Solutions<br/>Authorized Signatory</div></div>
-<div class="sig-block"><div class="sig-line">Customer Acceptance<br/>(Name & Signature)</div></div>
-</div>
-<div class="footer">Pragathi Power Solutions | 19-3-12/J, Tiruchanoor Road, Tirupati-517501 | 9701426440 | ppstirupathi@gmail.com</div>
-</body></html>`;
-  openHtmlSafely(html, true);
-}
+/* The quotation is generated from src/services/quotation.js now — it follows the
+   company's standard proposal format and carries the approval workflow. */
 
 function printLeadSummary(lead) {
   const e = escapeHtml;

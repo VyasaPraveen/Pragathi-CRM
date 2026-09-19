@@ -4,6 +4,7 @@ import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
 import { apiGet, apiPatch } from '../services/api';
 import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../services/permissions';
+import { DEFAULT_TARIFF } from '../services/quotation';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -57,9 +58,28 @@ export default function Settings() {
   useEffect(() => {
     if (!isAdmin) return;
     apiGet('/settings')
-      .then(s => { if (s) setGatingEnabled(s.workflowGatingEnabled !== false); })
+      .then(s => {
+        if (!s) return;
+        setGatingEnabled(s.workflowGatingEnabled !== false);
+        setEbTariff(String(s.ebTariff || DEFAULT_TARIFF));
+      })
       .catch(() => {});
   }, [isAdmin]);
+
+  // Electricity tariff used across the app: it turns a customer's monthly bill
+  // into units on the lead form, and drives the savings on the quotation.
+  const [ebTariff, setEbTariff] = useState('');
+  const [tariffSaving, setTariffSaving] = useState(false);
+  const saveTariff = async () => {
+    const val = Number(ebTariff);
+    if (!val || val <= 0) { toast('Enter a tariff greater than zero', 'er'); return; }
+    setTariffSaving(true);
+    try {
+      await apiPatch('/settings', { ebTariff: val });
+      toast(`Electricity tariff saved — ₹${val} per unit`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setTariffSaving(false);
+  };
 
   const toggleGating = async (val) => {
     setGatingSaving(true);
@@ -478,6 +498,26 @@ export default function Settings() {
                   : (gatingEnabled
                       ? <><span className="material-icons-round" style={{ fontSize: 16 }}>lock_open</span> Unlock all tabs</>
                       : <><span className="material-icons-round" style={{ fontSize: 16 }}>lock</span> Enforce workflow locking</>)}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Electricity tariff — admin only */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>bolt</span>Electricity Tariff</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              The rate per unit used to convert a customer's <strong>Monthly Current Bill</strong> into <strong>Monthly Units</strong> on the lead form, and to work out the EB savings printed on the quotation.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <input type="number" className="fi" step="0.1" min="0.1" style={{ width: 140 }}
+                value={ebTariff} onChange={e => setEbTariff(e.target.value)} placeholder={String(DEFAULT_TARIFF)} />
+              <span style={{ fontSize: '.86rem', color: 'var(--muted)' }}>₹ per unit</span>
+              <button className="btn bp" onClick={saveTariff} disabled={tariffSaving} style={{ padding: '8px 20px', fontSize: '.86rem' }}>
+                {tariffSaving ? <><span className="ssm"></span> Saving...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save tariff</>}
               </button>
             </div>
           </div>

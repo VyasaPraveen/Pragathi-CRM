@@ -2,6 +2,7 @@ import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { canSeeLead } from '../services/permissions';
 import { formatCurrency, formatDate, toNumber, hasAccess } from '../services/helpers';
 import { StatusBadge, ProgressBar } from '../components/SharedUI';
 
@@ -75,8 +76,13 @@ function GradientStatCard({ gradient, icon, value, label, onClick, subtext }) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { role, designation } = useAuth();
-  const { leads, customers, installations, income, expenses, materials, reminders, employeeTasks, team } = useData();
+  const { role, designation, user } = useAuth();
+  const { leads: allLeads, customers, installations, income, expenses, materials, reminders, employeeTasks, team, users } = useData();
+
+  // The dashboard counts only the leads this person is allowed to see, so the
+  // figures match the Leads screen instead of the whole company's book.
+  const leads = useMemo(() => allLeads.filter(l => canSeeLead(l, user, role, users, team)),
+    [allLeads, user, role, users, team]);
 
   const stats = useMemo(() => {
     const tl = leads.length;

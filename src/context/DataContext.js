@@ -26,6 +26,7 @@ export function DataProvider({ children }) {
   const [expenditures, setExpenditures] = useState([]);
   const [paymentRequests, setPaymentRequests] = useState([]);
   const [bomTemplates, setBomTemplates] = useState([]);
+  const [quotations, setQuotations] = useState([]);
   const [activityLog, setActivityLog] = useState([]);
   const [notifications, setNotifications] = useState([]);
   const [users, setUsers] = useState([]);
@@ -49,7 +50,7 @@ export function DataProvider({ children }) {
       ['reminders', setReminders], ['gallery', setGallery], ['purchaseOrders', setPurchaseOrders],
       ['retailers', setRetailers], ['influencers', setInfluencers], ['employeeTasks', setEmployeeTasks],
       ['leadPOs', setLeadPOs], ['expenditures', setExpenditures], ['paymentRequests', setPaymentRequests],
-      ['bomTemplates', setBomTemplates],
+      ['bomTemplates', setBomTemplates], ['quotations', setQuotations],
       ['activityLog', setActivityLog], ['notifications', setNotifications],
       ['leaveRequests', setLeaveRequests], ['attendance', setAttendance], ['tracking', setTracking],
     ];
@@ -113,7 +114,7 @@ export function DataProvider({ children }) {
     <DataContext.Provider value={{
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
-      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, paymentRequests, bomTemplates, activityLog, notifications, users,
+      purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, paymentRequests, bomTemplates, quotations, activityLog, notifications, users,
       leaveRequests, attendance, tracking, settings
     }}>
       {children}

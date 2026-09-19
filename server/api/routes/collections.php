@@ -44,6 +44,7 @@ function handle_collections(string $collection, string $id, string $method): voi
       'leaveRequests'  => 'Awaiting Replacement',
       'leadPOs'        => 'Unapproved',
       'purchaseOrders' => 'Draft',
+      'quotations'     => 'Pending Approval',
     ];
     if (isset($initialStatus[$collection])) {
       $data['status'] = $initialStatus[$collection];
@@ -145,7 +146,7 @@ function enforce_create(string $collection, array $claims): void {
     'income' => 'revenue', 'expenses' => 'revenue', 'retailers' => 'retailers',
     'influencers' => 'influencers', 'employeeTasks' => 'tasks', 'gallery' => 'gallery',
     'reminders' => 'reminders', 'attendance' => 'attendance', 'tracking' => 'tracking',
-    'leaveRequests' => 'leave',
+    'leaveRequests' => 'leave', 'quotations' => 'leads',
   ];
   if (isset($moduleOf[$collection]) && !may_module($claims, $moduleOf[$collection])) {
     fail(403, 'You do not have access to this section');
@@ -163,6 +164,8 @@ function enforce_create(string $collection, array $claims): void {
       if (!can($role, 'pr_create')) fail(403, 'Not authorised to raise payment requests');
       break;
     case 'leads':
+    case 'quotations':
+      // A quotation is raised from a lead, by whoever may work that lead.
       if (!can($role, 'lead_entry')) fail(403, 'Not authorised to create leads');
       break;
     default:
@@ -173,6 +176,30 @@ function enforce_create(string $collection, array $claims): void {
 
 // Enforce the approval-chain transitions server-side (can't be forged via API).
 function enforce_status_transition(string $collection, string $role, array $patch, array $existing, string $email = ''): void {
+  // ── Quotations: the revision ladder is enforced here, not in the browser ──
+  // The main number never changes; revisions run R1 → R3, one step at a time,
+  // and anything past R3 needs an Admin's approval recorded on the quotation.
+  if ($collection === 'quotations') {
+    if (array_key_exists('extraRevisionApprovedBy', $patch) && !can($role, 'quotation_revision_override')) {
+      fail(403, 'Only an Admin can approve a further revision after R3.');
+    }
+    if (array_key_exists('revision', $patch)) {
+      $newRev = (int)$patch['revision'];
+      $curRev = (int)($existing['revision'] ?? 0);
+      if ($newRev !== $curRev && $newRev !== $curRev + 1) {
+        fail(409, 'A quotation revision moves one step at a time (R' . ($curRev + 1) . ' is next).');
+      }
+      $approvedExtra = !empty($patch['extraRevisionApprovedBy']) || !empty($existing['extraRevisionApprovedBy']);
+      if ($newRev > 3 && !$approvedExtra) {
+        fail(409, 'R3 is the last revision allowed without Admin approval for a further revision.');
+      }
+    }
+    if (array_key_exists('quotationNumber', $patch) && ($existing['quotationNumber'] ?? '') !== ''
+        && $patch['quotationNumber'] !== $existing['quotationNumber']) {
+      fail(409, 'The quotation number stays the same across revisions.');
+    }
+  }
+
   // A patch with no `status` key is a plain field edit. For approval-chain
   // collections, lock those once the record has left its initial stage so
   // amounts/details can't be altered after review/approval (only Admin/Owner may
@@ -271,6 +298,29 @@ function enforce_status_transition(string $collection, string $role, array $patc
     }
   }
 
+  // Quotations: Pending Approval → Approved (any ONE of the four authorities)
+  // → Shared with Customer → Accepted / Not Accepted. Nothing may be skipped.
+  if ($collection === 'quotations') {
+    $from = $existing['status'] ?? 'Pending Approval';
+    // Saving a revision resends the record as it stands, status included. That
+    // is a field edit, not a transition, so it must not be judged as one.
+    if ($to !== $from) {
+      if (in_array($to, ['Approved', 'Rejected'], true) && !can($role, 'quotation_approve')) {
+        fail(403, 'Only Admin / Operation Manager / Management / Owner can approve a quotation.');
+      }
+      $prev = [
+        'Approved'             => 'Pending Approval',
+        'Rejected'             => 'Pending Approval',
+        'Shared with Customer' => 'Approved',
+        'Accepted'             => 'Shared with Customer',
+        'Not Accepted'         => 'Shared with Customer',
+      ];
+      if (isset($prev[$to]) && $from !== $prev[$to]) {
+        fail(409, "Out of order: this quotation must be '{$prev[$to]}' before it can move to '{$to}'.");
+      }
+    }
+  }
+
   // Leave requests: only the Sales Manager (or Management/Admin/Owner) may
   // approve or reject; the final approval step follows replacement acceptance (req #1).
   if ($collection === 'leaveRequests') {
@@ -312,7 +362,7 @@ function po_advance_ok(array $po): bool {
 // Keep in step with the routes in src/components/AppLayout.js.
 function module_link(string $module): string {
   static $routes = [
-    'leads' => '/leads', 'customers' => '/customers', 'employeeTasks' => '/tasks',
+    'leads' => '/leads', 'quotations' => '/leads', 'customers' => '/customers', 'employeeTasks' => '/tasks',
     'tasks' => '/tasks', 'installations' => '/installations', 'ongoingWork' => '/ongoing',
     'materials' => '/materials', 'purchaseOrders' => '/purchase-orders', 'leadPOs' => '/purchase-orders',
     'revenue' => '/revenue', 'expenditure' => '/expenditure', 'expenditures' => '/expenditure',

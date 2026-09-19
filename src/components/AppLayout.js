@@ -7,6 +7,7 @@ import { useToast } from '../context/ToastContext';
 import { hasAccess } from '../services/helpers';
 import { hasModule } from '../services/permissions';
 import { registerPush } from '../services/push';
+import DueAlerts from './DueAlerts';
 
 import Dashboard from '../pages/Dashboard';
 import Leads from '../pages/Leads';
@@ -72,6 +73,8 @@ export default function AppLayout() {
       <Sidebar open={sbOpen} onClose={() => setSbOpen(false)} />
       <div className="mc">
         <Topbar onMenuClick={() => setSbOpen(!sbOpen)} />
+        {/* Quotation approvals, sharing deadlines and follow-up reminders */}
+        <DueAlerts />
         <div className="pc fin">
           <Routes>
             <Route path="/" element={<Dashboard />} />

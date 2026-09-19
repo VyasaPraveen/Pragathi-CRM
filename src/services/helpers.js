@@ -47,7 +47,10 @@ export const statusClass = (s) => {
     'Unapproved': 'st-o', 'Recommended': 'st-b',
     'Requested': 'st-o', 'Verified': 'st-b', 'Management Approved': 'st-p',
     'Proposal Submitted': 'st-b', 'Closed': 'st-g',
-    'Awaiting Replacement': 'st-o', 'Awaiting Manager': 'st-b'
+    'Awaiting Replacement': 'st-o', 'Awaiting Manager': 'st-b',
+    // Quotation workflow
+    'Pending Approval': 'st-o', 'Shared with Customer': 'st-b',
+    'Accepted': 'st-g', 'Not Accepted': 'st-r', 'Pending Follow-up': 'st-o'
   };
   return m[s] || 'st-x';
 };
@@ -138,7 +141,7 @@ export function getRoleFromDesignation(designation) {
 // Mirrors module_link() in server/api/routes/collections.php, which builds the
 // deep link for push notifications — keep the two in step.
 export const MODULE_ROUTES = {
-  leads: '/leads', customers: '/customers', employeeTasks: '/tasks',
+  leads: '/leads', quotations: '/leads', customers: '/customers', employeeTasks: '/tasks',
   tasks: '/tasks', installations: '/installations', ongoingWork: '/ongoing',
   materials: '/materials', purchaseOrders: '/purchase-orders', leadPOs: '/purchase-orders',
   revenue: '/revenue', expenditure: '/expenditure', expenditures: '/expenditure',
@@ -184,6 +187,41 @@ export function openHtmlSafely(html, shouldPrint = false) {
   w.addEventListener('afterprint', () => URL.revokeObjectURL(url));
   if (shouldPrint) w.addEventListener('load', () => w.print());
   setTimeout(() => URL.revokeObjectURL(url), 60000);
+}
+
+// Phone cameras produce 4–12 MB photos, which the upload endpoint rejects at
+// 10 MB and which crawl over mobile data — the most common reason an attendance
+// mark never completed. The picture is scaled down and re-encoded before it is
+// sent; if anything at all goes wrong the original file is used unchanged.
+export function compressImage(file, maxDim = 1600, quality = 0.82) {
+  return new Promise((resolve) => {
+    try {
+      if (!file || !/^image\//.test(file.type) || typeof document === 'undefined') { resolve(file); return; }
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => {
+        try {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          // A small photo is already fine — don't re-encode it for nothing.
+          if (scale >= 1 && file.size <= 2 * 1024 * 1024) { URL.revokeObjectURL(url); resolve(file); return; }
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((blob) => {
+            URL.revokeObjectURL(url);
+            if (!blob || blob.size >= file.size) { resolve(file); return; }
+            const name = (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+            try { resolve(new File([blob], name, { type: 'image/jpeg' })); }
+            catch { blob.name = name; resolve(blob); }
+          }, 'image/jpeg', quality);
+        } catch { URL.revokeObjectURL(url); resolve(file); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    } catch { resolve(file); }
+  });
 }
 
 // Q5 fix: dynamic days-in-month instead of hardcoded 30

@@ -146,6 +146,10 @@ const ACTION_ROLES = [
   'pr_transfer'                => ['accountant'],
   'pr_proposal'                => ['accountant'],
   'pr_proposal_approve'        => ['admin','management','operation_manager'],
+  // Quotation approval: any ONE of Admin / Operation Manager / Management /
+  // Owner. A revision beyond R3 needs an Admin.
+  'quotation_approve'          => ['admin','operation_manager','management'],
+  'quotation_revision_override'=> ['admin'],
 ];
 const LEGACY_ROLE_MAP = ['manager'=>'operation_manager','coordinator'=>'bco','engineer'=>'technician','staff'=>'executive'];
 
@@ -238,7 +242,7 @@ function collection_table(string $collection): ?string {
     'gallery' => 'gallery', 'purchaseOrders' => 'purchase_orders', 'retailers' => 'retailers',
     'influencers' => 'influencers', 'employeeTasks' => 'employee_tasks', 'leadPOs' => 'lead_pos',
     'expenditures' => 'expenditures', 'paymentRequests' => 'payment_requests',
-    'bomTemplates' => 'bom_templates',
+    'bomTemplates' => 'bom_templates', 'quotations' => 'quotations',
     'activityLog' => 'activity_log', 'notifications' => 'notifications',
     'leaveRequests' => 'leave_requests', 'attendance' => 'attendance', 'tracking' => 'tracking',
   ];

@@ -54,6 +54,9 @@ export const ACTIONS = {
   PR_TRANSFER: 'pr_transfer',
   PR_PROPOSAL: 'pr_proposal',
   PR_PROPOSAL_APPROVE: 'pr_proposal_approve',
+  // Quotation workflow (19-Sep requirement)
+  QUOTATION_APPROVE: 'quotation_approve',                     // any ONE of the four
+  QUOTATION_REVISION_OVERRIDE: 'quotation_revision_override', // a revision after R3
 };
 
 export const ACTION_ROLES = {
@@ -82,7 +85,17 @@ export const ACTION_ROLES = {
   [ACTIONS.PR_TRANSFER]: ['accountant'],                                     // payment transfer
   [ACTIONS.PR_PROPOSAL]: ['accountant'],                                     // Work Proposal / Pre-PO
   [ACTIONS.PR_PROPOSAL_APPROVE]: ['admin', 'management', 'operation_manager'],
+  // A quotation is approved by any ONE of Admin / Operation Manager /
+  // Management / Owner — all four are notified, the first to act decides it.
+  [ACTIONS.QUOTATION_APPROVE]: ['admin', 'operation_manager', 'management'],
+  [ACTIONS.QUOTATION_REVISION_OVERRIDE]: ['admin'],
 };
+
+// The four authorities notified when a quotation needs approval. Owner
+// (super_admin) is included — can() lets them act everywhere anyway.
+export const QUOTATION_APPROVER_ROLES = ['admin', 'operation_manager', 'management', 'super_admin'];
+export const quotationApprovers = (users) =>
+  (users || []).filter(u => QUOTATION_APPROVER_ROLES.includes(normalizeRole(u.role)));
 
 // Legacy role keys (from before the 9-role system) → nearest new role, so
 // existing user accounts keep working until an admin reassigns them one of the
@@ -219,6 +232,86 @@ export const leaderOf = (users, email) => {
   const me = (users || []).find(u => String(u.email || '').toLowerCase() === String(email || '').toLowerCase());
   return me && me.teamLeader ? String(me.teamLeader).toLowerCase() : '';
 };
+
+// ── Sales team selection (lead assignment) ─────────────────────────────────
+// The technical side does not take sales leads, so those roles are never
+// offered in "Assigned To".
+export const TECHNICAL_ROLES = ['technician', 'technical_manager', 'warehouse_admin'];
+export const isTechnicalRole = (role) => TECHNICAL_ROLES.includes(normalizeRole(role));
+
+// Who may be given a lead.
+//
+// With a Team Leader chosen, that is their team: the members who report to
+// them, plus the leader. The team structure is the company's own grouping, so
+// it decides — not the role each member happens to carry.
+//
+// With no leader chosen the list falls back to everyone on the sales side, and
+// the technical roles are left out of that wider list.
+export function salesMembersOf(users, leaderEmail) {
+  const approved = (users || []).filter(u => u.approved !== false);
+  const key = String(leaderEmail || '').toLowerCase();
+  if (!key) return approved.filter(u => !isTechnicalRole(u.role));
+  return approved.filter(u =>
+    String(u.teamLeader || '').toLowerCase() === key ||
+    String(u.email || '').toLowerCase() === key);
+}
+
+// Everyone who leads a team, for the "Team Leader" picker on a lead.
+export function teamLeaders(users) {
+  return (users || []).filter(u =>
+    normalizeRole(u.role) === 'team_leader' || isTeamLeader(users, u.email));
+}
+
+// ── Lead visibility (19-Sep requirement 6) ─────────────────────────────────
+// A lead belongs to the person it is assigned to. The hierarchy above them —
+// Sales Manager, Operation Manager, Management, Admin, Owner — sees everything,
+// and so does the assignee's own Team Leader. Unrelated staff see nothing.
+//
+// A lead only becomes private once it is assigned to somebody who actually has
+// a login. Older leads assigned to a name that no account matches (several on
+// file are) stay visible exactly as they are today, rather than disappearing
+// for everyone below manager level.
+const lc = (v) => String(v || '').trim().toLowerCase();
+
+// The assignment fields — who is supposed to be working this lead.
+export const leadAssignees = (lead) =>
+  [lead?.assignedTo, lead?.salesExecutive, lead?.assignedToEmail].map(lc).filter(Boolean);
+
+// Does a name/email on the lead correspond to a real login? The `team`
+// directory bridges the gap where a lead carries the team record's name and
+// that record holds the person's login address.
+export function leadHasKnownOwner(lead, users, team) {
+  const names = leadAssignees(lead);
+  if (!names.length) return false;
+  return names.some(n =>
+    (users || []).some(u => lc(u.email) === n || lc(u.displayName) === n) ||
+    (team || []).some(t => lc(t.name) === n && (users || []).some(u => lc(u.email) === lc(t.email))));
+}
+
+export function canSeeLead(lead, user, role, users, team) {
+  if (!lead) return false;
+  const r = normalizeRole(role);
+  if (r === 'super_admin' || hasAccess(r, 'manager')) return true; // manager tier and above
+  const email = lc(user?.email);
+  const name = lc(user?.displayName);
+  const mine = (v) => {
+    const s = lc(v);
+    return !!s && (s === email || s === name);
+  };
+  if (mine(lead.assignedTo) || mine(lead.salesExecutive) || mine(lead.createdBy) || mine(lead.assignedToEmail)) return true;
+  if (Array.isArray(lead.supportingTeam) && lead.supportingTeam.some(mine)) return true;
+  // The lead carries this person's name through the team directory.
+  if ((team || []).some(t => (lc(t.email) === email && email) && leadAssignees(lead).includes(lc(t.name)))) return true;
+  // A Team Leader also sees the leads of their own members.
+  if (r === 'team_leader') {
+    const owners = leadAssignees(lead);
+    const isMembers = teamMembersOf(users, user?.email).some(m =>
+      [m.email, m.displayName].some(v => !!lc(v) && owners.includes(lc(v))));
+    if (isMembers) return true;
+  }
+  // Nobody with a login is down as working it — leave it where it was.
+  return !leadHasKnownOwner(lead, users, team);
+}
 
 // Nobody may recommend or approve their own payment request.
 export const isOwnRequest = (pr, user) => {

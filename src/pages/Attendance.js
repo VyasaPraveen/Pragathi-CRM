@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, deleteDocument, createNotification } from '../services/firestore';
 import { apiUpload } from '../services/api';
-import { formatDate, safeStr, hasAccess, isSafeUrl } from '../services/helpers';
+import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
 
 const PAGE_SIZE = 30;
@@ -15,16 +15,22 @@ const today = () => new Date().toISOString().slice(0, 10);
 // to the list and lose the location and photo they had already captured. The
 // half-finished mark is kept here so the flow picks up exactly where it left off.
 const DRAFT_KEY = 'pps_attendance_draft';
+// localStorage, not sessionStorage: Android frees memory by killing the whole
+// tab while the camera app is in front, and sessionStorage dies with it — which
+// is exactly the case this draft exists for. Only kept for the current day.
 const readDraft = () => {
   try {
-    const raw = sessionStorage.getItem(DRAFT_KEY);
+    const raw = localStorage.getItem(DRAFT_KEY);
     const d = raw ? JSON.parse(raw) : null;
     // A draft is only valid for the day it was started on.
     return d && d.date === today() ? d : null;
   } catch { return null; }
 };
-const writeDraft = (d) => { try { sessionStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, date: today() })); } catch { /* private mode */ } };
-const clearDraft = () => { try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
+const writeDraft = (d) => { try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ ...d, date: today() })); } catch { /* private mode */ } };
+const clearDraft = () => {
+  try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+  try { sessionStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ }
+};
 
 export default function Attendance() {
   const { attendance, users } = useData();
@@ -33,6 +39,8 @@ export default function Attendance() {
   const [modal, setModal] = useState(false);
   const [search, setSearch] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [view, setView] = useState('mine');   // 'mine' = My Attendance
+  const [month, setMonth] = useState(today().slice(0, 7));
 
   const myEmail = user?.email || '';
   const myName = user?.displayName || '';
@@ -60,6 +68,50 @@ export default function Attendance() {
   useEffect(() => {
     if (readDraft()) setModal(true);
   }, []);
+
+  // My Attendance — every mark of mine, folded into one row per day with the
+  // first check-in, the last check-out and the hours between them.
+  const myDays = useMemo(() => {
+    const mine = attendance.filter(a => (a.employeeEmail && a.employeeEmail === myEmail) ||
+      (!a.employeeEmail && a.employeeName === myName));
+    const byDate = new Map();
+    mine.forEach(a => {
+      if (!a.date) return;
+      const d = byDate.get(a.date) || { date: a.date, marks: [] };
+      d.marks.push(a);
+      byDate.set(a.date, d);
+    });
+    return [...byDate.values()].map(d => {
+      const ordered = [...d.marks].sort((x, y) => new Date(x.createdAt || 0) - new Date(y.createdAt || 0));
+      const inMark = ordered.find(m => m.type === 'Check In') || null;
+      const outMark = [...ordered].reverse().find(m => m.type === 'Check Out') || null;
+      let hours = null;
+      if (inMark?.createdAt && outMark?.createdAt) {
+        const diff = new Date(outMark.createdAt) - new Date(inMark.createdAt);
+        if (diff > 0) hours = Math.round((diff / 3600000) * 100) / 100;
+      }
+      return { ...d, in: inMark, out: outMark, hours, present: !!inMark };
+    }).sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [attendance, myEmail, myName]);
+
+  const monthDays = myDays.filter(d => String(d.date).startsWith(month));
+  const mySummary = useMemo(() => {
+    const worked = monthDays.filter(d => d.hours != null);
+    const totalHours = worked.reduce((s, d) => s + d.hours, 0);
+    return {
+      present: monthDays.filter(d => d.present).length,
+      incomplete: monthDays.filter(d => d.present && !d.out).length,
+      totalHours: Math.round(totalHours * 10) / 10,
+      avgHours: worked.length ? Math.round((totalHours / worked.length) * 10) / 10 : 0,
+    };
+  }, [monthDays]);
+
+  // The months the employee actually has marks in, newest first.
+  const myMonths = useMemo(() => {
+    const set = new Set(myDays.map(d => String(d.date).slice(0, 7)));
+    set.add(today().slice(0, 7));
+    return [...set].sort().reverse();
+  }, [myDays]);
 
   // Attendance counts — these come straight off the live attendance list, so they
   // update on their own the moment a mark is saved.
@@ -124,6 +176,13 @@ export default function Attendance() {
         <button className="btn bp bsm" onClick={() => setModal(true)}><span className="material-icons-round" style={{ fontSize: 18 }}>where_to_vote</span> Mark Attendance</button>
       </div>
 
+      {/* My Attendance is the default view; managers can switch to the whole team. */}
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+        {[['mine', 'My Attendance'], ['all', canSeeAll ? 'Staff Attendance' : 'My Records']].map(([k, label]) => (
+          <span key={k} className={`fc ${view === k ? 'act' : ''}`} onClick={() => setView(k)}>{label}</span>
+        ))}
+      </div>
+
       <div className="card" style={{ marginBottom: 16 }}><div className="cb" style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
         <span className="material-icons-round" style={{ fontSize: 22, color: 'var(--pri)' }}>today</span>
         <div style={{ flex: 1, minWidth: 180 }}>
@@ -151,6 +210,53 @@ export default function Attendance() {
         ))}
       </div>
 
+      {view === 'mine' && (
+        <div className="card" style={{ marginBottom: 16 }}><div className="cb">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
+            <strong style={{ fontSize: '.95rem' }}>My Attendance</strong>
+            <select className="fi" style={{ width: 'auto', padding: '6px 10px' }} value={month} onChange={e => setMonth(e.target.value)}>
+              {myMonths.map(m => <option key={m} value={m}>{new Date(m + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</option>)}
+            </select>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10, marginBottom: 14 }}>
+            {[
+              ['Days Present', mySummary.present, '#27ae60'],
+              ['Total Hours', mySummary.totalHours, 'var(--pri)'],
+              ['Avg Hours / Day', mySummary.avgHours, '#6c5ce7'],
+              ['Days Without Check-Out', mySummary.incomplete, mySummary.incomplete ? '#e67e22' : 'var(--muted)'],
+            ].map(([label, val, color]) => (
+              <div key={label} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: '10px 12px', textAlign: 'center' }}>
+                <div style={{ fontSize: '1.15rem', fontWeight: 700, color }}>{val}</div>
+                <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>{label}</div>
+              </div>
+            ))}
+          </div>
+          {monthDays.length ? (
+            <div className="tw"><table><thead><tr>
+              <th>Date</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Location</th><th>Photo</th>
+            </tr></thead><tbody>
+              {monthDays.map(d => (
+                <tr key={d.date}>
+                  <td style={{ whiteSpace: 'nowrap', fontSize: '.82rem' }}>{formatDate(d.date)}</td>
+                  <td style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
+                  <td style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
+                  <td style={{ fontSize: '.82rem', fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>
+                  <td style={{ fontSize: '.8rem' }}>
+                    {d.in?.lat && d.in?.lng
+                      ? <a href={d.in.mapLink || `https://www.google.com/maps?q=${d.in.lat},${d.in.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>View</a>
+                      : '-'}
+                  </td>
+                  <td>{isSafeUrl(d.in?.photoUrl) ? <a href={d.in.photoUrl} target="_blank" rel="noreferrer"><img src={d.in.photoUrl} alt="" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
+                </tr>
+              ))}
+            </tbody></table></div>
+          ) : (
+            <EmptyState icon="event_busy" title="No attendance this month" message="Marks you make will appear here with the hours worked." />
+          )}
+        </div></div>
+      )}
+
+      {view === 'all' && (
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
         <th>Employee</th><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Photo</th>{admin && <th style={{ textAlign: 'right' }}>Actions</th>}
       </tr></thead><tbody>
@@ -173,6 +279,7 @@ export default function Attendance() {
       </tbody></table></div>
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({visible.length - visibleCount} remaining)</button></div>}
       </div></div>
+      )}
 
       {modal && <MarkModal suggestedType={suggestedType} onSave={handleSave} onClose={() => { clearDraft(); setModal(false); }} />}
     </>
@@ -189,6 +296,7 @@ function MarkModal({ suggestedType, onSave, onClose }) {
   const [photo, setPhoto] = useState(null);                // { file, preview }
   const [photoUrl, setPhotoUrl] = useState(draft?.photoUrl || '');
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
   const [saving, setSaving] = useState(false);
 
   const captureLocation = () => {
@@ -221,17 +329,51 @@ function MarkModal({ suggestedType, onSave, onClose }) {
   const onPickPhoto = async (e) => {
     const file = (e.target.files || [])[0];
     if (!file) return;
-    if (file.size > 10 * 1024 * 1024) { toast('Photo is larger than 10 MB', 'er'); return; }
     setPhoto({ file, preview: URL.createObjectURL(file) });
+    setUploadError('');
     try {
       setUploading(true);
-      const res = await apiUpload(file, 'attendance');
+      // A phone photo is far bigger than this needs to be; sending it whole is
+      // slow on mobile data and is rejected outright above 10 MB.
+      const small = await compressImage(file);
+      if (small.size > 10 * 1024 * 1024) {
+        throw new Error('Photo is too large even after compression. Take the photo at a lower resolution.');
+      }
+      let res;
+      try {
+        res = await apiUpload(small, 'attendance');
+      } catch (first) {
+        // One retry — a dropped connection as the camera closes is common.
+        res = await apiUpload(small, 'attendance');
+      }
       setPhotoUrl(res.url);
       // The camera can take a while; if location was refused or timed out
       // earlier, try again now so the record is never saved without it.
       if (!loc) captureLocation();
-    } catch (err) { toast(err.message || 'Photo upload failed', 'er'); setPhoto(null); }
+    } catch (err) {
+      const msg = err.message || 'Photo upload failed';
+      setUploadError(msg);
+      toast(msg, 'er');
+      // The picked photo stays on screen so "Retry upload" can use it without
+      // sending the employee back to the camera.
+    }
     finally { setUploading(false); }
+  };
+
+  // Retry the upload of the photo already taken, without re-opening the camera.
+  const retryUpload = async () => {
+    if (!photo?.file || uploading) return;
+    setUploadError('');
+    try {
+      setUploading(true);
+      const small = await compressImage(photo.file);
+      const res = await apiUpload(small, 'attendance');
+      setPhotoUrl(res.url);
+      if (!loc) captureLocation();
+    } catch (err) {
+      const msg = err.message || 'Photo upload failed';
+      setUploadError(msg); toast(msg, 'er');
+    } finally { setUploading(false); }
   };
 
   const submit = async (e) => {
@@ -274,6 +416,16 @@ function MarkModal({ suggestedType, onSave, onClose }) {
               <input type="file" accept="image/*" capture="environment" onChange={onPickPhoto} style={{ display: 'none' }} />
             </label>
             {uploading && <small className="lg-hint">Uploading photo…</small>}
+            {uploadError && !uploading && (
+              <div style={{ marginTop: 6 }}>
+                <small style={{ color: 'var(--err)', display: 'block', marginBottom: 4 }}>{uploadError}</small>
+                {photo?.file && (
+                  <button type="button" className="btn bsm bo" onClick={retryUpload}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>refresh</span> Retry upload
+                  </button>
+                )}
+              </div>
+            )}
             {(photo || (photoUrl && isSafeUrl(photoUrl))) && (
               <div style={{ marginTop: 8 }}>
                 <img src={photo ? photo.preview : photoUrl} alt="Attendance" style={{ width: 120, height: 120, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} />
