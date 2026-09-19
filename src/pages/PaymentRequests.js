@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, hasAccess } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf } from '../services/permissions';
 
@@ -117,7 +117,7 @@ export default function PaymentRequests() {
         cleaned.status = PR_STATUS.REQUESTED;
         cleaned.requestedBy = user?.email || 'unknown';
         cleaned.requestedByName = me;
-        cleaned.requestedDate = new Date().toISOString().slice(0, 10);
+        cleaned.requestedDate = todayStr();
         // The server decides these from the team structure on file; sent here so
         // the row reads correctly straight away.
         cleaned.teamLeaderEmail = needsRecommendation ? myLeaderEmail : '';
@@ -170,7 +170,7 @@ export default function PaymentRequests() {
       await updateDocument('paymentRequests', pr.id, {
         status: stage.to,
         [stage.field]: me,
-        [stage.field + 'Date']: new Date().toISOString().slice(0, 10),
+        [stage.field + 'Date']: todayStr(),
         ...extra,
       });
       // Keep the requester informed as their request moves along the chain.
@@ -196,7 +196,7 @@ export default function PaymentRequests() {
       await updateDocument('paymentRequests', pr.id, {
         status: PR_STATUS.REJECTED,
         rejectedBy: me,
-        rejectedDate: new Date().toISOString().slice(0, 10),
+        rejectedDate: todayStr(),
       });
       if (pr.requestedBy && pr.requestedBy !== user?.email) {
         createNotification({ forUser: pr.requestedByName || pr.requestedBy, title: 'Payment Request Rejected', message: `Your payment request "${pr.purpose || ''}" (${formatCurrency(pr.amount)}) was rejected by ${me}`, type: 'status_update', module: 'paymentRequests', relatedId: pr.id });
@@ -342,7 +342,7 @@ function PRModal({ data, id, onSave, onClose }) {
     payTo: data.payTo || '',
     amount: data.amount || '',
     paymentMode: data.paymentMode || PAYMENT_MODES[0],
-    neededBy: data.neededBy || new Date().toISOString().slice(0, 10),
+    neededBy: data.neededBy || todayStr(),
     notes: data.notes || '',
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));

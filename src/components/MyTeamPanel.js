@@ -1,14 +1,14 @@
 import React, { useMemo, useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { getInitials, formatDate, isSafeUrl } from '../services/helpers';
+import { getInitials, formatDate, isSafeUrl, todayStr } from '../services/helpers';
 import { teamMembersOf, hasModule, roleLabel } from '../services/permissions';
 
 // "My Team" — what a Team Leader sees for the members assigned under them:
 // who they are, whether they have marked attendance, what they are working on,
 // their leave, and their tracking entries. Each section is a permission an
 // Admin can switch on or off for that individual Team Leader.
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayStr();
 const thisMonth = () => today().slice(0, 7);
 
 export default function MyTeamPanel() {

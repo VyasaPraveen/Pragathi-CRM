@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, createNotification } from '../services/firestore';
-import { formatCurrency, formatDate, toNumber, sendWhatsApp } from '../services/helpers';
+import { formatCurrency, formatDate, toNumber, sendWhatsApp, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from './SharedUI';
 import { can, ACTIONS, quotationApprovers } from '../services/permissions';
 import {
@@ -15,7 +15,7 @@ import {
 } from '../services/quotation';
 
 const nowIso = () => new Date().toISOString();
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayStr();
 
 // "in 1 h 20 m" / "overdue by 2 days" — the SLA in words, so nobody has to do
 // the arithmetic themselves.

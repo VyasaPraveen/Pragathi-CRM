@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatDate, sendWhatsApp, safeStr, hasAccess } from '../services/helpers';
+import { formatDate, sendWhatsApp, safeStr, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const types = ['Payment Reminder', 'Service Due', 'Follow-up', 'Warranty', 'Other'];
@@ -92,7 +92,7 @@ export default function Reminders() {
 function ReminderModal({ data, id, onSave, onClose }) {
   const [f, setF] = useState({
     type: data.type || 'Follow-up', customer: data.customer || '', phone: data.phone || '',
-    date: data.date || new Date().toISOString().slice(0, 10), message: data.message || '', status: data.status || 'Pending'
+    date: data.date || todayStr(), message: data.message || '', status: data.status || 'Pending'
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   return (

@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatDate, safeStr, priorityClass, hasAccess } from '../services/helpers';
+import { formatDate, safeStr, priorityClass, hasAccess, todayStr } from '../services/helpers';
 import { StatCard, StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 
 const taskStatuses = ['Pending', 'In Progress', 'Completed', 'Overdue'];
@@ -50,7 +50,7 @@ export default function EmployeeTasks() {
     try {
       const cleaned = { ...data };
       if (cleaned.status === 'Completed' && !cleaned.completedDate) {
-        cleaned.completedDate = new Date().toISOString().slice(0, 10);
+        cleaned.completedDate = todayStr();
       }
       if (cleaned.status !== 'Completed') {
         cleaned.completedDate = '';
@@ -72,7 +72,7 @@ export default function EmployeeTasks() {
           }
         }
       } else {
-        if (!cleaned.assignedDate) cleaned.assignedDate = new Date().toISOString().slice(0, 10);
+        if (!cleaned.assignedDate) cleaned.assignedDate = todayStr();
         const newId = await addDocument('employeeTasks', cleaned);
         toast('Task created');
         // Notify assigned user about new task
@@ -187,7 +187,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
   const canEdit = hasAccess(role, 'coordinator');
 
   const [showUpdateForm, setShowUpdateForm] = useState(false);
-  const [updateData, setUpdateData] = useState({ date: new Date().toISOString().slice(0, 10), update: '' });
+  const [updateData, setUpdateData] = useState({ date: todayStr(), update: '' });
 
   const workUpdates = task.workUpdates || [];
 
@@ -199,7 +199,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
       await updateDocument('employeeTasks', task.id, { workUpdates: updated });
       toast('Work update logged');
       setShowUpdateForm(false);
-      setUpdateData({ date: new Date().toISOString().slice(0, 10), update: '' });
+      setUpdateData({ date: todayStr(), update: '' });
     } catch (e) { toast(e.message, 'er'); }
   };
 
@@ -245,7 +245,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button type="button" className="btn bsm bp" onClick={handleAddWorkUpdate}>Save Update</button>
-              <button type="button" className="btn bsm bo" onClick={() => { setShowUpdateForm(false); setUpdateData({ date: new Date().toISOString().slice(0, 10), update: '' }); }}>Cancel</button>
+              <button type="button" className="btn bsm bo" onClick={() => { setShowUpdateForm(false); setUpdateData({ date: todayStr(), update: '' }); }}>Cancel</button>
             </div>
           </div>
         )}

@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification } from '../services/firestore';
-import { formatDate, safeStr, hasAccess } from '../services/helpers';
+import { formatDate, safeStr, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 
 const LEAVE_TYPES = ['Sick Leave', 'Fever Leave', 'Casual Leave', 'Emergency Leave', 'Earned Leave', 'Half Day', 'Other'];
@@ -104,7 +104,7 @@ export default function Leave() {
       } else {
         payload.status = ST.AWAIT_REPLACEMENT;
         payload.replacementStatus = 'Pending';
-        payload.requestedDate = new Date().toISOString().slice(0, 10);
+        payload.requestedDate = todayStr();
         savedId = await addDocument('leaveRequests', payload);
         toast('Leave request submitted');
       }
@@ -134,7 +134,7 @@ export default function Leave() {
   const acceptReplacement = async (lr) => {
     if (!window.confirm(`Accept covering ${lr.employeeName}'s work during their leave?`)) return;
     try {
-      await updateDocument('leaveRequests', lr.id, { replacementStatus: 'Accepted', status: ST.AWAIT_MANAGER, replacementAcceptedDate: new Date().toISOString().slice(0, 10) });
+      await updateDocument('leaveRequests', lr.id, { replacementStatus: 'Accepted', status: ST.AWAIT_MANAGER, replacementAcceptedDate: todayStr() });
       notifyApprovers({ ...lr, status: ST.AWAIT_MANAGER });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Replacement Accepted', message: `${myName || myEmail} accepted to cover your leave. It is now with the Sales Manager for approval.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('You accepted the replacement');
@@ -153,7 +153,7 @@ export default function Leave() {
   const approve = async (lr) => {
     if (!window.confirm(`Approve ${lr.employeeName}'s leave?`)) return;
     try {
-      await updateDocument('leaveRequests', lr.id, { status: ST.APPROVED, approvedBy: myEmail, approvalDate: new Date().toISOString().slice(0, 10) });
+      await updateDocument('leaveRequests', lr.id, { status: ST.APPROVED, approvedBy: myEmail, approvalDate: todayStr() });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Approved', message: `Your ${lr.leaveType} (${lr.days} day${lr.days === 1 ? '' : 's'}) was approved.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       if (lr.replacementEmail) createNotification({ forUser: lr.replacementEmail, title: 'Leave Cover Confirmed', message: `${lr.employeeName}'s leave was approved — you are covering ${formatDate(lr.fromDate)}${lr.toDate && lr.toDate !== lr.fromDate ? '–' + formatDate(lr.toDate) : ''}.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('Leave approved');
@@ -164,7 +164,7 @@ export default function Leave() {
     const reason = window.prompt('Reason for rejection (optional):', '');
     if (reason === null) return;
     try {
-      await updateDocument('leaveRequests', lr.id, { status: ST.REJECTED, rejectedBy: myEmail, rejectionReason: reason, rejectedDate: new Date().toISOString().slice(0, 10) });
+      await updateDocument('leaveRequests', lr.id, { status: ST.REJECTED, rejectedBy: myEmail, rejectionReason: reason, rejectedDate: todayStr() });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Rejected', message: `Your ${lr.leaveType} request was rejected${reason ? ': ' + reason : ''}.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('Leave rejected', 'er');
     } catch (e) { toast(e.message, 'er'); }
@@ -262,8 +262,8 @@ function LeaveModal({ data, id, onSave, onClose }) {
   const [f, setF] = useState({
     leaveType: data.leaveType || 'Sick Leave',
     leaveTypeOther: data.leaveTypeOther || '',
-    fromDate: data.fromDate || new Date().toISOString().slice(0, 10),
-    toDate: data.toDate || new Date().toISOString().slice(0, 10),
+    fromDate: data.fromDate || todayStr(),
+    toDate: data.toDate || todayStr(),
     reason: data.reason || '',
     replacementId: data.replacementId || '',
   });

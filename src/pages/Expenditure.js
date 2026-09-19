@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, hasAccess } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { can, ACTIONS, EXP_STATUS, nextExpStage } from '../services/permissions';
 
@@ -88,7 +88,7 @@ export default function Expenditure() {
       } else {
         cleaned.status = EXP_STATUS.REQUESTED;
         cleaned.requestedBy = user?.email || 'unknown';
-        cleaned.requestedDate = new Date().toISOString().slice(0, 10);
+        cleaned.requestedDate = todayStr();
         const newId = await addDocument('expenditures', cleaned);
         notifyAdmins(users, { title: 'New Expenditure Request', message: `${expLabel(cleaned)} — ${formatCurrency(cleaned.amount)}`, type: 'info', module: 'expenditure', relatedId: newId });
         // Route it to the concerned managers who can recommend it.
@@ -115,7 +115,7 @@ export default function Expenditure() {
       await updateDocument('expenditures', exp.id, {
         status: stage.to,
         [stage.field]: user?.email || 'unknown',
-        [stage.field + 'Date']: new Date().toISOString().slice(0, 10),
+        [stage.field + 'Date']: todayStr(),
         ...extra,
       });
       // Keep the requester informed as their expenditure moves through the chain.
@@ -140,7 +140,7 @@ export default function Expenditure() {
       await updateDocument('expenditures', exp.id, {
         status: EXP_STATUS.REJECTED,
         rejectedBy: user?.email || 'unknown',
-        rejectedDate: new Date().toISOString().slice(0, 10),
+        rejectedDate: todayStr(),
       });
       if (exp.requestedBy && exp.requestedBy !== user?.email) {
         createNotification({ forUser: exp.requestedBy, title: 'Expenditure Rejected', message: `Your expenditure "${expLabel(exp)}" (${formatCurrency(exp.amount)}) was rejected`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
@@ -263,7 +263,7 @@ function ExpModal({ data, id, onSave, onClose }) {
     paymentTypeSel: existingType && !PAYMENT_TYPES.includes(existingType) ? 'Other' : (existingType || PAYMENT_TYPES[0]),
     paymentTypeOther: existingType && !PAYMENT_TYPES.includes(existingType) ? existingType : '',
     amount: data.amount || '',
-    date: data.date || new Date().toISOString().slice(0, 10),
+    date: data.date || todayStr(),
     purpose: data.purpose || '',
     notes: data.notes || '',
   });

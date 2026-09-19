@@ -3,7 +3,7 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '../services/api';
 import { addDocument, updateDocument } from '../services/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { DESIGNATIONS, getRoleFromDesignation, hasAccess } from '../services/helpers';
+import { DESIGNATIONS, getRoleFromDesignation, hasAccess, todayStr } from '../services/helpers';
 import { useToast } from '../context/ToastContext';
 import { Modal } from '../components/SharedUI';
 import PasswordManager, { PASSWORD_NOTE } from '../components/PasswordManager';
@@ -163,7 +163,7 @@ export default function UserManagement() {
       await addDocument('team', {
         name: 'Yashwanth', role: 'Engineer', designation: 'Engineer',
         status: 'Active', phone: '', email: 'yashwanth@pragathipowersolutions.com', attendance: 0,
-        joiningDate: new Date().toISOString().slice(0, 10)
+        joiningDate: todayStr()
       });
       await apiPost('/auth/users', {
         email: 'yashwanth@pragathipowersolutions.com', password: 'PPS@12345',

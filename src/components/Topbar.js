@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { hasAccess, moduleRoute } from '../services/helpers';
+import { hasAccess, moduleRoute, isSameUser } from '../services/helpers';
 import { updateDocument } from '../services/firestore';
 
 const titles = {
@@ -44,14 +44,13 @@ export default function Topbar({ onMenuClick }) {
   const [showPanel, setShowPanel] = useState(false);
   const panelRef = useRef(null);
 
-  // Get current user's identifiers for matching notifications. Notifications may
-  // target a user by display name (assignment flows) or by email (workflow flows
-  // like expenditure requestedBy / PO createdBy), so match either.
-  const myName = user?.displayName || '';
-  const myEmail = user?.email || '';
+  // Notifications target a user by display name (assignment flows) or by email
+  // (workflow flows like expenditure requestedBy / PO createdBy), so isSameUser
+  // accepts either, and ignores casing and stray spaces so a notification is
+  // never written to somebody who can then never see it.
 
   const myNotifications = notifications
-    .filter(n => n.forUser === myName || (myEmail && n.forUser === myEmail))
+    .filter(n => isSameUser(n.forUser, user))
     .sort((a, b) => {
       const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
       const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;

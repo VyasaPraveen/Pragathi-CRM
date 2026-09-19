@@ -258,7 +258,10 @@ export function salesMembersOf(users, leaderEmail) {
 
 // Everyone who leads a team, for the "Team Leader" picker on a lead.
 export function teamLeaders(users) {
-  return (users || []).filter(u =>
+  // An account still waiting to be approved cannot be handed a team's leads,
+  // so it is not offered as a leader — the same rule salesMembersOf applies to
+  // the members underneath.
+  return (users || []).filter(u => u.approved !== false).filter(u =>
     normalizeRole(u.role) === 'team_leader' || isTeamLeader(users, u.email));
 }
 

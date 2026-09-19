@@ -13,6 +13,21 @@ export function formatDate(d) {
   return `${dd}-${mm}-${yyyy}`;
 }
 
+// Today's date as YYYY-MM-DD, on the calendar the employee is actually living
+// on. toISOString() gives the UTC day, and India runs 5:30 ahead of UTC, so
+// between midnight and 05:30 the UTC day is still yesterday — an early-morning
+// site check-in was being filed against the previous day, leaving that day with
+// a check-in and no check-out, and the real day with only a check-out. The same
+// slip dated leave, purchase orders, expenditures and follow-ups a day early.
+export function todayStr(d = new Date()) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt)) return '';
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+// The YYYY-MM key the dashboard and My Reports group by.
+export const thisMonthStr = (d = new Date()) => todayStr(d).slice(0, 7);
+
 export function getInitials(name) {
   return name ? name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : '?';
 }
@@ -167,7 +182,14 @@ export function isSafeUrl(url) {
   const trimmed = url.trim().toLowerCase();
   const blocked = ['javascript', 'vbscript'];
   if (blocked.some(proto => trimmed.startsWith(proto + ':'))) return false;
-  if (trimmed.startsWith('data:') && !trimmed.startsWith('data:image/')) return false;
+  // An inline image (the workflow tab compresses stage photos to a data URL) is
+  // allowed, but never SVG — that one can carry script. Everything else on a
+  // data: URL is refused. These return early because the URL parse below only
+  // recognises http/https, which used to reject every data: URL and made the
+  // line above look like it permitted something it never did.
+  if (trimmed.startsWith('data:')) {
+    return trimmed.startsWith('data:image/') && !trimmed.startsWith('data:image/svg');
+  }
   // Resolve against the current origin so same-origin RELATIVE URLs (e.g. our own
   // "/uploads/..." files from device uploads) are recognised as safe, not just
   // absolute http/https URLs. Falls back to a dummy base outside the browser.
@@ -196,6 +218,18 @@ export const normName = (v) => String(v || '').trim().toLowerCase();
 // The names offered as Supporting Team on a lead: the active team members,
 // minus anyone already named in a field above (Team Leader / Assigned To /
 // Sales Executive) and anyone already on the list.
+// Does a stored name or email refer to this person? Records carry whichever of
+// the two the screen that wrote them had to hand — a lead assignment stores the
+// display name, an expenditure stores the email — so both have to be accepted.
+// Matching is done on the trimmed, lower-cased value: a stray capital or a
+// trailing space in a display name used to mean the notification was written
+// but never shown to anybody.
+export function isSameUser(value, user) {
+  const v = normName(value);
+  if (!v) return false;
+  return v === normName(user && user.email) || v === normName(user && user.displayName);
+}
+
 export function supportingTeamOptions(team, usedAbove = [], selected = []) {
   const blocked = [...usedAbove, ...selected].map(normName).filter(Boolean);
   const out = [];

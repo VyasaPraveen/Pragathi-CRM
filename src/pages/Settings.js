@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, todayStr } from '../services/helpers';
 import { apiGet, apiPatch } from '../services/api';
 import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../services/permissions';
 import { DEFAULT_TARIFF } from '../services/quotation';
@@ -238,7 +238,7 @@ export default function Settings() {
 
         // Migrate PO number if old format
         if (po.poNumber && !po.poNumber.startsWith('PO-PPSPO-')) {
-          const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
+          const dateStr = (po.poDate || todayStr());
           updates.poNumber = 'PO-PPSPO-' + String(idx + 1).padStart(4, '0') + '/' + dateStr;
         }
 
@@ -279,7 +279,7 @@ export default function Settings() {
 
         updates.items = newItems;
         if (po.poNumber && !po.poNumber.startsWith('PO-PPSPO-')) {
-          const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
+          const dateStr = (po.poDate || todayStr());
           updates.poNumber = 'PO-PPSPO-' + String(allPOs.length + idx + 1).padStart(4, '0') + '/' + dateStr;
         }
         await apiPatch('/collections/purchaseOrders/' + po.id, updates);

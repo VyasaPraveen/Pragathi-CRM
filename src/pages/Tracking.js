@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, todayStr } from '../services/helpers';
 import { DateInput, EmptyState } from '../components/SharedUI';
 
 const to12 = (h) => { const p = h >= 12 ? 'PM' : 'AM'; let hr = h % 12; if (hr === 0) hr = 12; return `${hr}:00 ${p}`; };
@@ -13,7 +13,7 @@ for (let h = 6; h <= 19; h++) DAY_SLOTS.push({ key: 'h' + h, label: `${to12(h)} 
 const NIGHT_SLOT = { key: 'night', label: '8:00 PM – 6:00 AM (Night)' };
 const ALL_SLOTS = [...DAY_SLOTS, NIGHT_SLOT];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayStr();
 // Sales Executive + Sales Manager (and higher authority) may view any member's plan.
 const canViewOthers = (role) => role === 'executive' || role === 'sales_manager' || hasAccess(role, 'manager');
 

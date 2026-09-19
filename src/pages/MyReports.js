@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { formatCurrency, formatDate, toNumber } from '../services/helpers';
+import { formatCurrency, formatDate, toNumber, todayStr, thisMonthStr } from '../services/helpers';
 import { StatCard, StatusBadge, EmptyState } from '../components/SharedUI';
 
 function downloadCSV(filename, headers, rows) {
@@ -16,8 +16,8 @@ function downloadCSV(filename, headers, rows) {
   URL.revokeObjectURL(link.href);
 }
 
-const today = () => new Date().toISOString().slice(0, 10);
-const thisMonth = () => new Date().toISOString().slice(0, 7);
+const today = () => todayStr();
+const thisMonth = () => thisMonthStr();
 
 // Personal, per-member reports + planning — safe for all staff (no company
 // financials or team PII; each member sees only their own work). (req #10)

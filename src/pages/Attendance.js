@@ -4,12 +4,12 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, deleteDocument, createNotification } from '../services/firestore';
 import { apiUpload } from '../services/api';
-import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage } from '../services/helpers';
+import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage, todayStr } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
 import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser } from '../services/attendance';
 
 const PAGE_SIZE = 30;
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayStr();
 
 // Marking attendance sends the phone to the camera app, and a low-memory phone
 // can reload the page while that happens — which used to throw the employee back

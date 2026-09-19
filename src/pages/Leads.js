@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, supportingTeamOptions } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, supportingTeamOptions, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
@@ -323,7 +323,7 @@ function LeadModal({ data, id, onSave, onClose }) {
   const [form, setForm] = useState({
     name: data.name || '', phone: data.phone || '', address: data.address || '',
     email: data.email || '',
-    leadReference: data.leadReference || 'Website', leadReferenceOther: data.leadReferenceOther || '', dateGenerated: data.dateGenerated || new Date().toISOString().slice(0, 10),
+    leadReference: data.leadReference || 'Website', leadReferenceOther: data.leadReferenceOther || '', dateGenerated: data.dateGenerated || todayStr(),
     lastFollowUp: data.lastFollowUp || '', followUpStatus: data.followUpStatus || 'New Lead',
     siteVisit: data.siteVisit || 'No', quotationSent: data.quotationSent || 'No',
     advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', status: data.status || 'Interested',
@@ -641,7 +641,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
   const { toast } = useToast();
   const [poModal, setPOModal] = useState(null);
   const [fupForm, setFupForm] = useState(false);
-  const [fupData, setFupData] = useState({ date: new Date().toISOString().slice(0, 10), status: '', notes: '' });
+  const [fupData, setFupData] = useState({ date: todayStr(), status: '', notes: '' });
 
   const myPOs = leadPOs.filter(po => po.leadId === lead.id);
   const history = lead.followUpHistory || [];
@@ -670,7 +670,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       }));
       toast('Follow-up logged');
       setFupForm(false);
-      setFupData({ date: new Date().toISOString().slice(0, 10), status: '', notes: '' });
+      setFupData({ date: todayStr(), status: '', notes: '' });
     } catch (e) { toast(e.message, 'er'); }
   };
 
@@ -726,7 +726,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       await updateDocument('leadPOs', po.id, {
         status: PO_STATUS.RECOMMENDED,
         recommendedBy: user?.email || 'unknown',
-        recommendedDate: new Date().toISOString().slice(0, 10)
+        recommendedDate: todayStr()
       });
       notifyAdmins(users, { title: 'PO Awaiting Management Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" was recommended and needs Management approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('PO recommended for approval');
@@ -742,7 +742,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       await updateDocument('leadPOs', po.id, {
         status: PO_STATUS.MANAGEMENT_APPROVED,
         managementApprovedBy: user?.email || 'unknown',
-        managementApprovalDate: new Date().toISOString().slice(0, 10)
+        managementApprovalDate: todayStr()
       });
       notifyAdmins(users, { title: 'PO Ready for Final Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" received Management approval and is ready for final approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('Management approval granted');
@@ -759,7 +759,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       await updateDocument('leadPOs', po.id, {
         status: PO_STATUS.APPROVED,
         approvedBy: user?.email || 'unknown',
-        approvalDate: new Date().toISOString().slice(0, 10)
+        approvalDate: todayStr()
       });
       // The quotation carried a default BOM while it was still a proposal — now
       // that the PO is approved, the actual PO/BOM details take its place.
@@ -1139,7 +1139,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
 
   const [f, setF] = useState({
     poNumber: po.poNumber || autoNumber,
-    poDate: po.poDate || new Date().toISOString().slice(0, 10),
+    poDate: po.poDate || todayStr(),
     // Printed on the quotation and on the Bill of Materials. Pre-filled from the
     // lead where we already know it, and editable here.
     referredBy: po.referredBy || lead.referredByName || '',

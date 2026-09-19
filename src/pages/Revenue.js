@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, toNumber, hasAccess } from '../services/helpers';
+import { formatCurrency, formatDate, toNumber, hasAccess, todayStr } from '../services/helpers';
 import { StatCard, Modal } from '../components/SharedUI';
 
 const PAGE_SIZE = 20;
@@ -93,7 +93,7 @@ function RevenueModal({ type, data, id, onSave, onClose }) {
   const [f, setF] = useState({
     desc: (data && data.desc) || '',
     amount: (data && data.amount) || '',
-    date: (data && data.date) || new Date().toISOString().slice(0, 10),
+    date: (data && data.date) || todayStr(),
     category: (data && data.category) || ''
   });
   const [saving, setSaving] = useState(false);

@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
 import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
@@ -213,7 +213,7 @@ function POModal({ data, id, onSave, onClose }) {
   const [f, setF] = useState({
     poNumber: data.poNumber || '', vendorName: data.vendorName || '',
     vendorPhone: data.vendorPhone || '', vendorEmail: data.vendorEmail || '',
-    poDate: data.poDate || new Date().toISOString().slice(0, 10),
+    poDate: data.poDate || todayStr(),
     expectedDeliveryDate: data.expectedDeliveryDate || '',
     status: data.status || 'Draft',
     paymentTerms: data.paymentTerms || '', paymentDueDate: data.paymentDueDate || '',
