@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification } from '../services/firestore';
 import { formatDate, safeStr, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
+import { canRecommendLeave, isLeaveLeader, leaderOf } from '../services/permissions';
 
 const LEAVE_TYPES = ['Sick Leave', 'Fever Leave', 'Casual Leave', 'Emergency Leave', 'Earned Leave', 'Half Day', 'Other'];
 const PAGE_SIZE = 20;
@@ -49,7 +50,12 @@ export default function Leave() {
   // where they are the assigned replacement (so they can accept/decline).
   const mine = (lr) => lr.employeeEmail === myEmail || lr.employeeName === myName;
   const isReplacement = (lr) => lr.replacementEmail === myEmail || lr.replacementName === myName;
-  let visible = (approver || admin) ? leaveRequests : leaveRequests.filter(lr => mine(lr) || isReplacement(lr));
+  // Their own Team Leader sees their members' leave as well, so they can put a
+  // recommendation on it.
+  const isTheirLeader = (lr) => isLeaveLeader(lr, user, users);
+  let visible = (approver || admin)
+    ? leaveRequests
+    : leaveRequests.filter(lr => mine(lr) || isReplacement(lr) || isTheirLeader(lr));
 
   let filtered = filter === 'all' ? visible : visible.filter(lr => lr.status === filter);
   if (search) {
@@ -108,6 +114,17 @@ export default function Leave() {
         savedId = await addDocument('leaveRequests', payload);
         toast('Leave request submitted');
       }
+      // The applicant's Team Leader is told too, so they can recommend it.
+      const leaderEmail = leaderOf(users, myEmail);
+      if (leaderEmail && leaderEmail !== String(myEmail).toLowerCase()) {
+        const leader = (users || []).find(u => String(u.email || '').toLowerCase() === leaderEmail);
+        createNotification({
+          forUser: leader ? (leader.displayName || leader.email) : leaderEmail,
+          title: 'Leave request from your team',
+          message: `${payload.employeeName || 'A team member'} applied for ${payload.leaveType} (${formatDate(payload.fromDate)}${payload.toDate && payload.toDate !== payload.fromDate ? '–' + formatDate(payload.toDate) : ''}). You can add your recommendation.`,
+          type: 'status_update', module: 'leaveRequests', relatedId: savedId || '',
+        });
+      }
       if (payload.replacementEmail) {
         createNotification({
           forUser: payload.replacementEmail,
@@ -147,6 +164,24 @@ export default function Leave() {
       await updateDocument('leaveRequests', lr.id, { replacementStatus: 'Declined' });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Replacement Declined', message: `${myName || myEmail} declined to cover your leave. Please assign another colleague.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('Replacement declined', 'wa');
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
+  // A Team Leader's recommendation: a note for whoever approves, nothing more.
+  // The request does not move stage, so leaving it unrecommended blocks nobody.
+  const recommend = async (lr) => {
+    const note = window.prompt(`Recommend ${lr.employeeName}'s ${lr.leaveType}? Add a note for the approver (optional):`, '');
+    if (note === null) return;
+    try {
+      await updateDocument('leaveRequests', lr.id, {
+        recommendedBy: myEmail,
+        recommendedByName: myName || myEmail,
+        recommendedDate: todayStr(),
+        recommendNote: note || '',
+      });
+      notifyApprovers({ ...lr, recommendedByName: myName || myEmail });
+      if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Recommended', message: `${myName || myEmail} recommended your ${lr.leaveType} request.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
+      toast('Recommendation added');
     } catch (e) { toast(e.message, 'er'); }
   };
 
@@ -211,6 +246,7 @@ export default function Leave() {
           const iAmReplacement = isReplacement(lr) && lr.replacementStatus === 'Pending' && lr.status === ST.AWAIT_REPLACEMENT;
           const canApprove = approver && lr.status === ST.AWAIT_MANAGER;
           const canEdit = mine(lr) && (lr.status === ST.AWAIT_REPLACEMENT);
+          const canRecommend = canRecommendLeave(lr, user, role, users);
           return (
             <tr key={lr.id}>
               <td><strong>{lr.employeeName || '-'}</strong></td>
@@ -221,13 +257,24 @@ export default function Leave() {
                 <span title="One extra leave is added per request" style={{ marginLeft: 4, background: 'rgba(232,131,12,.12)', color: '#d68910', borderRadius: 10, padding: '1px 6px', fontSize: '.66rem', fontWeight: 700 }}>+1</span>
               </td>
               <td style={{ fontSize: '.8rem' }}>{lr.replacementName || '-'}{lr.replacementStatus && <><br /><span style={{ fontSize: '.7rem', color: lr.replacementStatus === 'Accepted' ? 'var(--ok)' : lr.replacementStatus === 'Declined' ? 'var(--err)' : 'var(--muted)' }}>{lr.replacementStatus}</span></>}</td>
-              <td><StatusBadge status={lr.status} /></td>
+              <td>
+                <StatusBadge status={lr.status} />
+                {lr.recommendedByName && (
+                  <div title={lr.recommendNote || ''} style={{ fontSize: '.68rem', color: 'var(--ok)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
+                    <span className="material-icons-round" style={{ fontSize: 13 }}>thumb_up</span>
+                    TL recommended
+                  </div>
+                )}
+              </td>
               <td style={{ textAlign: 'right' }}>
                 <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   {iAmReplacement && <>
                     <button className="btn bsm bp" onClick={() => acceptReplacement(lr)} style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>check</span> Accept</button>
                     <button className="btn bsm bo" onClick={() => declineReplacement(lr)} style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>close</span></button>
                   </>}
+                  {canRecommend && (
+                    <button className="btn bsm bo" onClick={() => recommend(lr)} title="Optional — the approver can act without it" style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>thumb_up</span> Recommend</button>
+                  )}
                   {canApprove && <>
                     <button className="btn bsm bp" onClick={() => approve(lr)} style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>done_all</span> Approve</button>
                     <button className="btn bsm bo" onClick={() => reject(lr)} style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>block</span></button>

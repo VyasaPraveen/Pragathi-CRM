@@ -3,8 +3,9 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, supportingTeamOptions, todayStr } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
+import { assignableNames, supportingNames, directoryPeople } from '../services/people';
+import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
+import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../components/SharedUI';
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
@@ -312,7 +313,7 @@ export default function Leads() {
 
 /* ============ EDIT MODAL (UNCHANGED) ============ */
 function LeadModal({ data, id, onSave, onClose }) {
-  const { leads, customers, team, retailers, influencers, users, settings } = useData();
+  const { leads, customers, retailers, influencers, users, settings } = useData();
   // The tariff used to convert a monthly bill amount into units, and back.
   const ebTariff = toNumber(settings?.ebTariff) || DEFAULT_TARIFF;
   // Dropdown choices come from Settings → Manage Options. Whatever this lead
@@ -417,7 +418,7 @@ function LeadModal({ data, id, onSave, onClose }) {
     return u ? (u.displayName || u.email) : '';
   })();
   const usedAbove = [form.salesExecutive, form.assignedTo, leaderName].map(norm).filter(Boolean);
-  const supportOptions = supportingTeamOptions(team, usedAbove, form.supportingTeam);
+  const supportOptions = supportingNames(users, usedAbove, form.supportingTeam);
   // A typed name is held to the same rule as a picked one.
   const addSupportName = () => {
     const nm = supportName.trim();
@@ -435,13 +436,20 @@ function LeadModal({ data, id, onSave, onClose }) {
     const cur = form.supportingTeam || [];
     if (cur.some(x => norm(x) === k)) set('supportingTeam', cur.filter(x => norm(x) !== k));
   };
+  // Every valid account is offered, so a name can always be found by typing.
+  // When a Team Leader is chosen their own members are listed first, which
+  // keeps the team-based shortlist without making it the only choice.
   const assignOptions = (() => {
-    const list = salesMembersOf(users, form.teamLeader).map(u => u.displayName || u.email).filter(Boolean);
-    // Whoever the lead is already assigned to stays selectable, even if they
-    // have no login or sit under a different leader.
-    if (form.assignedTo && !list.includes(form.assignedTo)) list.unshift(form.assignedTo);
-    return [...new Set(list)];
+    const all = assignableNames(users, form.assignedTo);
+    const team = new Set(salesMembersOf(users, form.teamLeader).map(u => norm(u.displayName || u.email)));
+    if (!form.teamLeader) return all;
+    return [...all].sort((a, b) => (team.has(norm(b)) ? 1 : 0) - (team.has(norm(a)) ? 1 : 0));
   })();
+  const leaderTeamNames = new Set(salesMembersOf(users, form.teamLeader).map(u => norm(u.displayName || u.email)));
+  const assignGroup = (n) => {
+    if (!form.teamLeader || !n) return null;
+    return leaderTeamNames.has(norm(n)) ? 'This Team Leader’s team' : 'Everyone else';
+  };
 
   return (
     <Modal title={id ? 'Edit Lead' : 'Add New Lead'} onClose={onClose} wide>
@@ -551,16 +559,17 @@ function LeadModal({ data, id, onSave, onClose }) {
               </select>
             </div>
             <div className="fg"><label>Assigned To</label>
-              <select className="fi" value={form.assignedTo} onChange={e => { set('assignedTo', e.target.value); dropFromSupport(e.target.value); }}>
-                <option value="">-- Unassigned --</option>
-                {assignOptions.map(n => <option key={n} value={n}>{n}</option>)}
-              </select>
+              <SearchSelect
+                value={form.assignedTo}
+                options={assignOptions}
+                groups={assignGroup}
+                placeholder="Type a few letters to find a name…"
+                onChange={n => { set('assignedTo', n); if (n) dropFromSupport(n); }}
+              />
               <small style={{ fontSize: '.72rem', color: 'var(--muted)' }}>
                 {form.teamLeader
-                  ? (assignOptions.length === 0
-                      ? 'No members report to this Team Leader yet (Settings → Reports to).'
-                      : 'Members of this Team Leader’s team.')
-                  : 'All sales-side staff — the technical team is not listed.'}
+                  ? 'This Team Leader’s members first, then everyone else. Type to search.'
+                  : 'Any current user. Type a few letters to search, or type a name that is not on the list.'}
               </small>
             </div>
             <div className="fg"><label>Next Follow-up Date</label><DateInput value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div>
@@ -570,7 +579,7 @@ function LeadModal({ data, id, onSave, onClose }) {
             set('salesExecutive', val);
             // Dedup: the selected Sales Executive should not also appear in Supporting Team
             dropFromSupport(val);
-          }}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
+          }}><option value="">-- Select --</option>{directoryPeople(users).map(pp => <option key={pp.email || pp.name} value={pp.name}>{pp.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
           <div className="fg"><label>Supporting Team / Names</label>
             {/* Selected supporting names (team members + custom) as removable chips */}
             {(form.supportingTeam || []).length > 0 && (
@@ -586,15 +595,17 @@ function LeadModal({ data, id, onSave, onClose }) {
             {/* Pick a name from the list. Anyone already named in a field above
                 (Team Leader, Assigned To, Sales Executive) is not offered, and
                 neither is someone already on the list. */}
-            <select className="fi" value="" onChange={e => {
-              const n = e.target.value;
-              if (n && !(form.supportingTeam || []).some(x => norm(x) === norm(n))) {
-                set('supportingTeam', [...(form.supportingTeam || []), n]);
-              }
-            }}>
-              <option value="">{supportOptions.length ? '-- Select a supporting member --' : '-- No other names available --'}</option>
-              {supportOptions.map(n => <option key={n} value={n}>{n}</option>)}
-            </select>
+            <SearchSelect
+              value=""
+              options={supportOptions}
+              placeholder={supportOptions.length ? 'Search a name to add…' : 'No other names available'}
+              emptyText="No matching name"
+              onChange={n => {
+                if (n && !(form.supportingTeam || []).some(x => norm(x) === norm(n))) {
+                  set('supportingTeam', [...(form.supportingTeam || []), n]);
+                }
+              }}
+            />
             {/* Add a custom supporting name not in the team list */}
             <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
               <input className="fi" value={supportName} onChange={e => setSupportName(e.target.value)} placeholder="Or type a name not on the list..." onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSupportName(); } }} />
@@ -625,7 +636,12 @@ function LeadModal({ data, id, onSave, onClose }) {
             </div>
           )}
           <div className="fg"><label>Notes</label><textarea className="fi" value={form.notes} onChange={e => set('notes', e.target.value)} rows="3" placeholder="Follow-up notes..." /></div>
-          <div className="fg"><label>Lead Status</label><select className="fi" value={form.status} onChange={e => set('status', e.target.value)}>{sts.map(o => <option key={o}>{o}</option>)}</select></div>
+          {/* A brand-new lead always starts at the default status, so the picker
+              is not shown while adding. It stays on an existing lead, because
+              choosing "Converted" here is what creates the Customer record. */}
+          {id && (
+            <div className="fg"><label>Lead Status</label><select className="fi" value={form.status} onChange={e => set('status', e.target.value)}>{sts.map(o => <option key={o}>{o}</option>)}</select></div>
+          )}
         </div>
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : ((id ? 'Update' : 'Add') + ' Lead')}</button></div>
       </form>

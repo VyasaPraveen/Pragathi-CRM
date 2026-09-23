@@ -21,10 +21,18 @@ function handle_collections(string $collection, string $id, string $method): voi
       $st->execute([$id]);
       $row = $st->fetch();
       if (!$row) fail(404, 'Not found');
-      json_out(row_to_doc($row));
+      $doc = row_to_doc($row);
+      if ($collection === 'paymentRequests' && !pr_visibility_filter($claims)($doc)) {
+        fail(403, 'This payment request is not yours to view');
+      }
+      json_out($doc);
     }
     $rows = db()->query("SELECT * FROM `$table` ORDER BY created_at DESC")->fetchAll();
-    json_out(array_map('row_to_doc', $rows));
+    $docs = array_map('row_to_doc', $rows);
+    if ($collection === 'paymentRequests') {
+      $docs = array_values(array_filter($docs, pr_visibility_filter($claims)));
+    }
+    json_out($docs);
   }
 
   // ── all writes require an approved account ──
@@ -112,7 +120,7 @@ function handle_collections(string $collection, string $id, string $method): voi
 // GET /batch?names=leads,customers,...  → { leads:[…docs…], customers:[…], … }
 // Unknown names are skipped silently. Read-only; same auth as a normal GET.
 function handle_batch(string $method): void {
-  require_auth();
+  $claims = require_auth();
   if ($method !== 'GET') fail(405, 'Method not allowed');
   $names = array_filter(array_map('trim', explode(',', (string)($_GET['names'] ?? ''))));
   $out = [];
@@ -124,13 +132,67 @@ function handle_batch(string $method): void {
     // table exists) must not fail the whole batch and blank the app.
     try {
       $rows = db()->query("SELECT * FROM `$table` ORDER BY created_at DESC")->fetchAll();
-      $out[$name] = array_map('row_to_doc', $rows);
+      $docs = array_map('row_to_doc', $rows);
+      if ($name === 'paymentRequests') {
+        $docs = array_values(array_filter($docs, pr_visibility_filter($claims)));
+      }
+      $out[$name] = $docs;
     } catch (Throwable $e) {
       error_log("batch read failed for $name: " . $e->getMessage());
       $out[$name] = [];
     }
   }
   json_out($out);
+}
+
+// A payment request names an amount and a reason and belongs to the people who
+// have a part in it: whoever raised it, their Team Leader, the authorities who
+// approve it and the Accountant who pays it. Mirrors canSeePaymentRequest() in
+// src/services/permissions.js.
+//
+// Returns a test to apply to each row. The members reporting to this viewer are
+// looked up once here rather than per row, because this runs on the batch read
+// that every client repeats every 15 seconds.
+function pr_visibility_filter(array $claims): callable {
+  $role  = $claims['role'] ?? '';
+  $email = strtolower(trim((string)($claims['email'] ?? '')));
+  $all = $role === 'super_admin'
+      || has_access($role, 'admin')
+      || in_array(normalize_role($role), ['operation_manager', 'management', 'accountant'], true);
+
+  $members = [];
+  if (!$all && $email !== '') {
+    try {
+      foreach (db()->query('SELECT email, data FROM users') as $r) {
+        $d = $r['data'] ? json_decode($r['data'], true) : [];
+        if (is_array($d) && strtolower(trim((string)($d['teamLeader'] ?? ''))) === $email) {
+          $members[strtolower(trim((string)$r['email']))] = true;
+        }
+      }
+    } catch (Throwable $e) {
+      error_log('pr visibility: could not read the team structure: ' . $e->getMessage());
+    }
+  }
+
+  return function (array $doc) use ($all, $email, $members): bool {
+    if ($all) return true;
+    if ($email === '') return false;
+    $by = strtolower(trim((string)($doc['requestedBy'] ?? '')));
+    if ($by !== '' && $by === $email) return true;              // I raised it
+    $tl = strtolower(trim((string)($doc['teamLeaderEmail'] ?? '')));
+    if ($tl !== '' && $tl === $email) return true;              // named as its leader
+    return $by !== '' && isset($members[$by]);                  // I lead whoever raised it
+  };
+}
+
+// A Team Leader's recommendation on a leave request is an opinion for the
+// approver, not a stage of the workflow: it never changes the status, and the
+// Sales Manager can approve with or without it. These are the only fields it
+// may touch.
+function leave_recommendation_only(array $patch): bool {
+  if (!$patch) return false;
+  $allowed = ['recommendedBy', 'recommendedByName', 'recommendedDate', 'recommendNote'];
+  return count(array_diff(array_keys($patch), $allowed)) === 0;
 }
 
 // Who may CREATE in a given collection.
@@ -205,6 +267,19 @@ function enforce_status_transition(string $collection, string $role, array $patc
   // amounts/details can't be altered after review/approval (only Admin/Owner may
   // still correct them). Other collections keep the open edit model.
   if (!array_key_exists('status', $patch)) {
+    if ($collection === 'leaveRequests' && leave_recommendation_only($patch)) {
+      $applicant = strtolower(trim((string)($existing['employeeEmail'] ?? '')));
+      $me = strtolower(trim($email));
+      if ($me !== '' && $me === $applicant) fail(403, 'You cannot recommend your own leave.');
+      // Admin and above may always record one, and asking the database who
+      // leads whom is only worth doing for everybody else.
+      if ($role === 'super_admin' || has_access($role, 'admin')) return;
+      $tl = $applicant === '' ? '' : team_leader_of($applicant);
+      if ($tl === '' || $tl !== $me) {
+        fail(403, 'Only this employee\'s Team Leader can recommend their leave.');
+      }
+      return;
+    }
     static $initialOnly = ['expenditures' => 'Requested', 'paymentRequests' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'leadPOs' => 'Unapproved', 'purchaseOrders' => 'Draft'];
     if (isset($initialOnly[$collection]) && $role !== 'super_admin' && !has_access($role, 'admin')) {
       $cur = $existing['status'] ?? $initialOnly[$collection];
@@ -258,6 +333,7 @@ function enforce_status_transition(string $collection, string $role, array $patc
     $requester = strtolower(trim((string)($existing['requestedBy'] ?? '')));
     $needsRec = ($existing['needsRecommendation'] ?? true) !== false;
 
+
     // A requester may never move their own request along.
     if ($requester !== '' && $requester === $me && $to !== 'Rejected') {
       fail(403, 'You cannot recommend or approve your own payment request.');
@@ -267,8 +343,12 @@ function enforce_status_transition(string $collection, string $role, array $patc
       if (!$needsRec) fail(409, 'This request does not need a Team Leader recommendation.');
       // Their own Team Leader recommends. A Team Leader has no say over another
       // leader's members, so only the stand-in managers may cover.
-      $tl = strtolower(trim((string)($existing['teamLeaderEmail'] ?? '')));
-      if (!($tl !== '' && $tl === $me)) {
+      // The leader stamped on the request, or — for older requests raised
+      // before their member had one — whoever leads them today. Looked up only
+      // here, because this is the only step that needs to know.
+      $prLeader = strtolower(trim((string)($existing['teamLeaderEmail'] ?? '')));
+      if ($prLeader === '' && $requester !== '') $prLeader = team_leader_of($requester);
+      if (!($prLeader !== '' && $prLeader === $me)) {
         if (normalize_role($role) === 'team_leader') fail(403, 'You can only recommend requests from your own team members');
         if (!can($role, 'pr_recommend')) fail(403, 'Only the Team Leader of this team member can recommend this request');
       }

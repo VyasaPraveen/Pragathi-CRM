@@ -1,9 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { formatCurrency, formatDate, toNumber, todayStr, thisMonthStr } from '../services/helpers';
 import { StatCard, StatusBadge, EmptyState } from '../components/SharedUI';
+import { DateInput } from '../components/SharedUI';
+import PlanEditor from '../components/PlanningPanel';
+import { planSummary, planRows } from '../services/planning';
 
 function downloadCSV(filename, headers, rows) {
   const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -50,8 +53,25 @@ export default function MyReports() {
   const pipelineValue = myLeads.reduce((s, l) => s + toNumber(l.expectedValue), 0);
   const attendanceDaysThisMonth = new Set(myAttendance.filter(a => a.type === 'Check In' && (a.date || '').startsWith(thisMonth())).map(a => a.date)).size;
   const leaveCounted = myLeave.filter(l => l.status === 'Approved').reduce((s, l) => s + (Number(l.countedDays) || 0), 0);
-  const myTrackToday = tracking.find(t => t.employeeEmail === myEmail && t.date === today());
-  const trackFilled = myTrackToday ? Object.values(myTrackToday.slots || {}).filter(v => (v || '').trim()).length : 0;
+  // The plan being reported on — today by default, any day the user picks.
+  const [planDate, setPlanDate] = useState(today());
+  const myPlanDoc = tracking.find(t => t.employeeEmail === myEmail && t.date === planDate);
+  const plan = planSummary(myPlanDoc?.slots);
+
+  // Everything still owed across every day: planned but never reported on, or
+  // reported as not done. This is the part that turns a plan into reporting.
+  const outstanding = useMemo(() => {
+    const out = [];
+    (tracking || []).forEach(t => {
+      if (t.employeeEmail !== myEmail) return;
+      planRows(t.slots).forEach(r => {
+        if (r.status === 'not_done' || (r.status === 'planned' && t.date < today())) {
+          out.push({ ...r, date: t.date });
+        }
+      });
+    });
+    return out.sort((a, b) => (a.date < b.date ? 1 : -1));
+  }, [tracking, myEmail]);
 
   const exportMyLeads = () => {
     const headers = ['Name', 'Phone', 'City', 'Status', 'Priority', 'kW', 'Expected Value', 'Site Visit', 'Quotation', 'Advance Paid', 'Follow-up', 'Next Follow-up', 'Date'];
@@ -63,7 +83,7 @@ export default function MyReports() {
     <>
       <div className="tl">
         <h3>My Reports &amp; Planning</h3>
-        <button className="btn bsm bo" onClick={() => navigate('/tracking')}><span className="material-icons-round" style={{ fontSize: 18 }}>schedule</span> Open Tracking</button>
+        <button className="btn bsm bo" onClick={() => navigate('/tracking')}><span className="material-icons-round" style={{ fontSize: 18 }}>event_note</span> Open Planning</button>
       </div>
 
       <div className="sg">
@@ -74,8 +94,44 @@ export default function MyReports() {
       </div>
       <div className="sg" style={{ marginTop: 4 }}>
         <StatCard color="or" icon="event_note" value={leaveCounted} label="Leave Counted (Approved)" />
-        <StatCard color="bl" icon="schedule" value={`${trackFilled} slots`} label="Today's Tracking" />
+        <StatCard color="bl" icon="event_note" value={`${plan.completed}/${plan.planned}`} label="Planned Work Completed" />
+        <StatCard color="or" icon="pending_actions" value={outstanding.length} label="Work Still Outstanding" />
       </div>
+
+      {/* Planning — the same editor as the Planning screen, so the plan can be
+          updated from here: marked completed, given a reason, or postponed. */}
+      <div className="card" style={{ marginTop: 8 }}>
+        <div className="ch">
+          <h3>My Planning</h3>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <DateInput value={planDate} onChange={e => setPlanDate(e.target.value)} />
+            <button className="btn bsm bo" onClick={() => navigate('/tracking')} title="Open the full Planning screen">
+              <span className="material-icons-round" style={{ fontSize: 16 }}>open_in_new</span>
+            </button>
+          </div>
+        </div>
+        <div className="cb">
+          <PlanEditor date={planDate} employeeEmail={myEmail} employeeName={myName || myEmail} compact />
+        </div>
+      </div>
+
+      {/* What is still owed, across every day planned so far. */}
+      {outstanding.length > 0 && (
+        <div className="card" style={{ marginTop: 18 }}>
+          <div className="ch"><h3>Outstanding Work ({outstanding.length})</h3></div>
+          <div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Date</th><th>Slot</th><th>Work</th><th>Status</th><th>Reason</th></tr></thead><tbody>
+            {outstanding.slice(0, 25).map(r => (
+              <tr key={r.date + r.key}>
+                <td style={{ fontSize: '.82rem', whiteSpace: 'nowrap' }}>{formatDate(r.date)}</td>
+                <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{r.label}</td>
+                <td style={{ fontSize: '.84rem' }}>{r.text}</td>
+                <td><StatusBadge status={r.status === 'not_done' ? 'Not Converted' : 'Pending'} /></td>
+                <td style={{ fontSize: '.8rem', color: 'var(--muted)' }}>{r.reason || '-'}</td>
+              </tr>
+            ))}
+          </tbody></table></div></div>
+        </div>
+      )}
 
       {/* My leads */}
       <div className="card" style={{ marginTop: 8 }}>

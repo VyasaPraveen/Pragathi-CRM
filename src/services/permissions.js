@@ -206,9 +206,10 @@ export const PR_STAGES = [
 // The next stage for a request. When the requester has no Team Leader to
 // recommend it (they are a Team Leader themselves, or none is assigned), the
 // recommendation step is skipped and it goes straight for final approval.
-export function nextPrStage(status, pr) {
+export function nextPrStage(status, pr, users) {
   const from = status || PR_STATUS.REQUESTED;
-  if (pr && pr.needsRecommendation === false && from === PR_STATUS.REQUESTED) {
+  const skips = pr && (users !== undefined ? !prNeedsRecommendation(pr, users) : pr.needsRecommendation === false);
+  if (skips && from === PR_STATUS.REQUESTED) {
     const approve = PR_STAGES.find(s => s.to === PR_STATUS.APPROVED);
     return approve ? { ...approve, from: PR_STATUS.REQUESTED } : null;
   }
@@ -323,16 +324,37 @@ export const isOwnRequest = (pr, user) => {
   return String(pr.requestedBy || '').toLowerCase() === email;
 };
 
+// The Team Leader a payment request belongs to. It is stamped on the request
+// when it is raised, but requests raised before their member was mapped to a
+// leader carry nothing — and a leader who is not named on the row can do
+// nothing with it, which is how requests ended up stuck with no one able to
+// recommend them. So fall back to the team structure as it stands now.
+export function prLeaderEmail(pr, users) {
+  const stamped = String(pr?.teamLeaderEmail || '').trim().toLowerCase();
+  if (stamped) return stamped;
+  return leaderOf(users, pr?.requestedBy);
+}
+
+// Does this request still need a recommendation? The stored answer wins when
+// it is there; otherwise it is whether the requester has a leader who is not
+// themselves.
+export function prNeedsRecommendation(pr, users) {
+  if (pr && pr.needsRecommendation === false) return false;
+  if (pr && pr.needsRecommendation === true) return true;
+  const tl = prLeaderEmail(pr, users);
+  return !!tl && tl !== String(pr?.requestedBy || '').trim().toLowerCase();
+}
+
 // May this user take the given stage on this request?
-export function canTakePrStage(stage, pr, user, role) {
+export function canTakePrStage(stage, pr, user, role, users) {
   if (!stage || !pr) return false;
   if (pr.status === PR_STATUS.REJECTED) return false;
   if (isOwnRequest(pr, user)) return false; // never your own request
   if (stage.to === PR_STATUS.RECOMMENDED) {
     // Their own Team Leader recommends. A Team Leader has no say over another
     // leader's members, so only the managers below can stand in.
-    const mine = !!pr.teamLeaderEmail &&
-      String(pr.teamLeaderEmail).toLowerCase() === String(user?.email || '').toLowerCase();
+    const tl = prLeaderEmail(pr, users);
+    const mine = !!tl && tl === String(user?.email || '').trim().toLowerCase();
     if (mine) return true;
     if (normalizeRole(role) === 'team_leader') return false;
     return can(role, ACTIONS.PR_RECOMMEND);
@@ -340,9 +362,59 @@ export function canTakePrStage(stage, pr, user, role) {
   return can(role, stage.action);
 }
 
+// ── Leave: the Team Leader's recommendation ────────────────────────────────
+// The leader of the person who applied. Taken from the team structure rather
+// than stored on the request, so mapping somebody to a leader today also puts
+// the leave they applied for yesterday in front of that leader.
+export function leaveLeaderEmail(lr, users) {
+  return leaderOf(users, lr?.employeeEmail);
+}
+
+// A leader may put their recommendation on their own member's leave — once,
+// and never on their own leave. It is an opinion for the approver to read: the
+// Sales Manager can still approve a request the leader never looked at.
+export function canRecommendLeave(lr, user, role, users) {
+  if (!lr || !user) return false;
+  if (lr.status === 'Approved' || lr.status === 'Rejected') return false;
+  if (lr.recommendedBy) return false;                       // already recommended
+  const email = String(user.email || '').trim().toLowerCase();
+  if (!email) return false;
+  if (String(lr.employeeEmail || '').trim().toLowerCase() === email) return false; // not your own
+  return leaveLeaderEmail(lr, users) === email;
+}
+
+// A leader also has to be able to see the request in order to recommend it.
+export function isLeaveLeader(lr, user, users) {
+  const email = String(user?.email || '').trim().toLowerCase();
+  return !!email && leaveLeaderEmail(lr, users) === email;
+}
+
+// ── Who may see a payment request ──────────────────────────────────────────
+// A payment request names an amount and a reason, and used to be on screen for
+// every logged-in user. It belongs to the people who have a part in it: the
+// person who raised it, their Team Leader, the authorities who approve it, and
+// the Accountant who pays it. Nobody else has any business reading it.
+export const PR_VIEWER_ROLES = ['operation_manager', 'management', 'admin', 'super_admin', 'accountant'];
+
+export function canSeePaymentRequest(pr, user, role, users) {
+  if (!pr) return false;
+  const r = normalizeRole(role);
+  if (r === 'super_admin' || PR_VIEWER_ROLES.includes(r)) return true;
+  const email = String(user?.email || '').trim().toLowerCase();
+  const name = String(user?.displayName || '').trim().toLowerCase();
+  if (!email && !name) return false;
+  // The person who raised it.
+  const by = String(pr.requestedBy || '').trim().toLowerCase();
+  const byName = String(pr.requestedByName || '').trim().toLowerCase();
+  if ((by && (by === email || by === name)) || (byName && byName === name)) return true;
+  // Their Team Leader — whether or not the row was stamped with one.
+  const tl = prLeaderEmail(pr, users);
+  return !!tl && tl === email;
+}
+
 // A plain-English trail of what has happened and what the request is waiting on
 // — the requester must always be able to see where it is stopped.
-export function prProgress(pr) {
+export function prProgress(pr, users) {
   const done = [];
   if (pr.recommendedBy) done.push({ label: 'Recommended', by: pr.recommendedBy, date: pr.recommendedByDate });
   if (pr.approvedBy) done.push({ label: 'Approved', by: pr.approvedBy, date: pr.approvedByDate });
@@ -352,9 +424,13 @@ export function prProgress(pr) {
   if (pr.status === PR_STATUS.REJECTED) {
     return { done, waitingOn: null, rejected: true, rejectedBy: pr.rejectedBy, summary: `Rejected by ${pr.rejectedBy || 'a reviewer'}` };
   }
-  const stage = nextPrStage(pr.status, pr);
+  const stage = nextPrStage(pr.status, pr, users);
+  // Name the leader it is sitting with, falling back to the team structure for
+  // requests raised before their member had a leader.
+  const leaderName = pr.teamLeaderName ||
+    ((users || []).find(u => String(u.email || '').toLowerCase() === prLeaderEmail(pr, users)) || {}).displayName || '';
   const waitingOn = stage
-    ? (stage.to === PR_STATUS.RECOMMENDED && pr.teamLeaderName ? `${stage.by} (${pr.teamLeaderName})` : stage.by)
+    ? (stage.to === PR_STATUS.RECOMMENDED && leaderName ? `${stage.by} (${leaderName})` : stage.by)
     : null;
   return {
     done,
@@ -390,11 +466,11 @@ export const PERMISSION_MODULES = [
   { key: 'team', label: 'Team', icon: 'groups', group: 'People' },
   { key: 'team_members', label: 'My Team — member list', icon: 'supervisor_account', group: 'Team' },
   { key: 'team_attendance', label: 'My Team — attendance', icon: 'how_to_reg', group: 'Team' },
-  { key: 'team_tracking', label: 'My Team — tracking', icon: 'schedule', group: 'Team' },
+  { key: 'team_tracking', label: 'My Team — planning', icon: 'event_note', group: 'Team' },
   { key: 'team_tasks', label: 'My Team — tasks', icon: 'task_alt', group: 'Team' },
   { key: 'team_leave', label: 'My Team — leave', icon: 'event_available', group: 'Team' },
   { key: 'attendance', label: 'Attendance', icon: 'how_to_reg', group: 'People' },
-  { key: 'tracking', label: 'Tracking', icon: 'schedule', group: 'People' },
+  { key: 'tracking', label: 'Planning', icon: 'event_note', group: 'People' },
   { key: 'leave', label: 'Leave', icon: 'event_available', group: 'People' },
   { key: 'reminders', label: 'Reminders', icon: 'notifications_active', group: 'People' },
   { key: 'retailers', label: 'Retailers', icon: 'storefront', group: 'People' },

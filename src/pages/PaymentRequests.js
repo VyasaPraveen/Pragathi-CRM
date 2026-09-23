@@ -5,7 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
-import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf } from '../services/permissions';
+import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf, canSeePaymentRequest } from '../services/permissions';
 
 // Payment Request — the step-by-step approval & payment workflow:
 // Team Member → Generate Payment Request → their own Team Leader (Recommend
@@ -19,9 +19,9 @@ const PAGE_SIZE = 20;
 
 // Who may reject: whoever owns the stage the request is sitting on — and never
 // the person who raised it.
-const canRejectPr = (pr, user, role) => {
-  const stage = nextPrStage(pr.status, pr);
-  return !!stage && canTakePrStage(stage, pr, user, role);
+const canRejectPr = (pr, user, role, users) => {
+  const stage = nextPrStage(pr.status, pr, users);
+  return !!stage && canTakePrStage(stage, pr, user, role, users);
 };
 
 export default function PaymentRequests() {
@@ -80,7 +80,14 @@ export default function PaymentRequests() {
 
   const statuses = ['all', PR_STATUS.REQUESTED, PR_STATUS.RECOMMENDED, PR_STATUS.APPROVED, PR_STATUS.PAID, PR_STATUS.PROPOSAL_SUBMITTED, PR_STATUS.CLOSED, PR_STATUS.REJECTED];
 
-  let filtered = filter === 'all' ? paymentRequests : paymentRequests.filter(x => x.status === filter);
+  // A payment request is only shown to the people who have a part in it: the
+  // person who raised it, their Team Leader, the approving authorities and the
+  // Accountant who pays it. It used to be on screen for everybody.
+  const visibleRequests = useMemo(
+    () => (paymentRequests || []).filter(pr => canSeePaymentRequest(pr, user, role, users)),
+    [paymentRequests, user, role, users]);
+
+  let filtered = filter === 'all' ? visibleRequests : visibleRequests.filter(x => x.status === filter);
   if (search) {
     const q = search.toLowerCase();
     filtered = filtered.filter(x =>
@@ -93,7 +100,7 @@ export default function PaymentRequests() {
 
   const summary = useMemo(() => {
     const s = { total: 0, pending: 0, approved: 0, paid: 0 };
-    (paymentRequests || []).forEach(x => {
+    visibleRequests.forEach(x => {
       const amt = toNumber(x.amount);
       s.total += amt;
       if (x.status === PR_STATUS.REJECTED) return;
@@ -102,7 +109,7 @@ export default function PaymentRequests() {
       else s.pending += amt;
     });
     return s;
-  }, [paymentRequests]);
+  }, [visibleRequests]);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -131,6 +138,14 @@ export default function PaymentRequests() {
         if (needsRecommendation && myLeader) {
           createNotification({
             forUser: myLeader.displayName || myLeader.email,
+            title: 'Payment Request needs your recommendation',
+            message: `${me} raised "${cleaned.purpose || ''}" (${formatCurrency(cleaned.amount)}) — you are their Team Leader.`,
+            type: 'status_update', module: 'paymentRequests', relatedId: newId,
+          });
+        }
+        if (needsRecommendation && myLeader) {
+          createNotification({
+            forUser: myLeader.displayName || myLeader.email,
             title: 'Payment Request needs your Recommendation',
             message: `${me} raised "${cleaned.purpose}" (${formatCurrency(cleaned.amount)}). You are their Team Leader — please recommend it.`,
             type: 'status_update', module: 'paymentRequests', relatedId: newId,
@@ -146,10 +161,10 @@ export default function PaymentRequests() {
   };
 
   const advanceStage = async (pr) => {
-    const stage = nextPrStage(pr.status, pr);
+    const stage = nextPrStage(pr.status, pr, users);
     if (!stage) return;
     if (isOwnRequest(pr, user)) { toast('You cannot act on your own payment request', 'er'); return; }
-    if (!canTakePrStage(stage, pr, user, role)) { toast(`You are not authorised to ${stage.label.toLowerCase()}`, 'er'); return; }
+    if (!canTakePrStage(stage, pr, user, role, users)) { toast(`You are not authorised to ${stage.label.toLowerCase()}`, 'er'); return; }
     const extra = {};
 
     if (stage.to === PR_STATUS.PAID) {
@@ -182,7 +197,7 @@ export default function PaymentRequests() {
           type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
         });
       }
-      const next = nextPrStage(stage.to, pr);
+      const next = nextPrStage(stage.to, pr, users);
       if (next) notifyActors(next.action, next.label, pr);
       else notifyAdmins(users, { title: 'Payment Request Closed', message: `"${pr.purpose || ''}" — ${formatCurrency(pr.amount)} is fully closed`, type: 'status_update', module: 'paymentRequests', relatedId: pr.id });
       toast(`Payment request ${stage.to.toLowerCase()}`);
@@ -214,7 +229,7 @@ export default function PaymentRequests() {
   // What has happened and what it is waiting on — shown on every row so the
   // requester can always see exactly where their request has stopped.
   const trail = (pr) => {
-    const p = prProgress(pr);
+    const p = prProgress(pr, users);
     return (
       <>
         {p.done.map(d => (
@@ -265,18 +280,18 @@ export default function PaymentRequests() {
       </div>
 
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
-        <th>Payment For / Paid To</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
+        <th>Payment For</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
       </tr></thead><tbody>
         {displayed.map(pr => {
-          const stage = nextPrStage(pr.status, pr);
-          const canAct = canTakePrStage(stage, pr, user, role);
+          const stage = nextPrStage(pr.status, pr, users);
+          const canAct = canTakePrStage(stage, pr, user, role, users);
           const isOwner = isOwnRequest(pr, user);
           return (
             <tr key={pr.id}>
               <td>
                 <strong>{pr.purpose || '-'}</strong><br />
                 <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>
-                  {pr.payTo ? pr.payTo : 'Paid to: -'}{pr.paymentMode ? ' · ' + pr.paymentMode : ''}{pr.paymentRef ? ' · Ref ' + pr.paymentRef : ''}{pr.proposalRef ? ' · Proposal ' + pr.proposalRef : ''}
+                  {pr.payTo ? pr.payTo + ' · ' : ''}{pr.paymentMode ? pr.paymentMode : ''}{pr.paymentRef ? ' · Ref ' + pr.paymentRef : ''}{pr.proposalRef ? ' · Proposal ' + pr.proposalRef : ''}
                 </span>
               </td>
               <td style={{ fontWeight: 700 }}>{formatCurrency(pr.amount)}</td>
@@ -291,7 +306,7 @@ export default function PaymentRequests() {
                       <span className="material-icons-round" style={{ fontSize: 15 }}>arrow_forward</span> {stage.label}
                     </button>
                   )}
-                  {pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED && canRejectPr(pr, user, role) && (
+                  {pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED && canRejectPr(pr, user, role, users) && (
                     <button className="btn bsm bo" onClick={() => rejectRequest(pr)} title="Reject" style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
                       <span className="material-icons-round" style={{ fontSize: 15 }}>block</span>
                     </button>
@@ -339,7 +354,6 @@ function PRModal({ data, id, onSave, onClose }) {
   const [saving, setSaving] = useState(false);
   const [f, setF] = useState({
     purpose: data.purpose || '',
-    payTo: data.payTo || '',
     amount: data.amount || '',
     paymentMode: data.paymentMode || PAYMENT_MODES[0],
     neededBy: data.neededBy || todayStr(),
@@ -351,7 +365,6 @@ function PRModal({ data, id, onSave, onClose }) {
     e.preventDefault();
     if (saving) return;
     if (!f.purpose.trim()) { toast('Payment For is required', 'er'); return; }
-    if (!f.payTo.trim()) { toast('Paid To is required', 'er'); return; }
     if (toNumber(f.amount) <= 0) { toast('Enter a valid amount', 'er'); return; }
     setSaving(true);
     try { await onSave(f, id); } finally { setSaving(false); }
@@ -362,8 +375,7 @@ function PRModal({ data, id, onSave, onClose }) {
       <form onSubmit={submit}>
         <div className="mb">
           <div className="fg"><label>Payment For *</label><input className="fi" value={f.purpose} onChange={e => set('purpose', e.target.value)} placeholder="e.g. Module transport charges — Tirupati site" required /></div>
-          <div className="fr3">
-            <div className="fg"><label>Paid To *</label><input className="fi" value={f.payTo} onChange={e => set('payTo', e.target.value)} placeholder="Vendor / payee name" required /></div>
+          <div className="fr">
             <div className="fg"><label>Amount (₹) *</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} min="1" required /></div>
             <div className="fg"><label>Payment Mode</label><select className="fi" value={f.paymentMode} onChange={e => set('paymentMode', e.target.value)}>{PAYMENT_MODES.map(m => <option key={m}>{m}</option>)}</select></div>
           </div>

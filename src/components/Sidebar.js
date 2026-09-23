@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { getInitials, hasAccess } from '../services/helpers';
 import { hasModule } from '../services/permissions';
+import { badgeCounts } from '../services/badges';
 
 // `perm` = the per-user permission key an Admin can switch off for an individual
 // user (Settings → Permission Management). `minRole` is the role floor.
@@ -12,26 +13,26 @@ const sections = [
     { to: '/', icon: 'dashboard', label: 'Dashboard', perm: 'dashboard' },
     { to: '/leads', icon: 'leaderboard', label: 'Leads', badgeKey: 'leads', perm: 'leads' },
     { to: '/customers', icon: 'people', label: 'Customers', perm: 'customers' },
-    { to: '/tasks', icon: 'task_alt', label: 'Tasks', perm: 'tasks' },
+    { to: '/tasks', icon: 'task_alt', label: 'Tasks', badgeKey: 'tasks', perm: 'tasks' },
     { to: '/my-reports', icon: 'insights', label: 'My Reports & Planning', perm: 'my_reports' },
   ]},
   { title: 'Operations', items: [
     { to: '/installations', icon: 'solar_power', label: 'Installations', perm: 'installations' },
     { to: '/ongoing', icon: 'construction', label: 'Ongoing Work', perm: 'ongoing_work' },
     { to: '/materials', icon: 'inventory_2', label: 'Materials', perm: 'materials' },
-    { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders', perm: 'purchase_orders' },
+    { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders', badgeKey: 'purchase_orders', perm: 'purchase_orders' },
   ]},
   { title: 'Finance', items: [
     { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue', perm: 'revenue' },
-    { to: '/expenditure', icon: 'payments', label: 'Expenditure', perm: 'expenditure' },
-    { to: '/payment-requests', icon: 'request_quote', label: 'Payment Requests', perm: 'payment_requests' },
+    { to: '/expenditure', icon: 'payments', label: 'Expenditure', badgeKey: 'expenditure', perm: 'expenditure' },
+    { to: '/payment-requests', icon: 'request_quote', label: 'Payment Requests', badgeKey: 'payment_requests', perm: 'payment_requests' },
     { to: '/reports', icon: 'assessment', label: 'Reports', minRole: 'coordinator', perm: 'reports' },
   ]},
   { title: 'People', items: [
     { to: '/team', icon: 'groups', label: 'Team', perm: 'team' },
     { to: '/attendance', icon: 'how_to_reg', label: 'Attendance', perm: 'attendance' },
-    { to: '/tracking', icon: 'schedule', label: 'Tracking', perm: 'tracking' },
-    { to: '/leave', icon: 'event_available', label: 'Leave', perm: 'leave' },
+    { to: '/tracking', icon: 'event_note', label: 'Planning', perm: 'tracking' },
+    { to: '/leave', icon: 'event_available', label: 'Leave', badgeKey: 'leave', perm: 'leave' },
     { to: '/reminders', icon: 'notifications_active', label: 'Reminders', badgeKey: 'reminders', perm: 'reminders' },
     { to: '/retailers', icon: 'storefront', label: 'Retailers', perm: 'retailers' },
     { to: '/influencers', icon: 'campaign', label: 'Influencers', perm: 'influencers' },
@@ -47,15 +48,14 @@ const sections = [
 
 export default function Sidebar({ open, onClose }) {
   const { user, role, designation, logout } = useAuth();
-  const { leads, reminders } = useData();
+  const data = useData();
   // Q3 fix: use React state instead of outerHTML for logo fallback
   const [logoError, setLogoError] = useState(false);
 
-  const getBadge = (key) => {
-    if (key === 'leads') return leads.filter(l => l.status === 'Interested').length;
-    if (key === 'reminders') return reminders.filter(r => r.status === 'Pending').length;
-    return 0;
-  };
+  // Each count covers only what this person can actually open, so the number
+  // always matches the list behind it.
+  const counts = badgeCounts(data, user, role);
+  const getBadge = (key) => counts[key] || 0;
 
   // A nav item shows only when the role floor AND the user's own permission allow it.
   const visible = (item) => {

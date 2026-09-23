@@ -160,7 +160,7 @@ export default function MyTeamPanel() {
 
                             {showTracking && (
                               <div>
-                                <strong style={{ fontSize: '.8rem' }}>Tracking</strong>
+                                <strong style={{ fontSize: '.8rem' }}>Planning</strong>
                                 {d.track.slice(0, 3).map(t => (
                                   <div key={t.id} style={{ fontSize: '.78rem', color: 'var(--muted)', marginTop: 4 }}>
                                     {formatDate(t.date)} · {Object.keys(t.slots || {}).length} slot{Object.keys(t.slots || {}).length === 1 ? '' : 's'} filled
