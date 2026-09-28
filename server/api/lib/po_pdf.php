@@ -53,6 +53,43 @@ const PO_DEFAULTS = [
   'customerScope' => 'Civil Works, Elevated Structure, UPVC Pipes, Additional Relay, Additional Cables and Grid Synchronization ,CEIG and Coordination with APSPDCL .',
 ];
 
+// Purchase orders raised before the terms were revised carry the wording the
+// form used to default to. Those exact strings are rewritten on sight, the
+// same way the quotation handles its own superseded wording — nobody chose
+// them, they were simply what the form put there.
+//
+// Anything typed by hand is left exactly as it was typed: those are terms
+// somebody decided on, and a printed purchase order is an agreement with the
+// supplier, not ours to quietly restate.
+function popdf_upgrade_term(string $key, string $text): string {
+  static $legacy = null;
+  if ($legacy === null) {
+    $dash = "\u{2013}";
+    $legacy = [
+      'warrantyTerms' => [
+        'Solar Inverter ' . $dash . ' 5 Yrs, Solar Modules- 5 Yrs +20 Yrs' => PO_DEFAULTS['warranty'],
+        'Solar Inverter ' . $dash . ' 8 Yrs, Solar Modules- 5 Yrs +20 Yrs' => PO_DEFAULTS['warranty'],
+        'Solar Inverter - 5 Yrs, Solar Modules- 5 Yrs +20 Yrs' => PO_DEFAULTS['warranty'],
+      ],
+      'deliveryTerms' => [
+        '3-4 Weeks from the receipt of LOI /PO.' => PO_DEFAULTS['delivery'],
+      ],
+      'paymentTerms' => [
+        '80% Advance along with PO, 20% Before dispatching the materials against PI.' => PO_DEFAULTS['payment'],
+      ],
+      'customerScope' => [
+        'Civil works, UPVC Pipes, Additional cable if required more than 20 metres and Grid Synchronization Charges and Coordination with APSPDCL.' => PO_DEFAULTS['customerScope'],
+      ],
+    ];
+  }
+  return $legacy[$key][trim($text)] ?? $text;
+}
+
+// popdf_str(), then the legacy rewrite above.
+function popdf_term(array $po, string $key, string $fallback): string {
+  return popdf_upgrade_term($key, popdf_str($po, $key, $fallback));
+}
+
 function popdf_num($v, $fallback = 0) {
   if (is_numeric($v)) return $v + 0;
   $clean = preg_replace('/[^0-9.\-]/', '', (string)$v);
@@ -154,7 +191,7 @@ function pps_po_pdf(array $po, array $lead = [], string $assetDir = ''): string 
     $y += 4;
   };
   $row('Company Scope', popdf_str($po, 'companyScope', PO_DEFAULTS['companyScope']));
-  $row('Customer Scope', popdf_str($po, 'customerScope', PO_DEFAULTS['customerScope']));
+  $row('Customer Scope', popdf_term($po, 'customerScope', PO_DEFAULTS['customerScope']));
   $y += 3;
 
   $price = popdf_num($po['agreedPrice'] ?? 0) ?: popdf_num($po['amount'] ?? 0) ?: popdf_num($po['totalValue'] ?? 0);
@@ -190,10 +227,10 @@ function pps_po_pdf(array $po, array $lead = [], string $assetDir = ''): string 
   foreach ([
     ['Taxes', popdf_str($po, 'taxTerms', PO_DEFAULTS['taxes'])],
     ['Freight', popdf_str($po, 'freightTerms', PO_DEFAULTS['freight'])],
-    ['Guarantee/Warranty', popdf_str($po, 'warrantyTerms', PO_DEFAULTS['warranty'])],
-    ['Delivery Lead Time', popdf_str($po, 'deliveryTerms', PO_DEFAULTS['delivery'])],
-    ['Installation Lead Time', popdf_str($po, 'installationTerms', PO_DEFAULTS['installation'])],
-    ['Payment-term', popdf_str($po, 'paymentTerms', PO_DEFAULTS['payment'])],
+    ['Guarantee/Warranty', popdf_term($po, 'warrantyTerms', PO_DEFAULTS['warranty'])],
+    ['Delivery Lead Time', popdf_term($po, 'deliveryTerms', PO_DEFAULTS['delivery'])],
+    ['Installation Lead Time', popdf_term($po, 'installationTerms', PO_DEFAULTS['installation'])],
+    ['Payment-term', popdf_term($po, 'paymentTerms', PO_DEFAULTS['payment'])],
   ] as [$label, $value]) {
     $row($label, $value);
     $y -= 2;

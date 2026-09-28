@@ -50,3 +50,37 @@ export async function downloadPoPdf(po, onError) {
     return pdf;
   } catch (e) { report(e, onError); return null; }
 }
+
+// ── The approved terms, and the wording they replaced ───────────────────────
+// These match PO_DEFAULTS and popdf_upgrade_term() in
+// server/api/lib/po_pdf.php. The PDF is what gets printed, but the form has to
+// agree with it — otherwise somebody opens a purchase order raised last month,
+// sees the superseded warranty on screen, and has no idea the printed copy
+// says something else.
+export const PO_TERMS = {
+  warrantyTerms: 'BOS - 5 Yrs , Solar Inverter - 8 Yrs, Solar Modules - 30 Yrs',
+  deliveryTerms: '2-3 Weeks from the receipt of LOI /PO.',
+  installationTerms: 'Within 10 days from the date of material received.',
+  paymentTerms: '10% Advance along with PO, 80% Before dispatch the Material, and balance 10% After Installation.',
+  customerScope: 'Civil Works, Elevated Structure, UPVC Pipes, Additional Relay, Additional Cables and Grid Synchronization ,CEIG and Coordination with APSPDCL .',
+  companyScope: 'System Supply and Installation as per BOM.',
+};
+
+const PO_LEGACY = {
+  warrantyTerms: [
+    'Solar Inverter \u2013 5 Yrs, Solar Modules- 5 Yrs +20 Yrs',
+    'Solar Inverter \u2013 8 Yrs, Solar Modules- 5 Yrs +20 Yrs',
+    'Solar Inverter - 5 Yrs, Solar Modules- 5 Yrs +20 Yrs',
+  ],
+  deliveryTerms: ['3-4 Weeks from the receipt of LOI /PO.'],
+  paymentTerms: ['80% Advance along with PO, 20% Before dispatching the materials against PI.'],
+  customerScope: ['Civil works, UPVC Pipes, Additional cable if required more than 20 metres and Grid Synchronization Charges and Coordination with APSPDCL.'],
+};
+
+// The stored term, brought up to date only when it is word for word what the
+// form used to put there. A term somebody typed is left exactly as typed.
+export function poTerm(po, key) {
+  const stored = String((po && po[key]) || '').trim();
+  if (!stored) return PO_TERMS[key] || '';
+  return (PO_LEGACY[key] || []).includes(stored) ? PO_TERMS[key] : stored;
+}

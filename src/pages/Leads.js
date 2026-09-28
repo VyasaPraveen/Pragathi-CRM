@@ -7,7 +7,7 @@ import { assignableNames, supportingNames, directoryPeople } from '../services/p
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../components/SharedUI';
 import { sharePOWhatsApp } from '../services/poUtils';
-import { openPoPdf, downloadPoPdf } from '../services/poShare';
+import { openPoPdf, downloadPoPdf, poTerm } from '../services/poShare';
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
 import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
@@ -1208,17 +1208,17 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     inverterDetails: po.inverterDetails || '',
     plantLocation: po.plantLocation || lead.address || '',
     referenceNumber: po.referenceNumber || '',
-    companyScope: po.companyScope || 'System Supply and Installation as per BOM.',
-    customerScope: po.customerScope || 'Civil Works, Elevated Structure, UPVC Pipes, Additional Relay, Additional Cables and Grid Synchronization ,CEIG and Coordination with APSPDCL .',
-    paymentTerms: po.paymentTerms || '10% Advance along with PO, 80% Before dispatch the Material, and balance 10% After Installation.',
+    companyScope: poTerm(po, 'companyScope'),
+    customerScope: poTerm(po, 'customerScope'),
+    paymentTerms: poTerm(po, 'paymentTerms'),
     // Printed in the Payment Details block on the PO, beside the bank account.
     advancePayment: po.advancePayment || '',
     secondPayment: po.secondPayment || '',
     finalPayment: po.finalPayment || '',
     paymentRemarks: po.paymentRemarks || '',
-    warrantyTerms: po.warrantyTerms || 'BOS - 5 Yrs , Solar Inverter - 8 Yrs, Solar Modules - 30 Yrs',
-    deliveryTerms: po.deliveryTerms || '2-3 Weeks from the receipt of LOI /PO.',
-    installationTerms: po.installationTerms || 'Within 10 days from the date of material received.',
+    warrantyTerms: poTerm(po, 'warrantyTerms'),
+    deliveryTerms: poTerm(po, 'deliveryTerms'),
+    installationTerms: poTerm(po, 'installationTerms'),
     agreedPrice: po.agreedPrice || '',
     discomCharges: po.discomCharges || '',
     civilWork: po.civilWork || '',
