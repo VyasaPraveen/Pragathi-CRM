@@ -57,6 +57,13 @@ try {
       handle_quotation_pdf($method);
       break;
 
+    // The Purchase Order and its Bill of Materials, as a real PDF following
+    // the company's reference document.
+    case 'po-pdf':
+      require __DIR__ . '/routes/popdf.php';
+      handle_po_pdf($method);
+      break;
+
     case 'push':
       require __DIR__ . '/routes/push.php';
       handle_push($seg[1] ?? '', $method);

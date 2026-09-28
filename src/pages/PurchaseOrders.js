@@ -158,7 +158,7 @@ export default function PurchaseOrders() {
               <td><StatusBadge status={po.status} /></td>
               <td><div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn bsm bo" onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
-                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po, leads.find(l => l.id === po.leadId))} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
+                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? sharePOWhatsApp(po) : shareLeadPO(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
                 {canEdit && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
                 {hasAccess(role, 'admin') && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => handleDelete(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}

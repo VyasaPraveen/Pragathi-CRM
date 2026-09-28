@@ -833,8 +833,8 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
                         <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{po.vendorName}</span>
                       </div>
                       <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                        <button className="btn bsm bo" onClick={() => printBOM(po, linkedLead || c)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
-                        <button className="btn bsm bo" onClick={() => downloadBOM(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => printBOM(po)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => downloadBOM(po)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
                       </div>
                     </div>
                     {(po.items || []).length > 0 && (

@@ -6,7 +6,8 @@ import { addDocument, updateDocument, deleteDocument, createNotification, notify
 import { assignableNames, supportingNames, directoryPeople } from '../services/people';
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../components/SharedUI';
-import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
+import { sharePOWhatsApp } from '../services/poUtils';
+import { openPoPdf, downloadPoPdf } from '../services/poShare';
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
 import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
@@ -1065,18 +1066,14 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                             <span className="material-icons-round" style={{ fontSize: 16 }}>check_circle</span> Approve
                           </button>
                         )}
-                        {/* Print, Download & WhatsApp */}
-                        <button className="btn bsm bo" onClick={() => printPO(po, lead)}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print PO
+                        {/* One document: the PO letter on page 1, the Bill of
+                            Materials with its signatures on page 2 — the way the
+                            company's own reference purchase order is laid out. */}
+                        <button className="btn bsm bo" onClick={() => openPoPdf(po, m => toast(m, 'er'))} title="Open the purchase order and its BOM as a PDF">
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>picture_as_pdf</span> View PO + BOM
                         </button>
-                        <button className="btn bsm bo" onClick={() => printBOM(po, lead)}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print BOM
-                        </button>
-                        <button className="btn bsm bo" onClick={() => downloadPO(po, lead)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> PO
-                        </button>
-                        <button className="btn bsm bo" onClick={() => downloadBOM(po, lead)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> BOM
+                        <button className="btn bsm bo" onClick={() => downloadPoPdf(po, m => toast(m, 'er'))} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }} title="Download the purchase order PDF">
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> Download
                         </button>
                         <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                           <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
@@ -1200,16 +1197,27 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     customerPhone: po.customerPhone || lead.phone || '',
     customerAddress: po.customerAddress || lead.address || '',
     kwRequired: po.kwRequired || lead.kwRequired || '',
+    // "System of __ kW with __ Phase of __ kW Inverter", as the reference PO
+    // words it. The phase follows the system size until somebody sets it:
+    // above 5 kW the connection is three-phase.
+    systemKw: po.systemKw || String(po.kwRequired || lead.kwRequired || '').replace(/[^0-9.]/g, ''),
+    phase: po.phase || (toNumber(String(po.kwRequired || lead.kwRequired || '').replace(/[^0-9.]/g, '')) > 5 ? '3' : '1'),
+    inverterKw: po.inverterKw || '',
     vendorName: po.vendorName || 'M/S. Tata Power Solar Systems Limited',
     moduleCount: po.moduleCount || '',
     inverterDetails: po.inverterDetails || '',
     plantLocation: po.plantLocation || lead.address || '',
     referenceNumber: po.referenceNumber || '',
     companyScope: po.companyScope || 'System Supply and Installation as per BOM.',
-    customerScope: po.customerScope || 'Civil works, UPVC Pipes, Additional cable if required more than 20 metres and Grid Synchronization Charges and Coordination with APSPDCL.',
-    paymentTerms: po.paymentTerms || '80% Advance along with PO, 20% Before dispatching the materials against PI.',
-    warrantyTerms: po.warrantyTerms || 'Solar Inverter \u2013 5 Yrs, Solar Modules- 5 Yrs +20 Yrs',
-    deliveryTerms: po.deliveryTerms || '3-4 Weeks from the receipt of LOI /PO.',
+    customerScope: po.customerScope || 'Civil Works, Elevated Structure, UPVC Pipes, Additional Relay, Additional Cables and Grid Synchronization ,CEIG and Coordination with APSPDCL .',
+    paymentTerms: po.paymentTerms || '10% Advance along with PO, 80% Before dispatch the Material, and balance 10% After Installation.',
+    // Printed in the Payment Details block on the PO, beside the bank account.
+    advancePayment: po.advancePayment || '',
+    secondPayment: po.secondPayment || '',
+    finalPayment: po.finalPayment || '',
+    paymentRemarks: po.paymentRemarks || '',
+    warrantyTerms: po.warrantyTerms || 'BOS - 5 Yrs , Solar Inverter - 8 Yrs, Solar Modules - 30 Yrs',
+    deliveryTerms: po.deliveryTerms || '2-3 Weeks from the receipt of LOI /PO.',
     installationTerms: po.installationTerms || 'Within 10 days from the date of material received.',
     agreedPrice: po.agreedPrice || '',
     discomCharges: po.discomCharges || '',
@@ -1374,11 +1382,30 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               <div className="fg"><label>PO Number</label><input className="fi" value={f.poNumber} readOnly style={{ background: '#f0f4f8' }} /></div>
               <div className="fg"><label>PO Date *</label><DateInput value={f.poDate} onChange={e => set('poDate', e.target.value)} required /></div>
             </div>
+            <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', margin: '14px 0 8px', paddingBottom: 4, borderBottom: '1px solid var(--bor)' }}>Customer Details</div>
             <div className="fr">
               <div className="fg"><label>Customer Name</label><input className="fi" value={f.customerName} onChange={e => set('customerName', e.target.value)} /></div>
-              <div className="fg"><label>Customer Phone</label><input className="fi" value={f.customerPhone} onChange={e => set('customerPhone', e.target.value)} /></div>
+              <div className="fg"><label>Mobile Number</label><input className="fi" value={f.customerPhone} onChange={e => set('customerPhone', e.target.value)} placeholder="10-digit mobile" /></div>
             </div>
-            <div className="fg"><label>Customer Address</label><input className="fi" value={f.customerAddress} onChange={e => set('customerAddress', e.target.value)} /></div>
+            <div className="fr">
+              <div className="fg"><label>Service Number</label><input className="fi" value={f.uscNo} onChange={e => set('uscNo', e.target.value)} placeholder="Electrical service / USC number" /></div>
+              <div className="fg"><label>Plant Location / Building</label><input className="fi" value={f.plantLocation} onChange={e => set('plantLocation', e.target.value)} placeholder="Residential Building / location" /></div>
+            </div>
+            <div className="fg"><label>Address</label><input className="fi" value={f.customerAddress} onChange={e => set('customerAddress', e.target.value)} /></div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: -4 }}>
+              These four print on the purchase order exactly as entered here. They are filled in from the lead, and can be corrected.
+            </div>
+
+            <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', margin: '14px 0 8px', paddingBottom: 4, borderBottom: '1px solid var(--bor)' }}>System</div>
+            {/* The PO reads "System of __ kW with __ Phase of __ kW Inverter". */}
+            <div className="fr3">
+              <div className="fg"><label>System Size (kW)</label><input className="fi" value={f.systemKw} onChange={e => set('systemKw', e.target.value)} placeholder="e.g. 5" /></div>
+              <div className="fg"><label>Phase</label><select className="fi" value={f.phase} onChange={e => set('phase', e.target.value)}><option value="1">1 Phase</option><option value="3">3 Phase</option></select></div>
+              <div className="fg"><label>Inverter (kW)</label><input className="fi" value={f.inverterKw} onChange={e => set('inverterKw', e.target.value)} placeholder={f.systemKw || 'e.g. 5'} /></div>
+            </div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: -4 }}>
+              Prints as: <strong>System of {f.systemKw || '____'} kW with {f.phase || '____'} Phase of {f.inverterKw || f.systemKw || '____'} kW Inverter</strong>
+            </div>
             <div className="fr3">
               <div className="fg"><label>kW Required</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="e.g. 3kW" /></div>
               <div className="fg"><label>No. of Modules</label><input className="fi" value={f.moduleCount} onChange={e => set('moduleCount', e.target.value)} placeholder="e.g. 6" /></div>
@@ -1388,16 +1415,28 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               <div className="fg"><label>Vendor</label><input className="fi" value={f.vendorName} onChange={e => set('vendorName', e.target.value)} /></div>
               <div className="fg"><label>Reference Number</label><input className="fi" value={f.referenceNumber} onChange={e => set('referenceNumber', e.target.value)} placeholder="Quote/Ref No." /></div>
             </div>
-            <div className="fg"><label>Plant Location / Building</label><input className="fi" value={f.plantLocation} onChange={e => set('plantLocation', e.target.value)} placeholder="Residential Building / location" /></div>
 
             {/* Details that also print on the quotation and the Bill of Materials */}
             <div className="fr">
               <div className="fg"><label>Referred By</label><input className="fi" value={f.referredBy} onChange={e => set('referredBy', e.target.value)} placeholder="Who referred this customer" /></div>
               <div className="fg"><label>Source of Lead</label><input className="fi" value={f.sourceOfLead} onChange={e => set('sourceOfLead', e.target.value)} list="lead-sources" placeholder="e.g. Referral, Website" /></div>
             </div>
+            <div className="fg"><label>Amount (₹)</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder={totalValue ? String(totalValue) : '0'} /></div>
+
+            <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', margin: '14px 0 8px', paddingBottom: 4, borderBottom: '1px solid var(--bor)' }}>Payment Details</div>
+            {/* These print in the Payment Details block on the PO, opposite the
+                company's bank account. The reference sheet rules three blanks
+                per line, so each takes amount / date / mode as free text. */}
             <div className="fr">
-              <div className="fg"><label>Amount (₹)</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder={totalValue ? String(totalValue) : '0'} /></div>
-              <div className="fg"><label>USC No</label><input className="fi" value={f.uscNo} onChange={e => set('uscNo', e.target.value)} placeholder="Service connection no." /></div>
+              <div className="fg"><label>Advance</label><input className="fi" value={f.advancePayment} onChange={e => set('advancePayment', e.target.value)} placeholder="amount / date / mode" /></div>
+              <div className="fg"><label>2nd Payment</label><input className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} placeholder="amount / date / mode" /></div>
+            </div>
+            <div className="fr">
+              <div className="fg"><label>Final Payment</label><input className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} placeholder="amount / date / mode" /></div>
+              <div className="fg"><label>Any Remarks</label><input className="fi" value={f.paymentRemarks} onChange={e => set('paymentRemarks', e.target.value)} placeholder="Anything the accounts team should know" /></div>
+            </div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: -4 }}>
+              Left blank, each prints as a ruled line to be filled in by hand — as on the reference purchase order.
             </div>
             <datalist id="lead-sources">{getOptions(settings, 'leadReference').map(r => <option key={r} value={r} />)}</datalist>
 
