@@ -17,6 +17,13 @@ import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnR
 const PAYMENT_MODES = ['Bank Transfer', 'UPI', 'Cash', 'Cheque', 'Card', 'Other'];
 const PAGE_SIZE = 20;
 
+// A payment request must say what the money is for, in words, before anybody
+// spends time on it — raising it, recommending it, approving it or paying it.
+// This applies to Payment Requests and to nothing else in the system:
+// expenditures, purchase orders and leave all keep their optional notes.
+export const NOTE_REQUIRED_MESSAGE = 'A Note is required on a payment request — say what this payment is for.';
+export const hasPrNote = (pr) => String((pr && pr.notes) || '').trim().length > 0;
+
 // Who may reject: whoever owns the stage the request is sitting on — and never
 // the person who raised it.
 const canRejectPr = (pr, user, role, users) => {
@@ -163,6 +170,9 @@ export default function PaymentRequests() {
   const advanceStage = async (pr) => {
     const stage = nextPrStage(pr.status, pr, users);
     if (!stage) return;
+    // Requests raised before the Note became compulsory can still be rejected,
+    // but they cannot be moved forward until somebody says what they are for.
+    if (!hasPrNote(pr)) { toast(NOTE_REQUIRED_MESSAGE + ' Edit the request and add one.', 'er'); return; }
     if (isOwnRequest(pr, user)) { toast('You cannot act on your own payment request', 'er'); return; }
     if (!canTakePrStage(stage, pr, user, role, users)) { toast(`You are not authorised to ${stage.label.toLowerCase()}`, 'er'); return; }
     const extra = {};
@@ -293,6 +303,16 @@ export default function PaymentRequests() {
                 <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>
                   {pr.payTo ? pr.payTo + ' · ' : ''}{pr.paymentMode ? pr.paymentMode : ''}{pr.paymentRef ? ' · Ref ' + pr.paymentRef : ''}{pr.proposalRef ? ' · Proposal ' + pr.proposalRef : ''}
                 </span>
+                {/* The Note is what an approver needs to decide, so it is on the
+                    row rather than hidden behind an edit. A request raised
+                    before the Note was compulsory says so, because until one is
+                    added it cannot be moved on. */}
+                {hasPrNote(pr)
+                  ? <div style={{ fontSize: '.76rem', marginTop: 3, color: 'var(--dark)' }}>
+                      <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: '-2px', color: 'var(--muted)' }}>sticky_note_2</span>{' '}
+                      {pr.notes}
+                    </div>
+                  : <div style={{ fontSize: '.74rem', marginTop: 3, color: '#c0392b' }}>No Note — cannot be approved until one is added</div>}
               </td>
               <td style={{ fontWeight: 700 }}>{formatCurrency(pr.amount)}</td>
               <td style={{ fontSize: '.82rem' }}>{pr.requestedByName || pr.requestedBy || '-'}</td>
@@ -366,6 +386,7 @@ function PRModal({ data, id, onSave, onClose }) {
     if (saving) return;
     if (!f.purpose.trim()) { toast('Payment For is required', 'er'); return; }
     if (toNumber(f.amount) <= 0) { toast('Enter a valid amount', 'er'); return; }
+    if (!f.notes.trim()) { toast(NOTE_REQUIRED_MESSAGE, 'er'); return; }
     setSaving(true);
     try { await onSave(f, id); } finally { setSaving(false); }
   };
@@ -380,7 +401,12 @@ function PRModal({ data, id, onSave, onClose }) {
             <div className="fg"><label>Payment Mode</label><select className="fi" value={f.paymentMode} onChange={e => set('paymentMode', e.target.value)}>{PAYMENT_MODES.map(m => <option key={m}>{m}</option>)}</select></div>
           </div>
           <div className="fg"><label>Required By</label><DateInput value={f.neededBy} onChange={e => set('neededBy', e.target.value)} /></div>
-          <div className="fg"><label>Notes</label><textarea className="fi" value={f.notes} onChange={e => set('notes', e.target.value)} rows="2" placeholder="Any detail the approvers need..." /></div>
+          <div className="fg">
+            <label>Note *</label>
+            <textarea className="fi" value={f.notes} onChange={e => set('notes', e.target.value)} rows="2" required
+              placeholder="What is this payment for? The approvers cannot act on a request without this." />
+            {!f.notes.trim() && <div style={{ fontSize: '.74rem', color: '#c0392b', marginTop: 3 }}>{NOTE_REQUIRED_MESSAGE}</div>}
+          </div>
         </div>
         <div className="mf">
           <button type="button" className="btn bo" onClick={onClose}>Cancel</button>

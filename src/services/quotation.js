@@ -122,6 +122,32 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 // ── The standard (default) Bill of Materials ────────────────────────────────
 // Used while the quotation is still a proposal. Once the actual PO and its BOM
 // are confirmed, bomFromPO() replaces these rows with the real ones.
+// Which picture goes beside a material row. The keys below are the template's
+// own names; a real purchase order calls the same things "Solar PV Module" or
+// "Grid Tie Inverter", so the lookup also matches on a keyword. Without that,
+// a quotation built from the actual BOM printed with no pictures at all.
+// Order matters: the first pattern that matches wins, so the specific names go
+// above the loose ones. "Module Mounting Structure" is a structure, not a
+// panel, and "Earthing Cable" is earthing rather than either cable picture.
+export const BOM_IMAGE_KEYWORDS = [
+  [/mounting\s*structure|\bmms\b/i, ''],
+  [/earth|lightening|lightning|\bla\b/i, 'earthing'],
+  [/inverter/i, 'inverter'],
+  [/acdb/i, 'acdb'],
+  [/dcdb/i, 'dcdb'],
+  [/\bac\b[\s-]*cable/i, 'ac-cable'],
+  [/\bdc\b[\s-]*cable/i, 'dc-cable'],
+  [/module|panel/i, 'modules'],
+];
+
+export function bomImageFor(material) {
+  const name = String(material || '').trim();
+  if (!name) return '';
+  if (QUOTE_BOM_IMAGES[name]) return QUOTE_BOM_IMAGES[name];
+  const hit = BOM_IMAGE_KEYWORDS.find(([re]) => re.test(name));
+  return hit ? hit[1] : '';
+}
+
 export const QUOTE_BOM_IMAGES = {
   Modules: 'modules',
   'Solar On Grid tie String inverter': 'inverter',
@@ -132,13 +158,36 @@ export const QUOTE_BOM_IMAGES = {
   'Earthing Kits & Lightening Arrester': 'earthing',
 };
 
+// ── Warranty wording (23-Sep requirement) ───────────────────────────────────
+// The modules carry 30 years, an inverter 8 years, and the system as a whole 5.
+// The three strings live here so the BOM table, the terms block and the
+// warranty upgrade below can never drift apart.
+export const WARRANTY_MODULES = '30 Years Performance Warranty as per MNRE';
+export const WARRANTY_INVERTER = '8 Years – Per Inverter (Extended Warranty Options are also available)';
+export const WARRANTY_TERMS = '8 Yrs – Per Inverter, 5 Yrs – Complete System & 30 Yrs for Solar Modules';
+
+// Quotations raised before that change still carry the old wording in their
+// saved BOM rows. Only the exact strings this file used to generate are
+// rewritten — a warranty typed by hand, or one carried over from a real PO, is
+// left exactly as it was entered.
+const LEGACY_WARRANTY = {
+  '25 Years Performance Warranty as per MNRE': WARRANTY_MODULES,
+  '5 Years with Entire System (Extended Warranty Options are also available)': WARRANTY_INVERTER,
+  '5 Yrs -Complete System & 25 Yrs for Solar Modules': WARRANTY_TERMS,
+};
+
+export function upgradeWarranty(text) {
+  const t = String(text == null ? '' : text).trim();
+  return LEGACY_WARRANTY[t] || text;
+}
+
 export function defaultQuoteBOM(kw) {
   const k = toNumber(kw);
   const modules = k > 0 ? Math.ceil((k * 1000) / 595) : '';
   const phase = k > 5 ? '3 Phase' : '1 Phase';
   return [
-    { material: 'Modules', specification: 'Mono Perc 595Wp DCR (Bifacial)', quantity: modules ? String(modules) : '', warranty: '25 Years Performance Warranty as per MNRE' },
-    { material: 'Solar On Grid tie String inverter', specification: `${k || '__'}KW - ${phase} - 1 Nos`, quantity: '1 Nos', warranty: '5 Years with Entire System (Extended Warranty Options are also available)' },
+    { material: 'Modules', specification: 'Mono Perc 595Wp DCR (Bifacial)', quantity: modules ? String(modules) : '', warranty: WARRANTY_MODULES },
+    { material: 'Solar On Grid tie String inverter', specification: `${k || '__'}KW - ${phase} - 1 Nos`, quantity: '1 Nos', warranty: WARRANTY_INVERTER },
     { material: 'ACDB', specification: 'Standard', quantity: '1 Nos', warranty: 'NA' },
     { material: 'DCDB', specification: 'Standard', quantity: '1 Nos', warranty: 'NA' },
     { material: 'AC Cables', specification: '3C X 4 Sqmm - 20 Mtrs Poly Cab', quantity: '20 mtrs', warranty: 'NA' },
@@ -151,13 +200,53 @@ export function defaultQuoteBOM(kw) {
 // as the default rows so the printed table does not change.
 export function bomFromPO(po) {
   return (po?.items || [])
-    .filter(it => it.materialName)
+    .filter(it => it && String(it.materialName || '').trim())
     .map(it => ({
-      material: it.materialName,
+      material: String(it.materialName).trim(),
       specification: [it.make, it.specification].filter(Boolean).join(' · ') || 'Standard',
       quantity: [it.actualQuantity !== '' && it.actualQuantity != null ? it.actualQuantity : it.quantity, it.unit].filter(v => v !== '' && v != null).join(' '),
       warranty: it.warranty || 'NA',
     }));
+}
+
+// Every material on the lead, not just the first purchase order's.
+//
+// A lead is often split across more than one PO — the panels on one, the
+// structure or the extra cable on another — and the quotation used to take the
+// first PO it happened to find and print only those lines, which is why
+// materials that had definitely been entered were missing from the quotation.
+// All of the lead's POs are merged here, in PO-date order, and a material that
+// appears on two of them is listed once with the quantities added up.
+export function bomFromLeadPOs(pos, leadId) {
+  const mine = (pos || [])
+    .filter(po => po && (leadId === undefined || po.leadId === leadId))
+    .filter(po => (po.items || []).length)
+    .sort((a, b) => String(a.poDate || '').localeCompare(String(b.poDate || '')));
+
+  const out = [];
+  const seen = new Map();   // material+spec -> index in out
+  mine.forEach(po => bomFromPO(po).forEach(row => {
+    const key = (row.material + '|' + row.specification).toLowerCase();
+    const at = seen.get(key);
+    if (at == null) { seen.set(key, out.length); out.push({ ...row }); return; }
+    out[at].quantity = mergeQuantity(out[at].quantity, row.quantity);
+  }));
+  return out;
+}
+
+// "12 Nos" + "4 Nos" = "16 Nos". Anything that is not a plain number in the
+// same unit is kept side by side rather than guessed at.
+function mergeQuantity(a, b) {
+  const parse = (v) => {
+    const m = /^\s*([\d.]+)\s*(.*)$/.exec(String(v == null ? '' : v));
+    return m ? { n: Number(m[1]), unit: m[2].trim() } : null;
+  };
+  const x = parse(a), y = parse(b);
+  if (x && y && !isNaN(x.n) && !isNaN(y.n) && x.unit.toLowerCase() === y.unit.toLowerCase()) {
+    return String(Math.round((x.n + y.n) * 100) / 100) + (x.unit ? ' ' + x.unit : '');
+  }
+  const both = [a, b].map(v => String(v == null ? '' : v).trim()).filter(Boolean);
+  return both.join(' + ');
 }
 
 // ── Customer cross-check (phone + electrical service number) ────────────────
@@ -301,7 +390,7 @@ export function quotationHTML(q, opts = {}) {
       <div class="tl2"><span>a.&nbsp; Taxes</span><span>: ${e(q.gstNote || 'GST 8.9 % Applicable')}</span></div>
       <div class="tl2"><span>b.&nbsp; Payment Terms</span><span>: ${e(q.paymentTerms || '100% Along with PO')}</span></div>
       <div class="tl2"><span>c.&nbsp; Delivery Time</span><span>: ${e(q.deliveryTime || '20-30 Days for Material & next 30 Days for Project Completion')}</span></div>
-      <div class="tl2"><span>d.&nbsp; Warranty</span><span>: ${e(q.warranty || '5 Yrs -Complete System & 25 Yrs for Solar Modules')}</span></div>
+      <div class="tl2"><span>d.&nbsp; Warranty</span><span>: ${e(upgradeWarranty(q.warranty) || WARRANTY_TERMS)}</span></div>
       <div class="tl2"><span>e.&nbsp; Offer Validity</span><span>: Validity of the present offer for ${toNumber(q.validityDays) || 15} Days Only</span></div>
       <div class="opt"><strong>OPTION - II</strong><br/>${e(q.optionTwo || 'Waree / Adani / Kirloskar / Luminous')}</div>
     </td></tr>
@@ -310,23 +399,25 @@ export function quotationHTML(q, opts = {}) {
   <p class="bank">PRAGATHI POWER SOLUTIONS,<br/>STATE BANK OF INDIA,<br/>Current A/C NO: 33599271521<br/>IFSC Code: SBIN0010677<br/>RAMANUJA CIRCLE BRANCH, TIRUPATHI-01.</p>`);
 
   // Page 7 — Bill of Materials
-  const bomRows = rows.map(r => {
-    const img = QUOTE_BOM_IMAGES[r.material];
+  const bomRows = rows.map((r, i) => {
+    const img = bomImageFor(r.material);
     return `<tr>
+      <td class="sl">${i + 1}</td>
       <td class="mat">${e(r.material || '')}</td>
       <td class="pic">${img ? `<img src="${base}/bom-${img}.jpg" alt="" />` : ''}</td>
       <td>${e(r.specification || '')}</td>
       <td>${e(String(r.quantity ?? ''))}</td>
-      <td>${e(r.warranty || 'NA')}</td>
+      <td>${e(upgradeWarranty(r.warranty) || 'NA')}</td>
     </tr>`;
   }).join('');
   const bom = page(`
   <h3 class="h-ul">Bill of Materials</h3>
   ${q.bomSource === 'po' ? '<p class="bomnote">As per the confirmed Purchase Order.</p>' : ''}
   <table class="bom">
-    <thead><tr><th>Material Details</th><th></th><th>Specification</th><th>Quantity</th><th>Warranty/ Gaurantee</th></tr></thead>
+    <thead><tr><th>S.No</th><th>Material Details</th><th></th><th>Specification</th><th>Quantity</th><th>Warranty/ Gaurantee</th></tr></thead>
     <tbody>${bomRows}</tbody>
-  </table>`);
+  </table>
+  <p class="bomcount">${rows.length} material${rows.length === 1 ? '' : 's'} in this Bill of Materials.</p>`);
 
   const benefits = `<section class="pg full"><img class="fullimg" src="${base}/p8-benefits.jpg" alt="" /></section>`;
 
@@ -367,7 +458,9 @@ table{width:100%;border-collapse:collapse}
 .bank{font-family:'Times New Roman',serif;font-size:13.5px;line-height:1.5;text-align:left}
 .bom th,.bom td{border:1px solid #444;padding:6px;font-size:12px;text-align:center;vertical-align:middle}
 .bom thead th{font-weight:700}
+.bom td.sl{width:6%}
 .bom td.mat{text-align:left;width:20%}
+.bomcount{font-size:11px;color:#555;margin:6px 0 0;text-align:right}
 .bom td.pic{width:24%}
 .bom td.pic img{max-width:130px;max-height:92px;object-fit:contain}
 .bomnote{font-size:11.5px;color:#1f3864;margin:0 0 6px}

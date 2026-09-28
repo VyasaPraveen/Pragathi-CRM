@@ -3,15 +3,19 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, createNotification } from '../services/firestore';
-import { formatCurrency, formatDate, toNumber, sendWhatsApp, todayStr } from '../services/helpers';
+import { formatCurrency, formatDate, toNumber, todayStr } from '../services/helpers';
+import {
+  buildQuotationPdf, sendQuotationOnWhatsApp, quotationReadyToShare,
+  openInNewTab, downloadUrl, canShareFiles,
+} from '../services/quotationShare';
 import { StatusBadge, Modal, EmptyState, DateInput } from './SharedUI';
 import { can, ACTIONS, quotationApprovers } from '../services/permissions';
 import {
   QT_STATUS, MAX_REVISION, APPROVAL_HOURS, SHARE_DAYS,
   DEFAULT_TARIFF, DEFAULT_UNITS_PER_KW_MONTH,
   nextQuotationNumber, quotationRef, ppsRefFor, canRevise, calcQuotation,
-  defaultQuoteBOM, bomFromPO, crossCheckCustomer, quotationDue, isOverdue,
-  printQuotation, quotationWhatsAppText,
+  defaultQuoteBOM, bomFromLeadPOs, crossCheckCustomer, quotationDue, isOverdue,
+  printQuotation, upgradeWarranty,
 } from '../services/quotation';
 
 const nowIso = () => new Date().toISOString();
@@ -37,6 +41,10 @@ export default function QuotationPanel({ lead }) {
   const { toast } = useToast();
   const [form, setForm] = useState(null);       // { mode: 'new' | 'revise', data }
   const [declineForm, setDeclineForm] = useState(false);
+  // The generated PDF, once the server has built it. Kept so a second press
+  // opens it straight away instead of building it all over again.
+  const [pdf, setPdf] = useState(null);
+  const [pdfBusy, setPdfBusy] = useState('');
   const [decline, setDecline] = useState({ reason: '', nextFollowUpDate: '' });
   const [busy, setBusy] = useState(false);
 
@@ -69,6 +77,11 @@ export default function QuotationPanel({ lead }) {
 
   const assignedTarget = lead.assignedTo || lead.salesExecutive || q?.executiveName || '';
 
+  // Every material entered on any of this lead's purchase orders. Empty while
+  // the lead is still only a proposal, in which case the standard template is
+  // used instead.
+  const leadBOM = React.useMemo(() => bomFromLeadPOs(leadPOs, lead.id), [leadPOs, lead.id]);
+
   /* ── create / revise ─────────────────────────────────────────────────── */
   const openNew = () => {
     const seq = quotations.length + 1;
@@ -98,8 +111,11 @@ export default function QuotationPanel({ lead }) {
         tariff: DEFAULT_TARIFF,
         unitsPerKwMonth: DEFAULT_UNITS_PER_KW_MONTH,
         validityDays: 15,
-        bomSource: 'default',
-        bomItems: defaultQuoteBOM(lead.kwRequired),
+        // If the lead's BOM has already been entered, the quotation starts from
+        // it. It used to always start from the seven standard template rows, so
+        // a lead with twenty materials on its PO still quoted only seven.
+        bomSource: leadBOM.length ? 'po' : 'default',
+        bomItems: leadBOM.length ? leadBOM : defaultQuoteBOM(lead.kwRequired),
       },
     });
   };
@@ -262,12 +278,52 @@ export default function QuotationPanel({ lead }) {
   };
 
   const handleUseActualBOM = async () => {
-    const po = leadPOs.find(p => p.leadId === lead.id && (p.items || []).length);
-    if (!po) { toast('No purchase order with a BOM exists for this lead yet', 'er'); return; }
-    const items = bomFromPO(po);
-    if (!items.length) { toast('That purchase order has no BOM lines', 'er'); return; }
-    if (!window.confirm(`Replace the default BOM with the actual BOM from ${po.poNumber || 'the PO'} (${items.length} items)?`)) return;
-    await step({ bomItems: items, bomSource: 'po', poId: po.id }, 'Actual PO / BOM details applied to the quotation');
+    // All of the lead's purchase orders, not just the first one found — a lead
+    // split across two POs was quoting only half its materials.
+    const pos = (leadPOs || []).filter(p => p.leadId === lead.id && (p.items || []).length);
+    if (!pos.length) { toast('No purchase order with a BOM exists for this lead yet', 'er'); return; }
+    const items = bomFromLeadPOs(pos, lead.id);
+    if (!items.length) { toast('Those purchase orders have no BOM lines', 'er'); return; }
+    const from = pos.map(p => p.poNumber).filter(Boolean).join(', ') || 'the purchase orders';
+    if (!window.confirm(`Replace the current BOM with all ${items.length} materials from ${from}?`)) return;
+    await step({ bomItems: items, bomSource: 'po', poId: pos[0].id, poIds: pos.map(p => p.id) },
+      `Actual BOM applied — ${items.length} materials from ${pos.length} purchase order${pos.length === 1 ? '' : 's'}`);
+  };
+
+  /* ── the PDF, and getting it to the customer ─────────────────────────── */
+  // The file is rebuilt every time rather than cached on the server, because
+  // the price, the BOM or the revision may have changed since last time.
+  const withPdf = async (label, run) => {
+    if (pdfBusy) return;
+    setPdfBusy(label);
+    try {
+      const built = await buildQuotationPdf(q.id);
+      setPdf(built);
+      await run(built);
+    } catch (e) { toast(e.message || 'Could not build the quotation PDF', 'er'); }
+    finally { setPdfBusy(''); }
+  };
+
+  const handleOpenPdf = () => withPdf('open', (built) => {
+    openInNewTab(built.absoluteUrl);
+    toast('Quotation PDF opened in a new tab');
+  });
+
+  const handleDownloadPdf = () => withPdf('download', (built) => {
+    downloadUrl(built.absoluteUrl, built.name);
+    toast(`Downloaded ${built.name}`);
+  });
+
+  const handleWhatsApp = () => {
+    const stop = quotationReadyToShare(q);
+    if (stop) { toast(stop, 'er'); return; }
+    withPdf('whatsapp', async () => {
+      const res = await sendQuotationOnWhatsApp(q, q.customerPhone || lead.phone);
+      if (res.via === 'file') { toast('Quotation PDF handed to WhatsApp'); return; }
+      toast(res.toNumber
+        ? 'WhatsApp opened for ' + res.toNumber + ' with the quotation PDF link'
+        : 'WhatsApp opened — this lead has no mobile number on file');
+    });
   };
 
   /* ── render ──────────────────────────────────────────────────────────── */
@@ -300,15 +356,44 @@ export default function QuotationPanel({ lead }) {
           {q.bomSource === 'po' && <span className="st st-b" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Actual BOM</span>}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <button className="btn bsm bo" onClick={() => printQuotation(q)}>
-            <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print / PDF
+          <button className="btn bsm bo" onClick={() => printQuotation(q)} title="Print the quotation">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print
+          </button>
+          <button className="btn bsm bo" onClick={handleOpenPdf} disabled={!!pdfBusy} title="Open the quotation as a PDF file">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>picture_as_pdf</span>
+            {pdfBusy === 'open' ? 'Building…' : 'View PDF'}
+          </button>
+          <button className="btn bsm bo" onClick={handleDownloadPdf} disabled={!!pdfBusy} title="Download the quotation PDF">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>download</span>
+            {pdfBusy === 'download' ? 'Building…' : 'Download'}
           </button>
           <button className="btn bsm bo" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}
-            onClick={() => sendWhatsApp(q.customerPhone || lead.phone, quotationWhatsAppText(q))}>
-            <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
+            onClick={handleWhatsApp} disabled={!!pdfBusy}
+            title={canShareFiles()
+              ? 'Send the quotation PDF to this lead on WhatsApp'
+              : 'Open WhatsApp for this lead with the quotation PDF link'}>
+            <span className="material-icons-round" style={{ fontSize: 16 }}>share</span>
+            {pdfBusy === 'whatsapp' ? 'Preparing…' : 'Send on WhatsApp'}
           </button>
         </div>
       </div>
+
+      {/* Once built, the file stays one click away for viewing or downloading. */}
+      {pdf && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+          background: 'rgba(37,211,102,.07)', border: '1px solid rgba(37,211,102,.28)',
+          borderRadius: 8, padding: '7px 12px', fontSize: '.8rem', marginBottom: 12,
+        }}>
+          <span className="material-icons-round" style={{ fontSize: 17, color: '#1e9e51' }}>picture_as_pdf</span>
+          <span style={{ flex: 1, minWidth: 160 }}>
+            <strong>{pdf.name}</strong>
+            <span style={{ color: 'var(--muted)' }}> · {Math.max(1, Math.round(pdf.bytes / 1024))} KB</span>
+          </span>
+          <button className="btn bsm bo" onClick={() => openInNewTab(pdf.absoluteUrl)}>Open</button>
+          <button className="btn bsm bo" onClick={() => downloadUrl(pdf.absoluteUrl, pdf.name)}>Save</button>
+        </div>
+      )}
 
       {due && (
         <div style={{
@@ -435,9 +520,9 @@ export default function QuotationPanel({ lead }) {
           Bill of Materials ({(q.bomItems || []).length} items · {q.bomSource === 'po' ? 'actual PO' : 'standard template'})
         </summary>
         <div className="tw" style={{ marginTop: 8 }}>
-          <table><thead><tr><th>Material Details</th><th>Specification</th><th>Quantity</th><th>Warranty / Guarantee</th></tr></thead>
+          <table><thead><tr><th style={{ width: 44 }}>S.No</th><th>Material Details</th><th>Specification</th><th>Quantity</th><th>Warranty / Guarantee</th></tr></thead>
             <tbody>{(q.bomItems || []).map((it, i) => (
-              <tr key={`${it.material}-${i}`}><td>{it.material}</td><td style={{ fontSize: '.82rem' }}>{it.specification}</td><td>{it.quantity}</td><td style={{ fontSize: '.82rem' }}>{it.warranty}</td></tr>
+              <tr key={`${it.material}-${i}`}><td>{i + 1}</td><td>{it.material}</td><td style={{ fontSize: '.82rem' }}>{it.specification}</td><td>{it.quantity}</td><td style={{ fontSize: '.82rem' }}>{upgradeWarranty(it.warranty)}</td></tr>
             ))}</tbody>
           </table>
         </div>
@@ -543,13 +628,15 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
 
           <div className="fg" style={{ marginTop: 12 }}>
             <label>Bill of Materials <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>
-              {f.bomSource === 'po' ? 'actual PO details' : 'standard template — replaced by the actual PO / BOM later'}
+              {(f.bomItems || []).length} material{(f.bomItems || []).length === 1 ? '' : 's'} ·{' '}
+              {f.bomSource === 'po' ? 'taken from this lead’s purchase order(s)' : 'standard template — replaced by the actual PO / BOM later'}
             </span></label>
             <div className="tw">
               <table style={{ fontSize: '.8rem' }}>
-                <thead><tr><th>Material</th><th>Specification</th><th>Qty</th><th>Warranty</th></tr></thead>
+                <thead><tr><th style={{ width: 38 }}>#</th><th>Material</th><th>Specification</th><th>Qty</th><th>Warranty</th></tr></thead>
                 <tbody>{(f.bomItems || []).map((it, i) => (
                   <tr key={`${it.material}-${i}`}>
+                    <td>{i + 1}</td>
                     <td>{it.material}</td>
                     <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={it.specification}
                       onChange={e => set('bomItems', f.bomItems.map((x, j) => j === i ? { ...x, specification: e.target.value } : x))} /></td>

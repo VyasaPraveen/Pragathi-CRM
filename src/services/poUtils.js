@@ -1,4 +1,4 @@
-import { escapeHtml, formatDate } from './helpers';
+import { escapeHtml, formatDate, openHtmlSafely } from './helpers';
 
 const money = (v) => {
   const n = Number(v);
@@ -235,17 +235,6 @@ ${bomTableHtml(po)}
 </div>
 <div class="footer">Ref: ${po.poNumber} | Pragathi Power Solutions \u2014 Printed on ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}</div>
 </body></html>`;
-}
-
-// Safe HTML renderer: uses Blob URL instead of document.write to prevent DOM injection
-function openHtmlSafely(html, shouldPrint = false) {
-  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const w = window.open(url, '_blank');
-  if (!w) { alert('Popup blocked \u2014 please allow popups.'); URL.revokeObjectURL(url); return; }
-  w.addEventListener('afterprint', () => URL.revokeObjectURL(url));
-  if (shouldPrint) w.addEventListener('load', () => w.print());
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
 }
 
 export function printPO(po, lead) {

@@ -112,3 +112,101 @@ export function detectInAppBrowser(ua) {
   if (/Android/i.test(s) && (/;\s*wv\)/i.test(s) || /Version\/\d+\.\d+(\.\d+)?\s+Chrome/i.test(s))) return 'an in-app browser';
   return '';
 }
+
+// ── Team views (28-Sep requirement) ─────────────────────────────────────────
+// A Team Leader could only ever see their own attendance: the whole-team view
+// was gated at manager level, and a Team Leader sits below that. These build
+// the figures the team screens need, from the same folded days as everything
+// else, so a leader's view of a member can never disagree with that member's
+// own view of themselves.
+
+// One person, one month: the days they marked and what they add up to.
+export function memberMonth(records, member, month) {
+  const who = { email: member && member.email, name: member && member.displayName };
+  const all = foldAttendanceDays(records, who);
+  const days = all.filter(d => String(d.date || '').startsWith(month));
+  return {
+    email: member && member.email,
+    name: (member && (member.displayName || member.email)) || 'Unknown',
+    role: member && member.role,
+    days,
+    ...attendanceSummary(days),
+    lastSeen: all.length ? all[0].date : '',   // folded days are newest first
+  };
+}
+
+// The whole team for a month, worst-attended first so the gaps are at the top
+// rather than buried at the bottom of an alphabetical list.
+export function teamMonthReport(records, members, month) {
+  const rows = (members || []).map(m => memberMonth(records, m, month));
+  rows.sort((a, b) => (a.present - b.present) || a.name.localeCompare(b.name));
+  return {
+    month,
+    rows,
+    present: rows.filter(r => r.present > 0).length,
+    totalDays: rows.reduce((n, r) => n + r.present, 0),
+    totalHours: Math.round(rows.reduce((n, r) => n + r.totalHours, 0) * 10) / 10,
+    incomplete: rows.reduce((n, r) => n + r.incomplete, 0),
+  };
+}
+
+// Where each member stands today — the question a leader opens this screen to
+// answer. Anyone who has not marked at all is listed too, which is the whole
+// point: an absence shows up as a row, not as a missing one.
+export function teamToday(records, members, todayStr) {
+  const rows = (members || []).map(m => {
+    const who = { email: m && m.email, name: m && m.displayName };
+    const marks = (records || [])
+      .filter(r => r && r.date === todayStr && isMine(r, who))
+      .sort(byTime);
+    const inMark = marks.find(x => x.type === CHECK_IN) || null;
+    const outMark = [...marks].reverse().find(x => x.type === CHECK_OUT) || null;
+    return {
+      email: m && m.email,
+      name: (m && (m.displayName || m.email)) || 'Unknown',
+      in: inMark, out: outMark, marks,
+      state: inMark && outMark ? 'Checked out' : inMark ? 'Checked in' : 'Not marked',
+    };
+  });
+  rows.sort((a, b) => {
+    const order = { 'Not marked': 0, 'Checked in': 1, 'Checked out': 2 };
+    return (order[a.state] - order[b.state]) || a.name.localeCompare(b.name);
+  });
+  return {
+    rows,
+    marked: rows.filter(r => r.state !== 'Not marked').length,
+    onSite: rows.filter(r => r.state === 'Checked in').length,
+    notMarked: rows.filter(r => r.state === 'Not marked').length,
+  };
+}
+
+// The months to offer in the picker: every month the team has marks in, plus
+// this month and last, newest first. Last month is always there because
+// "previous month" is one of the things a leader is asked for.
+export function attendanceMonths(records, members, todayStr) {
+  const mine = new Set();
+  (members || []).forEach(m => {
+    const who = { email: m && m.email, name: m && m.displayName };
+    (records || []).forEach(r => { if (r && r.date && isMine(r, who)) mine.add(String(r.date).slice(0, 7)); });
+  });
+  const now = String(todayStr || '').slice(0, 7);
+  mine.add(now);
+  mine.add(previousMonth(now));
+  return [...mine].filter(Boolean).sort().reverse();
+}
+
+// "2026-01" → "2025-12"
+export function previousMonth(month) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+  if (!m) return '';
+  const y = Number(m[1]), n = Number(m[2]);
+  return n === 1 ? `${y - 1}-12` : `${y}-${String(n - 1).padStart(2, '0')}`;
+}
+
+// "September 2026"
+export function monthLabel(month) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(month || ''));
+  if (!m) return String(month || '');
+  return new Date(Number(m[1]), Number(m[2]) - 1, 1)
+    .toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+}

@@ -49,6 +49,14 @@ try {
       handle_upload($method);
       break;
 
+    // The quotation as a real PDF file, so it can be sent to the customer
+    // instead of printed by hand. Returns its URL, or the file itself with
+    // ?download=1.
+    case 'quotation-pdf':
+      require __DIR__ . '/routes/quotepdf.php';
+      handle_quotation_pdf($method);
+      break;
+
     case 'push':
       require __DIR__ . '/routes/push.php';
       handle_push($seg[1] ?? '', $method);

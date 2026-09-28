@@ -7,6 +7,8 @@ import { apiUpload } from '../services/api';
 import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage, todayStr } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
 import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser } from '../services/attendance';
+import TeamAttendancePanel from '../components/TeamAttendancePanel';
+import { isTeamLeader } from '../services/permissions';
 
 const PAGE_SIZE = 30;
 const today = () => todayStr();
@@ -47,6 +49,10 @@ export default function Attendance() {
   const myName = user?.displayName || '';
   const canSeeAll = hasAccess(role, 'manager'); // managers/admin/owner see the whole team
   const admin = hasAccess(role, 'admin');
+  // A Team Leader is answerable for their members' attendance, so they get the
+  // team view as well — they sit below manager level, which is why they never
+  // had it before.
+  const canSeeTeam = canSeeAll || isTeamLeader(users, myEmail);
 
   let visible = canSeeAll ? attendance : attendance.filter(a => a.employeeEmail === myEmail || a.employeeName === myName);
   if (search) {
@@ -148,7 +154,11 @@ export default function Attendance() {
 
       {/* My Attendance is the default view; managers can switch to the whole team. */}
       <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
-        {[['mine', 'My Attendance'], ['all', canSeeAll ? 'Staff Attendance' : 'My Records']].map(([k, label]) => (
+        {[
+          ['mine', 'My Attendance'],
+          canSeeTeam ? ['team', canSeeAll ? 'Team Attendance' : 'My Team'] : null,
+          ['all', canSeeAll ? 'Staff Attendance' : 'My Records'],
+        ].filter(Boolean).map(([k, label]) => (
           <span key={k} className={`fc ${view === k ? 'act' : ''}`} onClick={() => setView(k)}>{label}</span>
         ))}
       </div>
@@ -239,6 +249,8 @@ export default function Attendance() {
           )}
         </div></div>
       )}
+
+      {view === 'team' && canSeeTeam && <TeamAttendancePanel />}
 
       {view === 'all' && (
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>

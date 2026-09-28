@@ -200,15 +200,39 @@ export function isSafeUrl(url) {
   } catch { return false; }
 }
 
+// The print dialog is modal: it spins a nested loop that blocks whichever
+// document's stack called it. Printing used to be started from here with
+// w.print(), so the loop ran on the CRM's own stack and the CRM sat frozen for
+// as long as the print tab was open — the tab only came back to life once that
+// tab was closed. The trigger now lives inside the printed document, so the
+// dialog belongs to that document alone.
+function withAutoPrint(html) {
+  // Waiting for 'load' matters: the letterhead, the footer and the marketing
+  // pages are images, and printing before they arrive prints blank boxes.
+  // / is the closing tag's slash — written that way so this line cannot
+  // itself be mistaken for the end of a script block wherever it is inlined.
+  const trigger = '<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},250)})</script>';
+  return html.includes('</body>') ? html.replace('</body>', trigger + '</body>') : html + trigger;
+}
+
 // Security: safe HTML print — uses Blob URL instead of document.write to prevent DOM injection
 export function openHtmlSafely(html, shouldPrint = false) {
-  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+  const blob = new Blob([shouldPrint ? withAutoPrint(html) : html], { type: 'text/html; charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const w = window.open(url, '_blank');
-  if (!w) { alert('Popup blocked — please allow popups.'); URL.revokeObjectURL(url); return; }
-  w.addEventListener('afterprint', () => URL.revokeObjectURL(url));
-  if (shouldPrint) w.addEventListener('load', () => w.print());
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  // An anchor click inside the current user gesture is what popup blockers
+  // allow, and rel="noopener" puts the new tab in its own browsing context
+  // group — so nothing it does can reach back into this one.
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Nothing tells us when the other tab has finished with the blob, so it is
+  // held long enough for a slow print and then released.
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
 }
 
 // Names compare as people type them, so casing and stray spaces never leave the

@@ -9,8 +9,9 @@ import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../comp
 import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
 import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
-import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromPO } from '../services/quotation';
+import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
 import { getOptions, withCurrent } from '../services/options';
+import { buildLeadNotice, leadNotifyTargets } from '../services/leadNotify';
 
 // Lead Reference, Follow-up Status, Priority and Mode of Payment now come from
 // Settings → Manage Options (src/services/options.js holds the same defaults).
@@ -72,7 +73,7 @@ const DEFAULT_BOM_MATERIALS = [
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads, customers, users, influencers, team } = useData();
+  const { leads, customers, users, influencers, team, quotations, leadPOs } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -131,17 +132,37 @@ export default function Leads() {
       if (id) {
         await updateDocument('leads', id, cleaned);
         toast('Lead updated');
-        // Notify assigned user on lead update
-        if (cleaned.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Updated', message: `Lead "${cleaned.name}" has been updated`, type: 'lead', module: 'leads', relatedId: id });
-        }
-        // Notify new assignee if assignment changed
-        if (cleaned.assignedTo && prevLead && cleaned.assignedTo !== prevLead.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Assigned to You', message: `${assignedByName} assigned you the lead "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: id });
-        }
-        // Notify admin on status change
-        if (prevStatus && cleaned.status !== prevStatus) {
-          notifyAdmins(users, { title: 'Lead Status Changed', message: `Lead "${cleaned.name}" changed from ${prevStatus} to ${cleaned.status}`, type: 'lead', module: 'leads', relatedId: id });
+        // One notice covering the whole edit, sent to everyone with a stake in
+        // the lead. It replaces the old pair of messages, which told only the
+        // assignee, never said who had changed what, and fired on every save.
+        const notice = buildLeadNotice({
+          lead: { ...cleaned, id }, prevLead, users, actor: user, quotations, leadPOs,
+        });
+        if (notice) {
+          notice.targets.forEach(forUser => createNotification({
+            forUser, title: notice.title, message: notice.message,
+            type: 'lead', module: 'leads', relatedId: id,
+          }));
+          // The person the lead has just landed on is told directly, because
+          // for them it is a job to pick up rather than news about a record.
+          if (notice.reassigned && notice.assignee) {
+            createNotification({
+              forUser: notice.assignee,
+              title: 'Lead Assigned to You',
+              message: `${assignedByName} assigned you the lead "${cleaned.name}"`
+                + `${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`
+                + `${notice.previousAssignee ? ' (previously with ' + notice.previousAssignee + ')' : ''}`,
+              type: 'lead', module: 'leads', relatedId: id,
+            });
+          }
+          if (notice.reassigned && notice.previousAssignee) {
+            createNotification({
+              forUser: notice.previousAssignee,
+              title: 'Lead Moved to Someone Else',
+              message: `${assignedByName} moved the lead "${cleaned.name}" from you to ${notice.assignee || '(unassigned)'}.`,
+              type: 'lead', module: 'leads', relatedId: id,
+            });
+          }
         }
       } else {
         const newId = await addDocument('leads', cleaned);
@@ -150,8 +171,17 @@ export default function Leads() {
         if (cleaned.assignedTo) {
           createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `${assignedByName} assigned you a new lead: "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: newId });
         }
-        // Notify admins about new lead
-        notifyAdmins(users, { title: 'New Lead Created', message: `New lead "${cleaned.name}" created`, type: 'lead', module: 'leads', relatedId: newId });
+        // The Team Leader and the approval line hear about a new lead too, not
+        // just the Admins — they are the people who have to act on it.
+        leadNotifyTargets({ lead: { ...cleaned, id: newId }, prevLead: null, users, actor: user })
+          .filter(t => t !== cleaned.assignedTo)
+          .forEach(forUser => createNotification({
+            forUser,
+            title: 'New Lead Created',
+            message: `${assignedByName} created the lead "${cleaned.name}"`
+              + `${cleaned.city ? ' · ' + cleaned.city : ''}, assigned to ${cleaned.assignedTo || '(nobody)'}.`,
+            type: 'lead', module: 'leads', relatedId: newId,
+          }));
         // Auto-create customer if lead is created directly as Converted
         if (cleaned.status === 'Converted') {
           await addDocument('customers', {
@@ -780,11 +810,13 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       // The quotation carried a default BOM while it was still a proposal — now
       // that the PO is approved, the actual PO/BOM details take its place.
       if (myQuote && (po.items || []).length) {
-        const actual = bomFromPO(po);
+        // Every PO raised against this lead, so a second PO's materials are
+        // added to the quotation instead of replacing the first one's.
+        const actual = bomFromLeadPOs(myPOs.map(p => (p.id === po.id ? { ...p, items: po.items } : p)), lead.id);
         if (actual.length) {
           try {
             await updateDocument('quotations', myQuote.id, { bomItems: actual, bomSource: 'po', poId: po.id });
-            toast('Quotation BOM updated with the actual PO details');
+            toast(`Quotation BOM updated — ${actual.length} materials from the approved purchase order(s)`);
           } catch { /* the quotation is not blocked by this */ }
         }
       }

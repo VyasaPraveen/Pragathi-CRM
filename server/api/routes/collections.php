@@ -62,6 +62,10 @@ function handle_collections(string $collection, string $id, string $method): voi
     // structure on file — not from whatever the client sent. A Team Leader's own
     // request (or one from someone with no leader assigned) skips that step.
     if ($collection === 'paymentRequests') {
+      // The Note is compulsory on payment requests, and on nothing else.
+      if (trim((string)($data['notes'] ?? '')) === '') {
+        fail(422, 'A Note is required on a payment request - say what this payment is for.');
+      }
       $tl = team_leader_of($email);
       $data['teamLeaderEmail'] = $tl;
       $data['needsRecommendation'] = ($tl !== '' && $tl !== strtolower(trim($email)));
@@ -337,6 +341,16 @@ function enforce_status_transition(string $collection, string $role, array $patc
     // A requester may never move their own request along.
     if ($requester !== '' && $requester === $me && $to !== 'Rejected') {
       fail(403, 'You cannot recommend or approve your own payment request.');
+    }
+
+    // Nothing advances without a Note saying what the money is for. A request
+    // raised before the Note was compulsory can still be rejected; it just
+    // cannot be recommended, approved or paid until one is written.
+    // The note being written in the same request as the approval counts too,
+    // so adding one and approving in a single call is not refused.
+    $prNote = array_key_exists('notes', $patch) ? (string)$patch['notes'] : (string)($existing['notes'] ?? '');
+    if ($to !== 'Rejected' && trim($prNote) === '') {
+      fail(422, 'This payment request has no Note. Add one saying what the payment is for before it can be ' . strtolower($to) . '.');
     }
 
     if ($to === 'Recommended') {
