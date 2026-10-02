@@ -2,14 +2,15 @@
 // ============================================================================
 // The quotation as a real PDF file.
 //
-// This follows the same reference proposal as quotationHTML() in
-// src/services/quotation.js: the covering letter, the company's four marketing
-// pages, the budgetary proposal, the Bill of Materials and the benefits page.
-// The marketing pages are the company's own artwork and are placed here as
-// images, exactly as they are on screen.
+// It follows the company's reference proposal: the covering letter, the four
+// marketing pages, the budgetary proposal, the Bill of Materials and the
+// benefits page. The marketing pages are the company's own artwork and are
+// placed here as images.
 //
-// It exists as well as the HTML because a browser print cannot be attached to
-// anything — the customer has to be sent a file, and this produces one.
+// This is the only quotation document there is. There used to be a second one
+// built as HTML in the browser for printing, and the two drifted apart until
+// Print showed one layout and View another; the HTML copy is gone and Print,
+// View, Download and WhatsApp all now serve this file.
 // Keep the figures below in step with calcQuotation(); they are duplicated
 // rather than shared because the two run on different sides of the wire.
 // ============================================================================
@@ -163,7 +164,10 @@ function qpdf_pdf_filename(array $q): string {
 
   $parts = array_values(array_filter([$who, $where], 'strlen'));
   $name = implode('-', $parts);
-  if ($name === '') $name = $clean(qpdf_ref($q)) ?: 'Quotation';
+  // A name with no letter or digit in it is no name at all: a record holding
+  // only punctuation would otherwise save as "....pdf". Falls back the same
+  // way an empty one does.
+  if (!preg_match('/[A-Za-z0-9]/', $name)) $name = $clean(qpdf_ref($q)) ?: 'Quotation';
   // Keep it short enough for any mail client or filesystem to be happy.
   if (strlen($name) > 80) $name = rtrim(substr($name, 0, 80));
   return $name . '.pdf';

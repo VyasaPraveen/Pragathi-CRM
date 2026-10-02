@@ -307,6 +307,26 @@ function enforce_status_transition(string $collection, string $role, array $patc
         && $patch['quotationNumber'] !== $existing['quotationNumber']) {
       fail(409, 'The quotation number stays the same across revisions.');
     }
+    // A recommendation is one person's own endorsement, so it is checked here
+    // and not only in the browser — the same rule the leave request and the
+    // purchase order recommendations already follow. Checked ahead of the
+    // status rules below so it cannot be slipped in beside a status change.
+    // Clearing one, which an edit does, and re-sending the one already on the
+    // record are both left alone; only newly recording one is checked.
+    if (array_key_exists('recommendedBy', $patch)) {
+      $newRec = strtolower(trim((string)($patch['recommendedBy'] ?? '')));
+      $curRec = strtolower(trim((string)($existing['recommendedBy'] ?? '')));
+      if ($newRec !== '' && $newRec !== $curRec) {
+        $me = strtolower(trim($email));
+        if ($me === '' || $newRec !== $me) fail(403, 'A recommendation has to be recorded in your own name.');
+        if (!can($role, 'quotation_approve') && !has_access($role, 'admin') && $role !== 'super_admin') {
+          $tl = lead_team_leader((string)($existing['leadId'] ?? ''));
+          if ($tl === '' || $tl !== $me) {
+            fail(403, 'Only this lead\'s Team Leader, the Operation Manager or an Admin can recommend this quotation.');
+          }
+        }
+      }
+    }
   }
 
   // A patch with no `status` key is a plain field edit. For approval-chain

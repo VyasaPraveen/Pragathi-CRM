@@ -600,10 +600,16 @@ export function canSeeAcceptanceProof(q, lead, user, role, users) {
   return !!leader && leader === me;
 }
 
+// When it can be attached: from the point the quotation is with the customer
+// until it is accepted. The screenshot is the evidence for marking it
+// accepted, so it has to be attachable before that button is pressed, not
+// only afterwards.
+export const PROOF_STATUSES = ['Shared with Customer', 'Accepted'];
+
 // Who may attach it: the same people, but not the whole approver bench —
 // it is the assigned person's job, with their leader and Admin able to help.
 export function canUploadAcceptanceProof(q, lead, user, role, users) {
-  if (!q || q.status !== 'Accepted') return false;
+  if (!q || !PROOF_STATUSES.includes(q.status)) return false;
   return canSeeAcceptanceProof(q, lead, user, role, users);
 }
 

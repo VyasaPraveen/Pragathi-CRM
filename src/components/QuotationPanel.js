@@ -171,21 +171,37 @@ export default function QuotationPanel({ lead }) {
         // that came back Rejected goes round the existing approval loop again.
         const { status, id, createdAt, updatedAt, revisionHistory, ...fields } = payload; // eslint-disable-line no-unused-vars
         const patch = { ...fields, editedBy: meName, editedAt: nowIso() };
+        // The recommendation endorsed the figures as they stood. An edit can
+        // change those figures — the cost among them — so the recommendation
+        // goes with them and the leader is asked again. Leaving it would show
+        // an approver an endorsement of a document that has since moved on,
+        // which is the one thing the recommendation step exists to prevent.
+        const hadRecommendation = !!q.recommendedBy;
+        if (hadRecommendation) {
+          Object.assign(patch, {
+            recommendedBy: '', recommendedByName: '', recommendedAt: '', recommendNote: '',
+          });
+        }
         // A quotation that was turned down is going back for approval, so the
         // earlier decision is cleared rather than left to confuse the reader.
         if (q.status === QT_STATUS.REJECTED) {
           Object.assign(patch, {
             status: QT_STATUS.PENDING, rejectedBy: '', rejectionReason: '', rejectedAt: '',
-            recommendedBy: '', recommendedByName: '', recommendedAt: '', recommendNote: '',
           });
         }
         await updateDocument('quotations', q.id, patch);
         toast(q.status === QT_STATUS.REJECTED
           ? 'Quotation updated and sent back for approval'
-          : 'Quotation updated');
-        notify([assignedTarget, ...quotationApprovers(users)], 'Quotation Updated',
+          : hadRecommendation
+            ? 'Quotation updated — the earlier recommendation was cleared'
+            : 'Quotation updated');
+        // The leader who recommended it is told too, so they can look again.
+        notify([assignedTarget, ...quotationApprovers(users),
+          ...(hadRecommendation ? [q.recommendedByName || q.recommendedBy] : [])],
+          'Quotation Updated',
           `${quotationRef(payload)} for "${lead.name}" was edited by ${meName}`
-          + (q.status === QT_STATUS.REJECTED ? ' and is back with you for approval.' : '.'));
+          + (q.status === QT_STATUS.REJECTED ? ' and is back with you for approval.' : '.')
+          + (hadRecommendation ? ' The earlier recommendation no longer applies and the quotation can be recommended again.' : ''));
       } else {
         // A revision keeps the number, bumps R1→R3 and re-dates the document.
         const history = [...(q.revisionHistory || []), {
@@ -624,8 +640,11 @@ export default function QuotationPanel({ lead }) {
       )}
 
       {/* The customer's acceptance, as they sent it. Shown only to the people
-          with a part in the sale — see canSeeAcceptanceProof(). */}
-      {q.status === QT_STATUS.ACCEPTED && maySeeProof && (
+          with a part in the sale — see canSeeAcceptanceProof(). It appears as
+          soon as the quotation is with the customer, next to the Customer
+          Accepted button: the screenshot is the evidence for pressing that
+          button, so it has to be attachable before it is pressed. */}
+      {[QT_STATUS.SHARED, QT_STATUS.ACCEPTED].includes(q.status) && maySeeProof && (
         <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
             <span className="material-icons-round" style={{ fontSize: 17, color: 'var(--pri)' }}>verified</span>
