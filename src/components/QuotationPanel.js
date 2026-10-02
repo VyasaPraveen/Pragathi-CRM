@@ -9,13 +9,18 @@ import {
   openInNewTab, downloadUrl, canShareFiles,
 } from '../services/quotationShare';
 import { StatusBadge, Modal, EmptyState, DateInput } from './SharedUI';
-import { can, ACTIONS, quotationApprovers } from '../services/permissions';
+import {
+  can, ACTIONS, quotationApprovers,
+  canRecommendQuotation, canEditQuotation, canSeeAcceptanceProof, canUploadAcceptanceProof,
+} from '../services/permissions';
+import { apiUpload } from '../services/api';
+import { isSafeUrl } from '../services/helpers';
 import {
   QT_STATUS, MAX_REVISION, APPROVAL_HOURS, SHARE_DAYS,
   DEFAULT_TARIFF, DEFAULT_UNITS_PER_KW_MONTH,
   nextQuotationNumber, quotationRef, ppsRefFor, canRevise, calcQuotation,
   defaultQuoteBOM, bomFromLeadPOs, crossCheckCustomer, quotationDue, isOverdue,
-  printQuotation, upgradeWarranty,
+  upgradeWarranty,
 } from '../services/quotation';
 
 const nowIso = () => new Date().toISOString();
@@ -45,6 +50,7 @@ export default function QuotationPanel({ lead }) {
   // opens it straight away instead of building it all over again.
   const [pdf, setPdf] = useState(null);
   const [pdfBusy, setPdfBusy] = useState('');
+  const [proofBusy, setProofBusy] = useState(false);
   const [decline, setDecline] = useState({ reason: '', nextFollowUpDate: '' });
   const [busy, setBusy] = useState(false);
 
@@ -158,6 +164,28 @@ export default function QuotationPanel({ lead }) {
           type: 'status_update', module: 'quotations', relatedId: id,
         }));
         toast(`Quotation ${payload.quotationNumber} raised — sent for approval`);
+      } else if (form.mode === 'edit') {
+        // An edit corrects the quotation in place. It does not bump the
+        // revision — "Create Revision" is for that — and it does not move the
+        // status, so a quotation still awaiting approval stays there and one
+        // that came back Rejected goes round the existing approval loop again.
+        const { status, id, createdAt, updatedAt, revisionHistory, ...fields } = payload; // eslint-disable-line no-unused-vars
+        const patch = { ...fields, editedBy: meName, editedAt: nowIso() };
+        // A quotation that was turned down is going back for approval, so the
+        // earlier decision is cleared rather than left to confuse the reader.
+        if (q.status === QT_STATUS.REJECTED) {
+          Object.assign(patch, {
+            status: QT_STATUS.PENDING, rejectedBy: '', rejectionReason: '', rejectedAt: '',
+            recommendedBy: '', recommendedByName: '', recommendedAt: '', recommendNote: '',
+          });
+        }
+        await updateDocument('quotations', q.id, patch);
+        toast(q.status === QT_STATUS.REJECTED
+          ? 'Quotation updated and sent back for approval'
+          : 'Quotation updated');
+        notify([assignedTarget, ...quotationApprovers(users)], 'Quotation Updated',
+          `${quotationRef(payload)} for "${lead.name}" was edited by ${meName}`
+          + (q.status === QT_STATUS.REJECTED ? ' and is back with you for approval.' : '.'));
       } else {
         // A revision keeps the number, bumps R1→R3 and re-dates the document.
         const history = [...(q.revisionHistory || []), {
@@ -277,6 +305,59 @@ export default function QuotationPanel({ lead }) {
         `An Admin approved a revision beyond R${MAX_REVISION} for ${quotationRef(q)} ("${lead.name}").`));
   };
 
+  /* ── Team Leader recommendation (2-Oct) ───────────────────────────────── */
+  // Advisory only: it records the leader's view and tells the approvers, and
+  // deliberately leaves the status alone so the existing approval step is
+  // untouched. An approver can still approve a quotation nobody recommended.
+  const handleRecommend = async () => {
+    const note = window.prompt('Recommendation note for the approving authority (optional):', '');
+    if (note === null) return;
+    setBusy(true);
+    try {
+      await updateDocument('quotations', q.id, {
+        recommendedBy: myEmail,
+        recommendedByName: meName,
+        recommendedAt: nowIso(),
+        recommendNote: note.trim(),
+      });
+      notify(quotationApprovers(users), 'Quotation Recommended',
+        `${meName} recommended ${quotationRef(q)} for "${lead.name}"`
+        + `${note.trim() ? ' — ' + note.trim() : ''}. It is still awaiting your approval.`);
+      toast('Recommended — the approving authorities have been told');
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
+  };
+
+  /* ── Edit before approval (2-Oct) ─────────────────────────────────────── */
+  // Editing in place, without bumping the revision — that is what "Create
+  // Revision" is for. Only open while the quotation is still Pending, or once
+  // it has come back Rejected or Not Accepted.
+  const openEdit = () => setForm({ mode: 'edit', data: { ...q } });
+
+  /* ── The customer's acceptance, as a screenshot ───────────────────────── */
+  const handleProof = async (file) => {
+    if (!file) return;
+    if (!/^image\//.test(file.type) && file.type !== 'application/pdf') {
+      toast('Attach the screenshot as an image (or a PDF)', 'er'); return;
+    }
+    if (file.size > 10 * 1024 * 1024) { toast('That file is larger than 10MB', 'er'); return; }
+    setProofBusy(true);
+    try {
+      const up = await apiUpload(file, 'acceptance');
+      await updateDocument('quotations', q.id, {
+        acceptanceProofUrl: up.url,
+        acceptanceProofName: file.name,
+        acceptanceProofAt: nowIso(),
+        acceptanceProofBy: myEmail,
+        acceptanceProofByName: meName,
+      });
+      notify(quotationApprovers(users), 'Customer Acceptance Proof Attached',
+        `${meName} attached the customer's acceptance for ${quotationRef(q)} ("${lead.name}").`);
+      toast('Acceptance proof saved');
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setProofBusy(false); }
+  };
+
   const handleUseActualBOM = async () => {
     // All of the lead's purchase orders, not just the first one found — a lead
     // split across two POs was quoting only half its materials.
@@ -304,6 +385,13 @@ export default function QuotationPanel({ lead }) {
     finally { setPdfBusy(''); }
   };
 
+  // Print and View are the same document; print opens it with the browser's
+  // own print dialog one press away, which is what a PDF viewer gives us.
+  const handlePrintPdf = () => withPdf('print', (built) => {
+    openInNewTab(built.absoluteUrl);
+    toast('Quotation PDF opened — use your browser\u2019s print button');
+  });
+
   const handleOpenPdf = () => withPdf('open', (built) => {
     openInNewTab(built.absoluteUrl);
     toast('Quotation PDF opened in a new tab');
@@ -314,7 +402,18 @@ export default function QuotationPanel({ lead }) {
     toast(`Downloaded ${built.name}`);
   });
 
+  // Reqs 1 and 12 — nothing goes to the customer until the quotation has been
+  // through the approval the workflow requires. The recommendation is optional
+  // and is not part of this gate; the approval is what counts.
+  const approvedForCustomer = [QT_STATUS.APPROVED, QT_STATUS.SHARED, QT_STATUS.ACCEPTED].includes(q.status);
+
   const handleWhatsApp = () => {
+    if (!approvedForCustomer) {
+      toast(q.status === QT_STATUS.REJECTED
+        ? 'This quotation was rejected — edit it and send it back for approval before sharing.'
+        : 'This quotation has not been approved yet. It can be sent to the customer once an approver signs it off.', 'er');
+      return;
+    }
     const stop = quotationReadyToShare(q);
     if (stop) { toast(stop, 'er'); return; }
     withPdf('whatsapp', async () => {
@@ -341,6 +440,11 @@ export default function QuotationPanel({ lead }) {
     );
   }
 
+  const mayRecommend = canRecommendQuotation(q, lead, user, role, users);
+  const mayEdit = canEditQuotation(q, lead, user, role, users);
+  const maySeeProof = canSeeAcceptanceProof(q, lead, user, role, users);
+  const mayAddProof = canUploadAcceptanceProof(q, lead, user, role, users);
+
   const calc = calcQuotation(q);
   const due = quotationDue(q);
   const overdue = isOverdue(q);
@@ -356,8 +460,12 @@ export default function QuotationPanel({ lead }) {
           {q.bomSource === 'po' && <span className="st st-b" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Actual BOM</span>}
         </div>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-          <button className="btn bsm bo" onClick={() => printQuotation(q)} title="Print the quotation">
-            <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print
+          {/* Print opens the same PDF as View and Download. It used to open a
+              separate HTML copy of the quotation, which is why Print and View
+              could show different layouts. */}
+          <button className="btn bsm bo" onClick={handlePrintPdf} disabled={!!pdfBusy} title="Open the quotation PDF ready to print">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>print</span>
+            {pdfBusy === 'print' ? 'Building…' : 'Print'}
           </button>
           <button className="btn bsm bo" onClick={handleOpenPdf} disabled={!!pdfBusy} title="Open the quotation as a PDF file">
             <span className="material-icons-round" style={{ fontSize: 16 }}>picture_as_pdf</span>
@@ -367,11 +475,17 @@ export default function QuotationPanel({ lead }) {
             <span className="material-icons-round" style={{ fontSize: 16 }}>download</span>
             {pdfBusy === 'download' ? 'Building…' : 'Download'}
           </button>
-          <button className="btn bsm bo" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}
+          <button className="btn bsm bo"
+            style={{
+              color: approvedForCustomer ? '#25d366' : 'var(--muted)',
+              borderColor: approvedForCustomer ? 'rgba(37,211,102,.3)' : 'var(--bor)',
+            }}
             onClick={handleWhatsApp} disabled={!!pdfBusy}
-            title={canShareFiles()
-              ? 'Send the quotation PDF to this lead on WhatsApp'
-              : 'Open WhatsApp for this lead with the quotation PDF link'}>
+            title={!approvedForCustomer
+              ? 'The quotation has to be approved before it goes to the customer'
+              : canShareFiles()
+                ? 'Send the quotation PDF to this lead on WhatsApp'
+                : 'Open WhatsApp for this lead with the quotation PDF link'}>
             <span className="material-icons-round" style={{ fontSize: 16 }}>share</span>
             {pdfBusy === 'whatsapp' ? 'Preparing…' : 'Send on WhatsApp'}
           </button>
@@ -412,6 +526,21 @@ export default function QuotationPanel({ lead }) {
 
       {/* Workflow actions for the current stage */}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 14 }}>
+        {/* The Team Leader's recommendation — advisory, and never a substitute
+            for the approval that follows it. */}
+        {mayRecommend && (
+          <button className="btn bsm bo" disabled={busy} onClick={handleRecommend}
+            style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}
+            title="Recommend this quotation to the approving authority">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>thumb_up_alt</span> Recommend
+          </button>
+        )}
+        {/* Edit in place, while the quotation is still open to change. */}
+        {mayEdit && (
+          <button className="btn bsm bo" disabled={busy} onClick={openEdit} title="Edit this quotation">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit
+          </button>
+        )}
         {q.status === QT_STATUS.PENDING && isApprover && (
           <>
             <button className="btn bsm bp" disabled={busy} onClick={handleApprove}>
@@ -478,10 +607,62 @@ export default function QuotationPanel({ lead }) {
         </div>
       )}
 
+      {/* Recommended, and still waiting on an approver. */}
+      {q.recommendedBy && q.status === QT_STATUS.PENDING && (
+        <div style={{ background: 'rgba(108,92,231,.07)', border: '1px solid rgba(108,92,231,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#4834a4', marginBottom: 12 }}>
+          <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>thumb_up_alt</span>
+          Recommended by <strong>{q.recommendedByName || q.recommendedBy}</strong> on {formatDate(q.recommendedAt)}
+          {q.recommendNote ? ` — ${q.recommendNote}` : ''}. Still awaiting approval.
+        </div>
+      )}
+
       {q.status === QT_STATUS.ACCEPTED && (
         <div style={{ background: 'rgba(39,174,96,.08)', border: '1px solid rgba(39,174,96,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#1e8449', marginBottom: 12 }}>
           <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>check_circle</span>
           Accepted on {formatDate(q.acceptedAt)} — the next stages (PO → BOM) are open on the Purchase Orders tab.
+        </div>
+      )}
+
+      {/* The customer's acceptance, as they sent it. Shown only to the people
+          with a part in the sale — see canSeeAcceptanceProof(). */}
+      {q.status === QT_STATUS.ACCEPTED && maySeeProof && (
+        <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span className="material-icons-round" style={{ fontSize: 17, color: 'var(--pri)' }}>verified</span>
+            <strong style={{ fontSize: '.84rem' }}>Acceptance Proof</strong>
+            {q.acceptanceProofUrl ? (
+              <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>
+                attached by {q.acceptanceProofByName || q.acceptanceProofBy || 'someone'} on {formatDate(q.acceptanceProofAt)}
+              </span>
+            ) : (
+              <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>
+                the customer&rsquo;s &ldquo;OK&rdquo; from WhatsApp, as a screenshot
+              </span>
+            )}
+            <span style={{ flex: 1 }} />
+            {mayAddProof && (
+              <label className="btn bsm bo" style={{ cursor: proofBusy ? 'default' : 'pointer', margin: 0 }}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>upload</span>
+                {proofBusy ? 'Uploading…' : (q.acceptanceProofUrl ? 'Replace' : 'Proof')}
+                <input type="file" accept="image/*,application/pdf" disabled={proofBusy} style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; handleProof(f); }} />
+              </label>
+            )}
+          </div>
+          {isSafeUrl(q.acceptanceProofUrl) && (
+            <div style={{ marginTop: 8 }}>
+              <a href={q.acceptanceProofUrl} target="_blank" rel="noreferrer">
+                <img src={q.acceptanceProofUrl} alt="Customer acceptance"
+                  style={{ maxWidth: 260, maxHeight: 180, objectFit: 'contain', border: '1px solid var(--bor)', borderRadius: 6 }}
+                  onError={e => { e.currentTarget.style.display = 'none'; }} />
+              </a>
+              <div style={{ fontSize: '.76rem', marginTop: 4 }}>
+                <a href={q.acceptanceProofUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>
+                  {q.acceptanceProofName || 'Open the proof'}
+                </a>
+              </div>
+            </div>
+          )}
         </div>
       )}
       {q.status === QT_STATUS.NOT_ACCEPTED && (
@@ -556,6 +737,7 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
   const [f, setF] = useState(form.data);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const isRevision = form.mode === 'revise';
+  const isEdit = form.mode === 'edit';
   const calc = calcQuotation(f);
   // The BOM follows the kW until the actual PO BOM has been pulled in.
   const syncBom = (kw) => {
@@ -567,7 +749,8 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
     { leads, customers, leadId: lead.id });
 
   return (
-    <Modal title={isRevision ? `Revise Quotation — ${f.quotationNumber} R${f.revision}` : 'Create Quotation'} onClose={onClose} wide>
+    <Modal title={isRevision ? `Revise Quotation — ${f.quotationNumber} R${f.revision}`
+      : isEdit ? `Edit Quotation — ${f.quotationNumber}` : 'Create Quotation'} onClose={onClose} wide>
       <form onSubmit={e => { e.preventDefault(); if (!busy) onSave(f); }}>
         <div className="mb">
           <div className="fr3">
@@ -653,7 +836,8 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
         <div className="mf">
           <button type="button" className="btn bo" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="submit" className="btn bp" disabled={busy}>
-            {busy ? 'Saving…' : (isRevision ? `Save Revision R${f.revision}` : 'Create & Send for Approval')}
+            {busy ? 'Saving…' : isRevision ? `Save Revision R${f.revision}`
+              : isEdit ? 'Save Changes' : 'Create & Send for Approval'}
           </button>
         </div>
       </form>

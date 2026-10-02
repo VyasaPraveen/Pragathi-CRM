@@ -519,3 +519,174 @@ export function hasModule(user, role, key) {
   if (p && typeof p === 'object' && p[key] !== undefined && p[key] !== null) return !!p[key];
   return defaultModuleAllowed(role, key);
 }
+
+// ── Quotation: Team Leader recommendation and the edit window (2-Oct) ───────
+//
+// A quotation is approved by any ONE of Admin / Operation Manager /
+// Management / Owner. The Team Leader of the person the lead sits with may now
+// *recommend* it first. That is advisory only: it records who recommended it
+// and when, it does not move the quotation's status, and an approver can still
+// approve a quotation nobody has recommended. It exists so the leader's view
+// is on the record before the office decides.
+//
+// Deliberately keyed off the team structure rather than a named person, so it
+// keeps working when the team changes.
+
+// Whose quotation is this, as a name or an email?
+export const quotationOwner = (q, lead) =>
+  (q && (q.executiveName || q.executiveEmail)) ||
+  (lead && (lead.assignedTo || lead.salesExecutive)) || '';
+
+// The Team Leader who may recommend this quotation.
+export function quotationLeaderEmail(q, lead, users) {
+  const owner = quotationOwner(q, lead);
+  const key = String(owner || '').trim().toLowerCase();
+  if (!key) return '';
+  const u = (users || []).find(x =>
+    String(x.email || '').toLowerCase() === key ||
+    String(x.displayName || '').trim().toLowerCase() === key);
+  return u ? leaderOf(users, u.email) : '';
+}
+
+export function canRecommendQuotation(q, lead, user, role, users) {
+  if (!q || q.status !== 'Pending Approval') return false;
+  if (q.recommendedBy) return false;                     // once is enough
+  const me = String(user?.email || '').toLowerCase();
+  if (!me) return false;
+  // Nobody recommends their own quotation.
+  const owner = String(quotationOwner(q, lead) || '').trim().toLowerCase();
+  if (owner && (owner === me || owner === String(user?.displayName || '').trim().toLowerCase())) return false;
+  const leader = quotationLeaderEmail(q, lead, users);
+  if (leader && leader === me) return true;
+  // A Team Leader with members of their own stands in when the quotation has
+  // no leader on file; the approving authorities never need this route.
+  return normalizeRole(role) === 'team_leader' && isTeamLeader(users, user?.email) && !leader;
+}
+
+// The statuses a quotation may still be edited in. Once it is approved,
+// shared or accepted it is fixed; a rejection or a revision opens it again.
+export const QUOTATION_EDITABLE_STATUSES = ['Pending Approval', 'Rejected', 'Not Accepted'];
+
+export function canEditQuotation(q, lead, user, role, users) {
+  if (!q) return false;
+  if (!QUOTATION_EDITABLE_STATUSES.includes(q.status)) return false;
+  if (hasAccess(role, 'admin')) return true;             // Admin / Management / Owner
+  if (can(role, ACTIONS.QUOTATION_APPROVE)) return true; // Operation Manager
+  const me = String(user?.email || '').toLowerCase();
+  const myName = String(user?.displayName || '').trim().toLowerCase();
+  const owner = String(quotationOwner(q, lead) || '').trim().toLowerCase();
+  if (owner && (owner === me || owner === myName)) return true;
+  if (String(q.raisedBy || '').toLowerCase() === me) return true;
+  // The Team Leader of whoever holds it.
+  const leader = quotationLeaderEmail(q, lead, users);
+  return !!leader && leader === me;
+}
+
+// ── Who may see the customer's acceptance proof (2-Oct) ─────────────────────
+// The screenshot of the customer's "OK" is kept with the quotation, and is for
+// the people with a part in the sale: whoever it is assigned to, their Team
+// Leader, and the approving authorities. Nobody else.
+export function canSeeAcceptanceProof(q, lead, user, role, users) {
+  if (!q) return false;
+  if (QUOTATION_APPROVER_ROLES.includes(normalizeRole(role))) return true;
+  const me = String(user?.email || '').toLowerCase();
+  const myName = String(user?.displayName || '').trim().toLowerCase();
+  if (!me) return false;
+  const owner = String(quotationOwner(q, lead) || '').trim().toLowerCase();
+  if (owner && (owner === me || owner === myName)) return true;
+  if (String(q.raisedBy || '').toLowerCase() === me) return true;
+  if (String(q.acceptanceProofBy || '').toLowerCase() === me) return true;
+  const leader = quotationLeaderEmail(q, lead, users);
+  return !!leader && leader === me;
+}
+
+// Who may attach it: the same people, but not the whole approver bench —
+// it is the assigned person's job, with their leader and Admin able to help.
+export function canUploadAcceptanceProof(q, lead, user, role, users) {
+  if (!q || q.status !== 'Accepted') return false;
+  return canSeeAcceptanceProof(q, lead, user, role, users);
+}
+
+// ── Purchase Orders raised from a lead (2-Oct) ──────────────────────────────
+//
+// A PO used to be addable and editable only by the roles on PO_RECORD
+// (Operation Manager, Admin, Warehouse Admin, Sales Manager). That left out the
+// two people closest to the job: the executive the lead is assigned to, and
+// their Team Leader — so raising a PO meant asking someone else to do it.
+//
+// These three keep the existing role rules exactly as they were and add the
+// lead's own people on top. An explicit "New PO: off" set by an Admin in
+// Permission Management still wins, because that is a deliberate instruction.
+
+// Is this person the one the lead sits with?
+export function isLeadOwner(lead, user) {
+  const me = String(user?.email || '').toLowerCase();
+  const myName = String(user?.displayName || '').trim().toLowerCase();
+  if (!me && !myName) return false;
+  return [lead?.assignedTo, lead?.salesExecutive, lead?.teamLeader]
+    .map(v => String(v || '').trim().toLowerCase())
+    .some(v => v !== '' && (v === me || v === myName));
+}
+
+// The Team Leader of whoever holds the lead.
+export function leadLeaderEmail(lead, users) {
+  const owner = String(lead?.assignedTo || lead?.salesExecutive || '').trim().toLowerCase();
+  if (!owner) return '';
+  const u = (users || []).find(x =>
+    String(x.email || '').toLowerCase() === owner ||
+    String(x.displayName || '').trim().toLowerCase() === owner);
+  return u ? leaderOf(users, u.email) : '';
+}
+
+export const isLeadLeader = (lead, user, users) => {
+  const me = String(user?.email || '').toLowerCase();
+  const leader = leadLeaderEmail(lead, users);
+  return !!me && !!leader && leader === me;
+};
+
+// An Admin switching "New PO" off for someone is an instruction, not a default.
+const poExplicitlyDenied = (user, role) => {
+  if (role === 'super_admin' || hasAccess(role, 'admin')) return false;
+  const p = user && user.permissions;
+  return !!(p && typeof p === 'object' && p.new_po !== undefined && p.new_po !== null && !p.new_po);
+};
+
+export function canAddLeadPO(lead, user, role, users) {
+  if (poExplicitlyDenied(user, role)) return false;
+  if (can(role, ACTIONS.PO_RECORD)) return true;          // the roles that always could
+  if (hasAccess(role, 'admin')) return true;              // Admin / Management / Owner
+  if (isLeadOwner(lead, user)) return true;               // the person it is assigned to
+  return isLeadLeader(lead, user, users);                 // and their Team Leader
+}
+
+// Before final approval a PO is still a draft, so the people above may correct
+// it. Once it is approved it is fixed — and a rejection or a revision, which
+// put it back to Unapproved, open it again.
+export const PO_EDITABLE_STATUSES = [PO_STATUS.UNAPPROVED, PO_STATUS.RECOMMENDED, PO_STATUS.MANAGEMENT_APPROVED, 'Rejected', ''];
+
+export function canEditLeadPO(po, lead, user, role, users) {
+  const status = (po && po.status) || PO_STATUS.UNAPPROVED;
+  if (status === PO_STATUS.APPROVED) return false;        // approved is final
+  if (!PO_EDITABLE_STATUSES.includes(status)) return false;
+  return canAddLeadPO(lead, user, role, users);
+}
+
+// Recommending is the Team Leader's step. The Operation Manager and Admin keep
+// it too, as they always had it, and nobody recommends a PO they raised.
+export function canRecommendLeadPO(po, lead, user, role, users) {
+  const status = (po && po.status) || PO_STATUS.UNAPPROVED;
+  if (status !== PO_STATUS.UNAPPROVED) return false;
+  const me = String(user?.email || '').toLowerCase();
+  if (me && String(po?.createdBy || '').toLowerCase() === me) {
+    // Raising and recommending your own PO is not a review; the roles that
+    // own the step by seniority may still do it.
+    return can(role, ACTIONS.PO_RECOMMENDATION);
+  }
+  if (can(role, ACTIONS.PO_RECOMMENDATION)) return true;
+  return isLeadLeader(lead, user, users);
+}
+
+// Who hears that an approved PO is ready to dispatch.
+export const WAREHOUSE_ROLES = ['warehouse_admin', 'technical_manager'];
+export const warehouseUsers = (users) =>
+  (users || []).filter(u => u.approved !== false && WAREHOUSE_ROLES.includes(normalizeRole(u.role)));

@@ -241,6 +241,49 @@ function enforce_create(string $collection, array $claims): void {
 }
 
 // Enforce the approval-chain transitions server-side (can't be forged via API).
+// The Team Leader of whoever a lead is assigned to, or '' if there is no
+// lead, no assignee, or no leader. Two small lookups, done only when a PO
+// recommendation is actually being attempted.
+// Patches the system makes to a quotation that are not edits to the quoted
+// figures: the BOM carried over from the confirmed purchase order, the Team
+// Leader's recommendation, and the customer's acceptance proof. These are
+// allowed whatever stage the quotation has reached.
+function quotation_system_patch(array $patch): bool {
+  static $allowed = [
+    'bomItems', 'bomSource', 'poId', 'poIds',
+    'recommendedBy', 'recommendedByName', 'recommendedAt', 'recommendNote',
+    'acceptanceProofUrl', 'acceptanceProofName', 'acceptanceProofAt',
+    'acceptanceProofBy', 'acceptanceProofByName',
+  ];
+  if (!$patch) return false;
+  foreach (array_keys($patch) as $k) {
+    if (!in_array($k, $allowed, true)) return false;
+  }
+  return true;
+}
+
+function lead_team_leader(string $leadId): string {
+  if ($leadId === '') return '';
+  try {
+    $st = db()->prepare('SELECT data FROM `leads` WHERE id = ? LIMIT 1');
+    $st->execute([$leadId]);
+    $row = $st->fetch();
+    if (!$row) return '';
+    $lead = json_decode((string)$row['data'], true);
+    if (!is_array($lead)) return '';
+    $owner = trim((string)($lead['assignedTo'] ?? ($lead['salesExecutive'] ?? '')));
+    if ($owner === '') return '';
+    // The lead stores a display name; the team structure is keyed by email.
+    $us = db()->prepare('SELECT email FROM `users` WHERE LOWER(display_name) = ? OR LOWER(email) = ? LIMIT 1');
+    $us->execute([strtolower($owner), strtolower($owner)]);
+    $u = $us->fetch();
+    if (!$u) return '';
+    return team_leader_of((string)$u['email']);
+  } catch (Throwable $e) {
+    return '';
+  }
+}
+
 function enforce_status_transition(string $collection, string $role, array $patch, array $existing, string $email = ''): void {
   // ── Quotations: the revision ladder is enforced here, not in the browser ──
   // The main number never changes; revisions run R1 → R3, one step at a time,
@@ -284,17 +327,45 @@ function enforce_status_transition(string $collection, string $role, array $patc
       }
       return;
     }
-    static $initialOnly = ['expenditures' => 'Requested', 'paymentRequests' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'leadPOs' => 'Unapproved', 'purchaseOrders' => 'Draft'];
-    if (isset($initialOnly[$collection]) && $role !== 'super_admin' && !has_access($role, 'admin')) {
-      $cur = $existing['status'] ?? $initialOnly[$collection];
-      if ($cur !== $initialOnly[$collection]) fail(403, 'This record has entered its approval workflow and can no longer be edited.');
+    // A quotation may be corrected while it is still awaiting approval, or
+    // once it has come back Rejected or Not Accepted. Approved, Shared and
+    // Accepted are fixed. The system's own patches below are exempt.
+    if ($collection === 'quotations' && !quotation_system_patch($patch)
+        && $role !== 'super_admin' && !has_access($role, 'admin')) {
+      $cur = (string)($existing['status'] ?? 'Pending Approval');
+      if (!in_array($cur, ['Pending Approval', 'Rejected', 'Not Accepted'], true)) {
+        fail(403, 'This quotation has been approved and can no longer be edited. Create a revision instead.');
+      }
+    }
+
+    // A purchase order may be corrected right up to final approval — that is
+    // the point at which it becomes an order. It used to lock as soon as it
+    // was recommended, which left no way to fix a PO that came back for a
+    // change without an Admin doing it.
+    static $lockedAt = ['expenditures' => 'Requested', 'paymentRequests' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'purchaseOrders' => 'Draft'];
+    if ($collection === 'leadPOs' && $role !== 'super_admin' && !has_access($role, 'admin')) {
+      if (($existing['status'] ?? 'Unapproved') === 'Approved') {
+        fail(403, 'This purchase order has been approved and can no longer be edited.');
+      }
+    }
+    if (isset($lockedAt[$collection]) && $role !== 'super_admin' && !has_access($role, 'admin')) {
+      $cur = $existing['status'] ?? $lockedAt[$collection];
+      if ($cur !== $lockedAt[$collection]) fail(403, 'This record has entered its approval workflow and can no longer be edited.');
     }
     return;
   }
   $to = $patch['status'];
 
   if ($collection === 'leadPOs' || $collection === 'purchaseOrders') {
-    if ($to === 'Recommended'          && !can($role, 'po_recommendation'))      fail(403, 'Not authorised to recommend POs');
+    if ($to === 'Recommended' && !can($role, 'po_recommendation')) {
+      // The Team Leader of the person the lead is assigned to may recommend it
+      // as well as the roles that always could. Looked up only here, because
+      // this is the one step that needs to know.
+      $tl = lead_team_leader((string)($existing['leadId'] ?? ''));
+      if ($tl === '' || $tl !== strtolower(trim($email))) {
+        fail(403, 'Only this lead\'s Team Leader, the Operation Manager or an Admin can recommend this PO');
+      }
+    }
     if ($to === 'Management Approved'  && !can($role, 'po_management_approval')) fail(403, 'Only Management can grant this approval');
     if ($to === 'Approved'             && !can($role, 'po_approval'))            fail(403, 'Not authorised to approve POs');
     // Management approval is mandatory before final approval

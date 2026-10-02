@@ -16,7 +16,8 @@
 //   goes to the assigned Executive's "Pending Follow-up" list.
 // ============================================================================
 
-import { escapeHtml, openHtmlSafely, toNumber } from './helpers';
+import { toNumber } from './helpers';
+import { sortQuoteBomRows } from './bomOrder';
 
 // ── Workflow states ─────────────────────────────────────────────────────────
 export const QT_STATUS = {
@@ -231,7 +232,9 @@ export function bomFromLeadPOs(pos, leadId) {
     if (at == null) { seen.set(key, out.length); out.push({ ...row }); return; }
     out[at].quantity = mergeQuantity(out[at].quantity, row.quantity);
   }));
-  return out;
+  // In the order the printed BOM sheet lists them, not the order the purchase
+  // orders happened to be raised in.
+  return sortQuoteBomRows(out);
 }
 
 // "12 Nos" + "4 Nos" = "16 Nos". Anything that is not a plain number in the
@@ -319,164 +322,15 @@ export function followUpDueSoon(lead, now = new Date()) {
 }
 
 // ── The printed quotation ───────────────────────────────────────────────────
-const money = (n) => '₹' + Number(toNumber(n)).toLocaleString('en-IN');
-
-// The static marketing pages, in the order of the reference proposal.
-const STATIC_PAGES = [
-  'p2-netmetering', 'p3-schematic', 'p4-generation', 'p5-comparison',
-];
-
-export function quotationHTML(q, opts = {}) {
-  const e = escapeHtml;
-  const base = opts.assetBase || '/quotation';
-  const calc = calcQuotation(q);
-  const kw = q.kw || '__';
-  const rows = (q.bomItems && q.bomItems.length) ? q.bomItems : defaultQuoteBOM(q.kw);
-  const dateText = new Date(q.date || Date.now()).toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-  const page = (inner, extra = '') => `<section class="pg ${extra}">
-  <img class="lh" src="${base}/letterhead.jpg" alt="Pragathi Power Solutions" />
-  <div class="addr">#19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati 517501, Mob: 9701461156 &nbsp;Website : www.pragathipowersolutions.com</div>
-  <div class="body">${inner}</div>
-  <img class="ft" src="${base}/footer-dealer.jpg" alt="TATA Power Solar Authorised Dealer" />
-</section>`;
-
-  // Page 1 — covering letter
-  const letter = page(`
-  <div class="ref">PPS Ref: ${e(q.ppsRef || '')}</div>
-  <div class="ref">Quotation No: <strong>${e(quotationRef(q))}</strong> &nbsp;·&nbsp; Date: ${e(dateText)}</div>
-  <p class="to">To,<br/>
-  ${e(q.customerName || '')},<br/>
-  ${e([q.customerAddress, q.city, q.district].filter(Boolean).join(', '))}${q.pincode ? ' - ' + e(q.pincode) : ''}<br/>
-  Mob: ${e(q.customerPhone || '')}</p>
-  <p>Sir/Madam,</p>
-  <p class="sub"><strong>Sub:</strong> Tentative Proposal for Solar Power Generating System Req-Reg.</p>
-  <p class="stars">***</p>
-  <p>With reference to the our discussion and site visit with your good selves regarding the
-  requirement of Power Generating Systems, please find enclosed our budgetary proposal for
-  &ldquo;Solar Net metering System&rdquo; for your kind perusal.</p>
-  <p>Hope the details provided by us are in line with your requirement, please feel free to
-  contact for clarifications if any.</p>
-  <p>We assure the best services all the times.</p>
-  <p>Thanking You in Advance for your kind cooperation</p>
-  <p class="sign">Yours truly,<br/>
-  Pragathi Power Solutions,<br/>
-  Authorized Signature<br/>
-  ${e(q.executiveName || 'K. Chandra Sekhar')}${q.executiveId ? ' (' + e(q.executiveId) + ')' : ''}<br/>
-  Mobile : ${e(q.executivePhone || '9701426440')}</p>`);
-
-  // The company's own marketing pages, reproduced unchanged
-  const statics = STATIC_PAGES.map(n =>
-    `<section class="pg full"><img class="fullimg" src="${base}/${n}.jpg" alt="" /></section>`).join('\n');
-
-  // Page 6 — budgetary proposal, generation and payback
-  const proposal = page(`
-  <h3 class="h-ul">Budgetary Proposal for Solar Rooftop as per Site Condition:</h3>
-  <table class="prop">
-    <tr class="hd"><th>Solar Rooftop System<br/>Project Details</th><th class="kw">${e(String(kw))}KW</th></tr>
-    <tr><td>System Cost ( Including GST)</td><td class="num"><strong>${money(q.systemCost)}</strong>${toNumber(q.subsidy) > 0 ? `<div class="sub-amt">-${Number(toNumber(q.subsidy)).toLocaleString('en-IN')}</div>` : ''}</td></tr>
-    <tr><td>Solar Generation (Avg Units p.m)</td><td class="num">${calc.generation}</td></tr>
-    <tr><td>Monthly Avg. EB Savings Rs.${calc.tariff}</td><td class="num">${money(calc.monthlySavings)}</td></tr>
-    <tr><td>Yearly Avg. EB Savings Rs.</td><td class="num">${money(calc.yearlySavings)}</td></tr>
-    <tr><td>ROI / Pay Back ( In Years) by own Funds</td><td class="num">${calc.paybackYears.toFixed(2)}</td></tr>
-    <tr><td>ROI / Pay Back by Bank Loan @${Math.round((q.loanRate == null ? DEFAULT_LOAN_RATE : toNumber(q.loanRate)) * 100)}%</td><td class="num">${calc.paybackLoanYears.toFixed(2)}</td></tr>
-    <tr><td class="hd2">Additional Charges/Customer Scope :</td><td></td></tr>
-    <tr><td class="red">- CEIG &amp; SPDCL Grid Synchronization(except formalities)</td><td class="num red"><strong>Actuals</strong></td></tr>
-    <tr><td class="red">- Any Civil Works / Elevated Structure</td><td class="num red"><strong>Actuals</strong></td></tr>
-    <tr><td class="red">- UPVC Pipes , Additional Relay &amp; If any other than BOS Materials</td><td class="num red"><strong>Actuals</strong></td></tr>
-    <tr><td colspan="2" class="scope"><strong>Pragathi Scope</strong><br/>-Supply&amp;Installation as per BOM</td></tr>
-    <tr><td colspan="2" class="terms">
-      <strong>General Terms and Conditions for Supply</strong>:
-      <div class="tl2"><span>a.&nbsp; Taxes</span><span>: ${e(q.gstNote || 'GST 8.9 % Applicable')}</span></div>
-      <div class="tl2"><span>b.&nbsp; Payment Terms</span><span>: ${e(q.paymentTerms || '100% Along with PO')}</span></div>
-      <div class="tl2"><span>c.&nbsp; Delivery Time</span><span>: ${e(q.deliveryTime || '20-30 Days for Material & next 30 Days for Project Completion')}</span></div>
-      <div class="tl2"><span>d.&nbsp; Warranty</span><span>: ${e(upgradeWarranty(q.warranty) || WARRANTY_TERMS)}</span></div>
-      <div class="tl2"><span>e.&nbsp; Offer Validity</span><span>: Validity of the present offer for ${toNumber(q.validityDays) || 15} Days Only</span></div>
-      <div class="opt"><strong>OPTION - II</strong><br/>${e(q.optionTwo || 'Waree / Adani / Kirloskar / Luminous')}</div>
-    </td></tr>
-  </table>
-  <h4 class="h-ul">Our Bank NEFT Details:</h4>
-  <p class="bank">PRAGATHI POWER SOLUTIONS,<br/>STATE BANK OF INDIA,<br/>Current A/C NO: 33599271521<br/>IFSC Code: SBIN0010677<br/>RAMANUJA CIRCLE BRANCH, TIRUPATHI-01.</p>`);
-
-  // Page 7 — Bill of Materials
-  const bomRows = rows.map((r, i) => {
-    const img = bomImageFor(r.material);
-    return `<tr>
-      <td class="sl">${i + 1}</td>
-      <td class="mat">${e(r.material || '')}</td>
-      <td class="pic">${img ? `<img src="${base}/bom-${img}.jpg" alt="" />` : ''}</td>
-      <td>${e(r.specification || '')}</td>
-      <td>${e(String(r.quantity ?? ''))}</td>
-      <td>${e(upgradeWarranty(r.warranty) || 'NA')}</td>
-    </tr>`;
-  }).join('');
-  const bom = page(`
-  <h3 class="h-ul">Bill of Materials</h3>
-  ${q.bomSource === 'po' ? '<p class="bomnote">As per the confirmed Purchase Order.</p>' : ''}
-  <table class="bom">
-    <thead><tr><th>S.No</th><th>Material Details</th><th></th><th>Specification</th><th>Quantity</th><th>Warranty/ Gaurantee</th></tr></thead>
-    <tbody>${bomRows}</tbody>
-  </table>
-  <p class="bomcount">${rows.length} material${rows.length === 1 ? '' : 's'} in this Bill of Materials.</p>`);
-
-  const benefits = `<section class="pg full"><img class="fullimg" src="${base}/p8-benefits.jpg" alt="" /></section>`;
-
-  return `<!DOCTYPE html><html><head><meta charset="utf-8" />
-<title>Quotation ${e(quotationRef(q))} - ${e(q.customerName || '')}</title>
-<style>
-*{box-sizing:border-box}
-body{font-family:Calibri,'Segoe UI',Arial,sans-serif;margin:0;background:#e9e9e9;color:#000;font-size:13px}
-.pg{width:210mm;min-height:297mm;background:#fff;margin:10px auto;padding:10mm 12mm;position:relative;border:1px solid #333;page-break-after:always;display:flex;flex-direction:column}
-.pg.full{padding:0;border:none}
-.fullimg{width:100%;height:auto;display:block}
-.lh{width:100%;display:block}
-.addr{border-bottom:2px solid #000;font-size:10.5px;padding:2px 0 4px;margin-bottom:10px}
-.body{flex:1}
-.ft{width:62%;margin:14px auto 0;display:block}
-.ref{font-size:12.5px;margin-bottom:2px}
-.to{margin:14px 0;line-height:1.5}
-.sub{margin:10px 0}
-.stars{text-align:center;margin:2px 0}
-p{line-height:1.6;margin:8px 0;text-align:justify}
-.sign{margin-top:26px;line-height:1.5;text-align:left}
-.h-ul{color:#1f3864;text-decoration:underline;font-size:15px;margin:4px 0 10px}
-h4.h-ul{margin-top:16px;font-size:14px}
-table{width:100%;border-collapse:collapse}
-.prop td,.prop th{border:1px solid #444;padding:5px 8px;font-size:12.5px;vertical-align:middle}
-.prop tr.hd th{background:#1f9ad6;color:#fff;text-align:center;font-size:15px;padding:10px}
-.prop tr.hd th.kw{width:22%;font-size:17px}
-.prop td.num{text-align:right;font-weight:600;width:22%}
-.sub-amt{color:#1f9ad6;font-weight:400;font-size:11.5px}
-.red{color:#c00}
-.hd2{color:#7030a0;font-weight:700;font-size:13.5px}
-.scope{font-size:12.5px}
-.terms{font-size:12px}
-.tl2{display:flex;gap:6px;padding:1px 0 1px 14px}
-.tl2 span:first-child{min-width:120px}
-.opt{color:#00f;margin-top:8px;font-weight:600}
-.opt+*{color:#00f}
-.bank{font-family:'Times New Roman',serif;font-size:13.5px;line-height:1.5;text-align:left}
-.bom th,.bom td{border:1px solid #444;padding:6px;font-size:12px;text-align:center;vertical-align:middle}
-.bom thead th{font-weight:700}
-.bom td.sl{width:6%}
-.bom td.mat{text-align:left;width:20%}
-.bomcount{font-size:11px;color:#555;margin:6px 0 0;text-align:right}
-.bom td.pic{width:24%}
-.bom td.pic img{max-width:130px;max-height:92px;object-fit:contain}
-.bomnote{font-size:11.5px;color:#1f3864;margin:0 0 6px}
-@media print{body{background:#fff}.pg{margin:0;border:none;width:auto;min-height:auto;padding:8mm 10mm}}
-</style></head><body>
-${letter}
-${statics}
-${proposal}
-${bom}
-${benefits}
-</body></html>`;
-}
-
-export function printQuotation(q) {
-  openHtmlSafely(quotationHTML(q), true);
-}
+// There is no longer an HTML copy of the quotation here.
+//
+// It used to be built twice: this HTML for Print, and the real PDF on the
+// server for View / Download / WhatsApp. The two drifted, so Print produced
+// last month's layout while View produced the current one — the customer could
+// be sent either depending on which button was pressed. Every route now goes
+// through server/api/lib/quotation_pdf.php, which is the only copy.
+//
+// See src/services/quotationShare.js for the client side of that.
 
 // WhatsApp summary of a quotation — what the customer needs at a glance.
 export function quotationWhatsAppText(q) {

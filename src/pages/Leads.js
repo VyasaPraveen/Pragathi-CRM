@@ -8,10 +8,14 @@ import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass
 import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../components/SharedUI';
 import { sharePOWhatsApp } from '../services/poUtils';
 import { openPoPdf, downloadPoPdf, poTerm } from '../services/poShare';
-import { can, ACTIONS, PO_STATUS, advanceGate, hasModule, canSeeLead, salesMembersOf, teamLeaders, quotationApprovers } from '../services/permissions';
+import {
+  can, ACTIONS, PO_STATUS, advanceGate, canSeeLead, salesMembersOf, teamLeaders,
+  quotationApprovers, canAddLeadPO, canEditLeadPO, canRecommendLeadPO, warehouseUsers,
+} from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
 import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
 import { getOptions, withCurrent } from '../services/options';
+import { sortBomItems } from '../services/bomOrder';
 import { buildLeadNotice, leadNotifyTargets } from '../services/leadNotify';
 
 // Lead Reference, Follow-up Status, Priority and Mode of Payment now come from
@@ -766,7 +770,10 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
   };
 
   const handleRecommend = async (po) => {
-    if (!can(role, ACTIONS.PO_RECOMMENDATION)) { toast('You are not authorised to recommend POs', 'er'); return; }
+    if (!canRecommendLeadPO(po, lead, user, role, users)) {
+      toast('Only this lead\u2019s Team Leader, the Operation Manager or an Admin can recommend this PO', 'er');
+      return;
+    }
     if (!requireAdvance(po)) return;
     if (!window.confirm('Recommend this PO for approval?')) return;
     try {
@@ -824,6 +831,15 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       // Tell the PO creator it's approved, and notify admins for visibility.
       if (po.createdBy) createNotification({ forUser: po.createdBy, title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       notifyAdmins(users, { title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
+      // Req 15 — and the warehouse, who are the ones who have to act on it.
+      // Without this the approval sat in the office and nobody downstream knew
+      // the material could go out.
+      warehouseUsers(users).forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: 'PO Approved \u2014 ready for dispatch',
+        message: `PO ${po.poNumber || ''} for "${lead.name}" is approved. Please proceed with material dispatch.`,
+        type: 'status_update', module: 'leadPOs', relatedId: po.id,
+      }));
       toast('PO approved');
     } catch (e) { toast(e.message, 'er'); }
   };
@@ -1031,7 +1047,10 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 </div>
               )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-                {can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po') && quoteAccepted !== false && (
+                {/* Req 13 — raising the PO happens here, in the same window as the
+                    quotation. Open to the roles that always had it and, now, to
+                    the person the lead is assigned to and their Team Leader. */}
+                {canAddLeadPO(lead, user, role, users) && quoteAccepted !== false && (
                   <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
                   </button>
@@ -1049,7 +1068,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                         {/* Recommend: Operation Manager / Admin, only Unapproved */}
-                        {(!po.status || po.status === PO_STATUS.UNAPPROVED) && can(role, ACTIONS.PO_RECOMMENDATION) && (
+                        {canRecommendLeadPO(po, lead, user, role, users) && (
                           <button className="btn bsm bo" onClick={() => handleRecommend(po)} style={{ color: '#d68910', borderColor: 'rgba(243,156,18,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>thumb_up</span> Recommend
                           </button>
@@ -1079,7 +1098,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                           <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
                         </button>
                         {/* Edit: non-Approved, PO Record permission (Operation Manager / Admin) */}
-                        {po.status !== PO_STATUS.APPROVED && can(role, ACTIONS.PO_RECORD) && (
+                        {canEditLeadPO(po, lead, user, role, users) && (
                           <button className="btn bsm bo" onClick={() => setPOModal({ data: po, id: po.id })}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span>
                           </button>
@@ -1203,7 +1222,9 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     systemKw: po.systemKw || String(po.kwRequired || lead.kwRequired || '').replace(/[^0-9.]/g, ''),
     phase: po.phase || (toNumber(String(po.kwRequired || lead.kwRequired || '').replace(/[^0-9.]/g, '')) > 5 ? '3' : '1'),
     inverterKw: po.inverterKw || '',
-    vendorName: po.vendorName || 'M/S. Tata Power Solar Systems Limited',
+    // Req 17 — a new purchase order is raised by Pragathi; the supplier is
+    // chosen per order, so the field no longer opens on a supplier's name.
+    vendorName: po.vendorName || 'Pragathi Power Solutions',
     moduleCount: po.moduleCount || '',
     inverterDetails: po.inverterDetails || '',
     plantLocation: po.plantLocation || lead.address || '',
@@ -1267,13 +1288,18 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
       if (hasData && !window.confirm(`Remove "${m.materialName}" and the details entered for it?`)) return;
       setItems(prev => prev.filter(it => it.materialName !== m.materialName));
     } else {
-      setItems(prev => [...prev, { ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }]);
+      // Dropped into its place on the printed sheet, not onto the end of the
+      // list — the BOM is read by serial number, so a material picked last
+      // still has to appear where the sheet expects it.
+      setItems(prev => sortBomItems([...prev, { ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }]));
     }
   };
   const pickAllStandard = () => {
     setItems(prev => {
       const have = new Set(prev.map(it => it.materialName));
-      return [...prev, ...materialCatalogue.filter(m => !have.has(m.materialName)).map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))];
+      return sortBomItems([...prev, ...materialCatalogue
+        .filter(m => !have.has(m.materialName))
+        .map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))]);
     });
   };
   const clearPicked = () => {
@@ -1305,7 +1331,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     const tpl = bomTemplates.find(t => t.id === templateId);
     if (!tpl || !tpl.items) return;
     if (items.some(it => it.materialName) && !window.confirm('This will replace current items. Continue?')) return;
-    setItems(tpl.items.map(it => ({
+    setItems(sortBomItems(tpl.items).map(it => ({
       materialName: it.materialName || '',
       quantity: it.quantity || '',
       unit: it.unit || 'Nos',
@@ -1349,7 +1375,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
           const cleaned = {
             ...f,
             companyScope: f.companyScope || autoScope,
-            items: items.filter(it => it.materialName || it.quantity).map(it => ({
+            items: sortBomItems(items.filter(it => it.materialName || it.quantity)).map(it => ({
               materialName: it.materialName || '',
               make: it.make || '',
               quantity: toNumber(it.quantity),

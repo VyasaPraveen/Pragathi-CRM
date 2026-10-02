@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { formatDate, hasAccess, isSafeUrl, todayStr } from '../services/helpers';
 import { teamMembersOf } from '../services/permissions';
-import { EmptyState } from './SharedUI';
+import { EmptyState, DateInput } from './SharedUI';
 import {
   teamMonthReport, teamToday, attendanceMonths, previousMonth, monthLabel,
 } from '../services/attendance';
@@ -33,6 +33,9 @@ export default function TeamAttendancePanel() {
   const today = todayStr();
   const [month, setMonth] = useState(today.slice(0, 7));
   const [openMember, setOpenMember] = useState('');
+  // The date the calendar card is looking at. It opens on today, so the
+  // screen reads exactly as it did before anyone touches it.
+  const [pickedDate, setPickedDate] = useState(today);
 
   // A Team Leader sees their own members. Anyone at manager level or above is
   // answerable for everybody, so they see every approved account.
@@ -48,6 +51,8 @@ export default function TeamAttendancePanel() {
 
   const months = useMemo(() => attendanceMonths(attendance, members, today), [attendance, members, today]);
   const roll = useMemo(() => teamToday(attendance, members, today), [attendance, members, today]);
+  // The same roll-call, for whichever day was chosen.
+  const picked = useMemo(() => teamToday(attendance, members, pickedDate), [attendance, members, pickedDate]);
   const report = useMemo(() => teamMonthReport(attendance, members, month), [attendance, members, month]);
   const lastMonth = previousMonth(today.slice(0, 7));
 
@@ -60,6 +65,81 @@ export default function TeamAttendancePanel() {
 
   return (
     <>
+      {/* ── Attendance by date ────────────────────────────────────────────
+          An addition, not a replacement: the Today card below is untouched and
+          this opens on today, so nothing looks different until a date is
+          picked. Any date can be chosen, including ones still to come — those
+          simply show nobody marked yet. */}
+      <div className="card" style={{ marginBottom: 16 }}><div className="cb">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+          <strong style={{ fontSize: '.95rem' }}>
+            <span className="material-icons-round" style={{ fontSize: 18, verticalAlign: '-4px', marginRight: 6, color: 'var(--pri)' }}>calendar_month</span>
+            Attendance by Date
+          </strong>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            {pickedDate !== today && (
+              <button className="btn bsm bo" onClick={() => setPickedDate(today)}>Today</button>
+            )}
+            <div style={{ width: 170 }}>
+              <DateInput value={pickedDate} onChange={e => setPickedDate(e.target.value || today)} />
+            </div>
+          </div>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10, marginBottom: 12 }}>
+          {[
+            ['Present', picked.marked, '#27ae60'],
+            ['Still On Site', picked.onSite, 'var(--pri)'],
+            ['Not Marked', picked.notMarked, picked.notMarked ? '#c0392b' : 'var(--muted)'],
+            [seesEveryone ? 'Staff' : 'Team Members', members.length, '#6c5ce7'],
+          ].map(([label, val, color]) => (
+            <div key={label} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: '10px 12px', textAlign: 'center' }}>
+              <div style={{ fontSize: '1.3rem', fontWeight: 700, color }}>{val}</div>
+              <div style={{ fontSize: '.72rem', color: 'var(--muted)' }}>{label}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ fontSize: '.8rem', color: 'var(--muted)', marginBottom: 8 }}>
+          <strong style={{ color: 'var(--dark)' }}>{picked.marked}</strong> of {members.length}
+          {' '}marked attendance on <strong style={{ color: 'var(--dark)' }}>{formatDate(pickedDate)}</strong>.
+        </div>
+
+        {picked.marked > 0 ? (
+          <div className="tw"><table><thead><tr>
+            <th>Name</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Location</th>
+          </tr></thead><tbody>
+            {picked.rows.filter(r => r.state !== 'Not marked').map(r => {
+              const tone = STATE_TONE[r.state];
+              return (
+                <tr key={r.email || r.name}>
+                  <td><strong>{r.name}</strong></td>
+                  <td><span className="st" style={{ background: tone.bg, color: tone.fg, padding: '2px 8px', fontSize: '.72rem' }}>{r.state}</span></td>
+                  <td style={{ fontSize: '.82rem' }}>{r.in?.time || '-'}</td>
+                  <td style={{ fontSize: '.82rem' }}>{r.out?.time || (r.in ? <span style={{ color: '#e67e22' }}>Still in</span> : '-')}</td>
+                  <td style={{ fontSize: '.8rem' }}>
+                    {r.in?.lat && r.in?.lng
+                      ? <a href={r.in.mapLink || `https://www.google.com/maps?q=${r.in.lat},${r.in.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>View</a>
+                      : '-'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody></table></div>
+        ) : (
+          <div style={{ fontSize: '.84rem', color: 'var(--muted)', padding: '10px 0' }}>
+            Nobody marked attendance on {formatDate(pickedDate)}.
+          </div>
+        )}
+
+        {picked.notMarked > 0 && (
+          <div style={{ fontSize: '.8rem', marginTop: 8, color: '#c0392b' }}>
+            <strong>Not marked ({picked.notMarked}):</strong>{' '}
+            {picked.rows.filter(r => r.state === 'Not marked').map(r => r.name).join(', ')}
+          </div>
+        )}
+      </div></div>
+
       {/* ── Today ─────────────────────────────────────────────────────────── */}
       <div className="card" style={{ marginBottom: 16 }}><div className="cb">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>

@@ -37,9 +37,12 @@ function handle_quotation_pdf(string $method): void {
   $pdf = pps_quotation_pdf($q, $assets);
   if ($pdf === '' || substr($pdf, 0, 4) !== '%PDF') fail(500, 'Could not build the quotation PDF');
 
-  $ref = preg_replace('/[^A-Za-z0-9_-]+/', '-', qpdf_ref($q)) ?: 'quotation';
-  $who = preg_replace('/[^A-Za-z0-9]+/', '-', (string)($q['customerName'] ?? '')) ?: 'customer';
-  $file = trim($ref . '_' . substr($who, 0, 40), '-') . '.pdf';
+  // Req 11 — the file is named after the customer and their village, taken
+  // from the lead, because "Quotation-016.pdf" tells nobody anything once it
+  // is sitting in a WhatsApp thread or a downloads folder.
+  //   Vijay-Badvel.pdf
+  // The quotation reference is kept as a fallback for a record with neither.
+  $file = qpdf_pdf_filename($q);
 
   if (!empty($_GET['download'])) {
     header('Content-Type: application/pdf');
@@ -58,6 +61,7 @@ function handle_quotation_pdf(string $method): void {
 
   json_out([
     'url' => rtrim(cfg()['upload_url_base'], '/') . '/quotations/' . rawurlencode($name),
+    'customerName' => (string)($q['customerName'] ?? ''),
     'name' => $file,
     'bytes' => strlen($pdf),
     'quotationRef' => qpdf_ref($q),

@@ -316,6 +316,10 @@ function MarkModal({ suggestedType, onSave, onClose }) {
   const [canRetry, setCanRetry] = useState(false);
   const [saving, setSaving] = useState(false);
   const [camState, setCamState] = useState('idle');        // idle | starting | live | error
+  // Which way the camera faces. Attendance is a site photo, so the back
+  // camera stays the default; the front one is one tap away for a selfie,
+  // which is what people were missing.
+  const [facing, setFacing] = useState('environment');     // environment | user
   const [camError, setCamError] = useState('');
   const inApp = detectInAppBrowser();
 
@@ -335,7 +339,9 @@ function MarkModal({ suggestedType, onSave, onClose }) {
     if (v) { try { v.pause(); v.srcObject = null; } catch { /* ignore */ } }
   }, []);
 
-  const startCamera = useCallback(async () => {
+  const startCamera = useCallback(async (mode) => {
+    const want = mode === 'user' || mode === 'environment' ? mode : 'environment';
+    setFacing(want);
     setCamError('');
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setCamState('error');
@@ -347,7 +353,9 @@ function MarkModal({ suggestedType, onSave, onClose }) {
       // A 1280x960 frame is plenty for an attendance check and costs a fraction
       // of the memory of a full-resolution capture.
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: MAX_EDGE }, height: { ideal: 960 } },
+        // 'ideal' rather than 'exact': a laptop with one camera still opens
+        // instead of failing outright when the front camera is asked for.
+        video: { facingMode: { ideal: want }, width: { ideal: MAX_EDGE }, height: { ideal: 960 } },
         audio: false,
       });
       streamRef.current = stream;
@@ -370,6 +378,14 @@ function MarkModal({ suggestedType, onSave, onClose }) {
       );
     }
   }, [stopCamera]);
+
+  // Turn the camera round. The running stream has to be released first:
+  // phones will not hand out the second camera while the first still holds it.
+  const switchCamera = useCallback(async () => {
+    const next = facing === 'environment' ? 'user' : 'environment';
+    stopCamera();
+    await startCamera(next);
+  }, [facing, startCamera, stopCamera]);
 
   // Free the camera and any preview the moment this screen goes away — a live
   // stream left running is exactly the sort of thing that starves the tab.
@@ -543,10 +559,22 @@ function MarkModal({ suggestedType, onSave, onClose }) {
             {/* The live camera, kept mounted so the stream has somewhere to go */}
             <div style={{ display: camState === 'live' ? 'block' : 'none' }}>
               <video ref={videoRef} playsInline muted autoPlay
-                style={{ width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, background: '#000' }} />
+                style={{
+                  width: '100%', maxHeight: 260, objectFit: 'cover', borderRadius: 10, background: '#000',
+                  // The front camera is shown mirrored, the way every phone
+                  // shows a selfie. The frame that is saved is not mirrored —
+                  // that one has to be a true picture of who was there.
+                  transform: facing === 'user' ? 'scaleX(-1)' : 'none',
+                }} />
               <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                 <button type="button" className="btn bp" onClick={capture} disabled={uploading} style={{ display: 'inline-flex', gap: 6 }}>
                   <span className="material-icons-round" style={{ fontSize: 18 }}>camera</span> Take photo
+                </button>
+                <button type="button" className="btn bo" onClick={switchCamera} disabled={uploading}
+                  style={{ display: 'inline-flex', gap: 6 }}
+                  title={facing === 'environment' ? 'Switch to the front camera' : 'Switch to the back camera'}>
+                  <span className="material-icons-round" style={{ fontSize: 18 }}>flip_camera_ios</span>
+                  {facing === 'environment' ? 'Front camera' : 'Back camera'}
                 </button>
                 <button type="button" className="btn bo" onClick={() => { stopCamera(); setCamState('idle'); }}>Cancel camera</button>
               </div>

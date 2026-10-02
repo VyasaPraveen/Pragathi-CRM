@@ -24,6 +24,14 @@ const QPDF_UNITS_PER_KW = 141;
 const QPDF_TARIFF      = 8;
 const QPDF_LOAN_RATE   = 0.07;
 
+// The company's authorised signatory. Quotations go out over this name
+// whoever they are assigned to, so it is a constant rather than a field.
+const QPDF_AUTHORISED_SIGNATORY = 'K. Chandrasekhar';
+const QPDF_SIGNATORY_MOBILE = '9701426440';
+// Blank height left between the company name and "Authorized Signature"
+// for the signature to be written in by hand.
+const QPDF_SIGNATURE_GAP = 52.0;
+
 // 1,23,456 — the Indian grouping the rest of the app uses.
 function qpdf_inr($n): string {
   $n = (float)$n;
@@ -138,7 +146,56 @@ function qpdf_bom_image(string $material): string {
   return '';
 }
 
+// Req 11 — what the saved file is called.
+//
+// "<Customer> - <Village>.pdf", e.g. Vijay-Badvel.pdf. The village is the
+// lead's city, falling back to its district. Anything a filesystem or a URL
+// would object to is stripped, and the quotation reference stands in when the
+// record carries neither a name nor a place.
+function qpdf_pdf_filename(array $q): string {
+  $clean = function ($v) {
+    $v = preg_replace('/[^A-Za-z0-9 .&-]+/', ' ', (string)$v);
+    return trim(preg_replace('/\s+/', ' ', $v));
+  };
+  $who = $clean($q['customerName'] ?? '');
+  $where = $clean($q['city'] ?? '');
+  if ($where === '') $where = $clean($q['district'] ?? '');
+
+  $parts = array_values(array_filter([$who, $where], 'strlen'));
+  $name = implode('-', $parts);
+  if ($name === '') $name = $clean(qpdf_ref($q)) ?: 'Quotation';
+  // Keep it short enough for any mail client or filesystem to be happy.
+  if (strlen($name) > 80) $name = rtrim(substr($name, 0, 80));
+  return $name . '.pdf';
+}
+
 // ── the document ────────────────────────────────────────────────────────────
+// The closing page: the benefits of the system and what the modules and the
+// inverter are rated for. Drawn rather than placed as artwork, because the
+// module warranty has to say 30 years and the old page said 25 in a picture.
+const QPDF_BENEFITS = [
+  ['Benefits', [
+    'Hedge against increasing grid prices which have increased by 40% in past 5 years',
+    'Savings in electricity bill for 25 long years',
+    'Expandable - Multiple grid tie inverters may be networked together for increased net metering capacity or future system growth',
+    'Maintenance free system',
+    'Accelerated depreciation benefit - Your rooftop investment is eligible for accelerated depreciation of 80% in first year of commissioning i.e. 30% times 80% of project cost is tax-savings in first year',
+  ]],
+  ['Solar Modules', [
+    'IEC certified modules with 30 years warranty',
+    'Reliability under extreme weather conditions, certified to withstand snow loads of up to 5400 Pa',
+    'Greater energy generated due to positive tolerance',
+  ]],
+  ['Inverter', [
+    'IP-65, environmental protection rating, can withstand extreme weather conditions',
+    'High yield output with maximum efficiency of over 97%',
+    'Wide input voltage range',
+    'Compact Design with easy installation',
+    'In-built anti-islanding feature',
+  ]],
+];
+
+// ── the document ───────────────────────────────────────────────────────────
 function pps_quotation_pdf(array $q, string $assetDir): string {
   $pdf = new PpsPdf();
   $asset = fn(string $n) => rtrim($assetDir, '/\\') . DIRECTORY_SEPARATOR . $n . '.jpg';
@@ -185,14 +242,24 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
 
   // ── Page 1 — covering letter ───────────────────────────────────────────────
   $y = $frame();
-  $pdf->setFont('', 9.5);
-  $pdf->text($L, $y, 'PPS Ref: ' . qpdf_str($q, 'ppsRef'));
-  $y += 13;
-  $pdf->text($L, $y, 'Quotation No: ');
-  $pdf->setFont('B', 9.5);
-  $pdf->text($L + $pdf->widthOf('Quotation No: ') + 1, $y, $ref);
+  // The reference block sits on the right, with the date above it:
+  //   Date
+  //   PPS Ref
+  //   Quotation No
+  // The customer's own details stay on the left, below it.
   $pdf->setFont('', 9.5);
   $pdf->textRight($R, $y, 'Date: ' . $dateText);
+  $y += 13;
+  $pdf->textRight($R, $y, 'PPS Ref: ' . qpdf_str($q, 'ppsRef'));
+  $y += 13;
+  $quoteLabel = 'Quotation No: ';
+  $pdf->setFont('B', 9.5);
+  $refW = $pdf->widthOf($ref);
+  $pdf->setFont('', 9.5);
+  $pdf->text($R - $refW - $pdf->widthOf($quoteLabel), $y, $quoteLabel);
+  $pdf->setFont('B', 9.5);
+  $pdf->textRight($R, $y, $ref);
+  $pdf->setFont('', 9.5);
   $y += 24;
 
   $addr = array_filter([qpdf_str($q, 'customerAddress'), qpdf_str($q, 'city'), qpdf_str($q, 'district')], 'strlen');
@@ -225,14 +292,27 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
     $y = $pdf->textWrap($L, $y, $W, $para, 15) + 8;
   }
 
+  // Req 4 — the authorised signature.
+  //
+  // The name here is the company's authorised signatory and is always
+  // K. Chandrasekhar, whoever the quotation happens to be assigned to. It
+  // used to print executiveName, which is why quotations went out over the
+  // assigned executive's name.
+  //
+  // The gap below the company name is left deliberately empty: the printed
+  // copy is signed by hand there, so nothing may be drawn into it.
   $y += 24;
-  $exec = qpdf_str($q, 'executiveName', 'K. Chandra Sekhar');
-  if (qpdf_str($q, 'executiveId') !== '') $exec .= ' (' . qpdf_str($q, 'executiveId') . ')';
-  foreach (['Yours truly,', 'Pragathi Power Solutions,', 'Authorized Signature', $exec,
-            'Mobile : ' . qpdf_str($q, 'executivePhone', '9701426440')] as $line) {
-    $pdf->text($L, $y, $line);
-    $y += 14;
-  }
+  $pdf->text($L, $y, 'Yours Truly,');
+  $y += 15;
+  $pdf->text($L, $y, 'Pragathi Power Solutions,');
+  $y += QPDF_SIGNATURE_GAP;        // room for the physical signature
+  $pdf->text($L, $y, 'Authorized Signature');
+  $y += 15;
+  $pdf->setFont('B', 10);
+  $pdf->text($L, $y, QPDF_AUTHORISED_SIGNATORY);
+  $pdf->setFont('', 10);
+  $y += 15;
+  $pdf->text($L, $y, 'Mobile : ' . qpdf_str($q, 'executivePhone', QPDF_SIGNATORY_MOBILE));
   $footer();
 
   // ── Pages 2-5 — the company's marketing pages ──────────────────────────────
@@ -381,7 +461,11 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
   if (!$rows) $rows = qpdf_default_bom($q['kw'] ?? 0);
 
   // S.No | Material | Picture | Specification | Qty | Warranty
-  $cols = [26.0, 92.0, 104.0, 138.0, 48.0, 0.0];
+  // S.No | Material Details | picture | Specification | Quantity | Warranty
+  // The material column is the one that was squeezing names like
+  // "Earthing Kits & Lightening Arrester" onto three lines; the picture
+  // column had room to spare because the images are capped at 72pt wide.
+  $cols = [26.0, 112.0, 92.0, 134.0, 46.0, 0.0];
   $cols[5] = $W - array_sum($cols);
   $headings = ['S.No', 'Material Details', '', 'Specification', 'Quantity', 'Warranty/ Gaurantee'];
 
@@ -451,14 +535,22 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
 
     $pdf->setFont('', 8);
     $pdf->textCentre($L + $cols[0] / 2, $y + $rowH / 2 + 3, (string)($i + 1));
-    $pdf->textWrap($L + $cols[0] + 4, $y + 11, $cols[1] - 8, $r['material'], 10);
+    // Each wrapped cell is centred in its row. They used to start at a fixed
+    // offset from the top, so a one-line specification sat high against a
+    // tall row while the quantity beside it was centred.
+    $midWrap = function (float $x, float $w, string $text) use ($pdf, &$y, $rowH) {
+      if (trim($text) === '') return;
+      $h = $pdf->wrapHeight($text, $w, 10);
+      $pdf->textWrap($x, $y + ($rowH - $h) / 2 + 8, $w, $text, 10);
+    };
+    $midWrap($L + $cols[0] + 4, $cols[1] - 8, $r['material']);
     if ($imgSize) {
       $pdf->image($imgFile, $L + $cols[0] + $cols[1] + ($cols[2] - $imgW) / 2, $y + ($rowH - $imgH) / 2, $imgW, $imgH);
     }
     $sx = $L + $cols[0] + $cols[1] + $cols[2];
-    $pdf->textWrap($sx + 4, $y + 11, $cols[3] - 8, $r['specification'], 10);
+    $midWrap($sx + 4, $cols[3] - 8, $r['specification']);
     $pdf->textCentre($sx + $cols[3] + $cols[4] / 2, $y + $rowH / 2 + 3, $r['quantity']);
-    $pdf->textWrap($sx + $cols[3] + $cols[4] + 4, $y + 11, $cols[5] - 8, $r['warranty'] !== '' ? $r['warranty'] : 'NA', 10);
+    $midWrap($sx + $cols[3] + $cols[4] + 4, $cols[5] - 8, $r['warranty'] !== '' ? $r['warranty'] : 'NA');
     $y += $rowH;
   }
 
@@ -469,7 +561,24 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
   $footer();
 
   // ── Last page — benefits ───────────────────────────────────────────────────
-  $fullPage('p8-benefits');
+  // ── Last page — benefits, modules and inverter ─────────────────────────────
+  $y = $frame();
+  foreach (QPDF_BENEFITS as [$heading, $points]) {
+    $pdf->setFont('B', 13);
+    $pdf->setFill(31, 56, 100);
+    $pdf->text($L, $y, $heading);
+    $pdf->setFill(0, 0, 0);
+    $y += 18;
+    $pdf->setFont('', 10);
+    foreach ($points as $point) {
+      // A small filled square stands in for the bullet: the standard fonts
+      // have no dependable bullet glyph once the text is folded to WinAnsi.
+      $pdf->rect($L + 14, $y - 4.2, 2.6, 2.6, 'F');
+      $y = $pdf->textWrap($L + 24, $y, $W - 34, $point, 14) + 3;
+    }
+    $y += 12;
+  }
+  $footer();
 
   return $pdf->output();
 }
