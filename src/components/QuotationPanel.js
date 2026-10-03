@@ -12,6 +12,7 @@ import { StatusBadge, Modal, EmptyState, DateInput } from './SharedUI';
 import {
   can, ACTIONS, quotationApprovers,
   canRecommendQuotation, canEditQuotation, canSeeAcceptanceProof, canUploadAcceptanceProof,
+  quotationLeaderEmail,
 } from '../services/permissions';
 import { apiUpload } from '../services/api';
 import { isSafeUrl } from '../services/helpers';
@@ -20,7 +21,7 @@ import {
   DEFAULT_TARIFF, DEFAULT_UNITS_PER_KW_MONTH,
   nextQuotationNumber, quotationRef, ppsRefFor, canRevise, calcQuotation,
   defaultQuoteBOM, bomFromLeadPOs, crossCheckCustomer, quotationDue, isOverdue,
-  upgradeWarranty,
+  upgradeWarranty, quotationKw, quotationKwSource, EMPTY_BOM_ROW,
 } from '../services/quotation';
 
 const nowIso = () => new Date().toISOString();
@@ -82,6 +83,14 @@ export default function QuotationPanel({ lead }) {
   };
 
   const assignedTarget = lead.assignedTo || lead.salesExecutive || q?.executiveName || '';
+  // The Team Leader of whoever holds this quotation, as a notification target.
+  // Found through the team structure, so it is K. J. Yogendra Reddy for his
+  // team today and whoever leads the team tomorrow.
+  const leaderTarget = (qq) => {
+    const e = quotationLeaderEmail(qq || q, lead, users);
+    const u = e ? (users || []).find(x => String(x.email || '').toLowerCase() === e) : null;
+    return u ? (u.displayName || u.email) : '';
+  };
 
   // Every material entered on any of this lead's purchase orders. Empty while
   // the lead is still only a proposal, in which case the standard template is
@@ -111,7 +120,14 @@ export default function QuotationPanel({ lead }) {
         district: lead.district || '',
         pincode: lead.pincode || '',
         serviceNumber: lead.customerServiceNumber || lead.meterNumber || '',
-        kw: lead.kwRequired || '',
+        // The system size is the load the site visit actually sanctioned, when
+        // there has been one; the lead's early estimate only stands in until
+        // then. A 3.43 kW estimate that the visit settles at 2 kW quotes 2 kW.
+        kw: quotationKw(lead),
+        kwSource: quotationKwSource(lead),
+        // The customer's power bill, carried from the lead.
+        monthlyBill: lead.monthlyBillAmount || '',
+        monthlyUnits: lead.monthlyBill || '',
         systemCost: lead.expectedValue || '',
         subsidy: '',
         tariff: DEFAULT_TARIFF,
@@ -121,7 +137,7 @@ export default function QuotationPanel({ lead }) {
         // it. It used to always start from the seven standard template rows, so
         // a lead with twenty materials on its PO still quoted only seven.
         bomSource: leadBOM.length ? 'po' : 'default',
-        bomItems: leadBOM.length ? leadBOM : defaultQuoteBOM(lead.kwRequired),
+        bomItems: leadBOM.length ? leadBOM : defaultQuoteBOM(quotationKw(lead)),
       },
     });
   };
@@ -141,6 +157,8 @@ export default function QuotationPanel({ lead }) {
       const calc = calcQuotation(data);
       const payload = {
         ...data,
+        // An "Add Item" line left blank is not a material.
+        bomItems: (data.bomItems || []).filter(r => r && (!r.added || String(r.material || '').trim())),
         kw: data.kw, systemCost: toNumber(data.systemCost), subsidy: toNumber(data.subsidy),
         tariff: toNumber(data.tariff) || DEFAULT_TARIFF,
         unitsPerKwMonth: toNumber(data.unitsPerKwMonth) || DEFAULT_UNITS_PER_KW_MONTH,
@@ -195,8 +213,9 @@ export default function QuotationPanel({ lead }) {
           : hadRecommendation
             ? 'Quotation updated — the earlier recommendation was cleared'
             : 'Quotation updated');
-        // The leader who recommended it is told too, so they can look again.
-        notify([assignedTarget, ...quotationApprovers(users),
+        // The Team Leader is told as well as the approvers — and the leader
+        // who recommended it, so they can look again.
+        notify([assignedTarget, leaderTarget(payload), ...quotationApprovers(users),
           ...(hadRecommendation ? [q.recommendedByName || q.recommendedBy] : [])],
           'Quotation Updated',
           `${quotationRef(payload)} for "${lead.name}" was edited by ${meName}`
@@ -208,14 +227,39 @@ export default function QuotationPanel({ lead }) {
           revision: toNumber(q.revision), date: q.date, systemCost: toNumber(q.systemCost),
           kw: q.kw, by: meName, at: nowIso(),
         }];
-        // A revision changes the document, not where it sits in the workflow —
-        // the status (and the ids the server maintains) are left alone.
         const { status, id, createdAt, updatedAt, ...fields } = payload; // eslint-disable-line no-unused-vars
-        await updateDocument('quotations', q.id, { ...fields, revisionHistory: history });
-        toast(`Revision R${payload.revision} saved`);
-        notify([assignedTarget, ...quotationApprovers(users)],
-          'Quotation Revised',
-          `${quotationRef(payload)} for "${lead.name}" was revised by ${meName}.`);
+        const patch = { ...fields, revisionHistory: history };
+        // A revision of a REJECTED quotation is the answer to that rejection,
+        // so it goes back into the approval queue: the status returns to
+        // Pending Approval, the old decision is cleared, and the approvers are
+        // asked again. It used to stay "Rejected" after the revision was saved,
+        // which left the Approve button hidden and the quotation stranded. A
+        // revision while still Pending, or after approval, keeps its status —
+        // that part of the workflow is unchanged.
+        const wasRejected = q.status === QT_STATUS.REJECTED;
+        if (wasRejected) {
+          Object.assign(patch, {
+            status: QT_STATUS.PENDING,
+            rejectedBy: '', rejectionReason: '', rejectedAt: '',
+            resubmittedAt: nowIso(), resubmittedBy: meName,
+            resubmittedRevision: toNumber(payload.revision),
+          });
+        }
+        // The figures have changed, so an earlier recommendation no longer
+        // stands — the same rule an edit follows.
+        if (q.recommendedBy) {
+          Object.assign(patch, { recommendedBy: '', recommendedByName: '', recommendedAt: '', recommendNote: '' });
+        }
+        await updateDocument('quotations', q.id, patch);
+        toast(wasRejected
+          ? `Revision R${payload.revision} saved — sent back for approval`
+          : `Revision R${payload.revision} saved`);
+        notify([assignedTarget, leaderTarget(payload), ...quotationApprovers(users)],
+          wasRejected ? 'Revised Quotation Awaiting Approval' : 'Quotation Revised',
+          `${quotationRef(payload)} for "${lead.name}" was revised by ${meName}`
+          + (wasRejected
+            ? ` after it was rejected${q.rejectionReason ? ` ("${q.rejectionReason}")` : ''}. Revision R${payload.revision} is back for approval — please approve or reject it.`
+            : '.'));
       }
       setForm(null);
     } catch (e) { toast(e.message, 'er'); }
@@ -496,9 +540,9 @@ export default function QuotationPanel({ lead }) {
               color: approvedForCustomer ? '#25d366' : 'var(--muted)',
               borderColor: approvedForCustomer ? 'rgba(37,211,102,.3)' : 'var(--bor)',
             }}
-            onClick={handleWhatsApp} disabled={!!pdfBusy}
+            onClick={handleWhatsApp} disabled={!!pdfBusy || !approvedForCustomer}
             title={!approvedForCustomer
-              ? 'The quotation has to be approved before it goes to the customer'
+              ? 'Frozen until the quotation is approved — it then becomes active on its own'
               : canShareFiles()
                 ? 'Send the quotation PDF to this lead on WhatsApp'
                 : 'Open WhatsApp for this lead with the quotation PDF link'}>
@@ -694,6 +738,13 @@ export default function QuotationPanel({ lead }) {
           <strong>Rejected by {q.rejectedBy || '-'}:</strong> {q.rejectionReason || '-'} — revise the quotation and it goes back for approval.
         </div>
       )}
+      {/* A revision that answered a rejection, now waiting on the approvers. */}
+      {q.status === QT_STATUS.PENDING && q.resubmittedAt && (
+        <div style={{ background: 'rgba(26,58,122,.06)', border: '1px solid rgba(26,58,122,.25)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: 'var(--pri)', marginBottom: 12 }}>
+          <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>published_with_changes</span>
+          Revision R{q.resubmittedRevision || toNumber(q.revision)} submitted by <strong>{q.resubmittedBy || '-'}</strong> on {formatDate(q.resubmittedAt)} after the earlier rejection — awaiting approval again.
+        </div>
+      )}
 
       {/* The figures, exactly as they print */}
       <div className="dg" style={{ gap: 8 }}>
@@ -761,7 +812,8 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
   // The BOM follows the kW until the actual PO BOM has been pulled in.
   const syncBom = (kw) => {
     set('kw', kw);
-    if (f.bomSource !== 'po') set('bomItems', defaultQuoteBOM(kw));
+    // The standard rows follow the size; anything the user added stays.
+    if (f.bomSource !== 'po') set('bomItems', [...defaultQuoteBOM(kw), ...(f.bomItems || []).filter(r => r && r.added)]);
   };
   const issues = crossCheckCustomer(
     { phone: f.customerPhone, serviceNumber: f.serviceNumber },
@@ -805,7 +857,10 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
           <div style={{ borderTop: '1px solid var(--bor)', margin: '12px 0', paddingTop: 12 }}>
             <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 8, display: 'block' }}>System &amp; Price</label>
             <div className="fr3">
-              <div className="fg"><label>System Size (kW) *</label><input className="fi" value={f.kw} onChange={e => syncBom(e.target.value)} required /></div>
+              <div className="fg"><label>System Size (kW) *
+                {f.kwSource === 'site-visit' && <span style={{ fontSize: '.72rem', color: 'var(--ok)', fontWeight: 400, marginLeft: 6 }}>sanctioned load from the site visit</span>}
+                {f.kwSource === 'estimate' && <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400, marginLeft: 6 }}>lead estimate — no site visit load yet</span>}
+              </label><input className="fi" value={f.kw} onChange={e => syncBom(e.target.value)} required /></div>
               <div className="fg"><label>System Cost incl. GST (₹) *</label><input type="number" className="fi" value={f.systemCost} onChange={e => set('systemCost', e.target.value)} required /></div>
               <div className="fg"><label>Subsidy (₹)</label><input type="number" className="fi" value={f.subsidy} onChange={e => set('subsidy', e.target.value)} placeholder="0" /></div>
             </div>
@@ -814,6 +869,16 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
               <div className="fg"><label>Generation (units/kW/month)</label><input type="number" className="fi" value={f.unitsPerKwMonth} onChange={e => set('unitsPerKwMonth', e.target.value)} /></div>
               <div className="fg"><label>Offer Validity (days)</label><input type="number" className="fi" value={f.validityDays} onChange={e => set('validityDays', e.target.value)} /></div>
             </div>
+            {/* The customer's own bill, from the lead — kept on the quotation
+                so the figures it was prepared against are on the record. */}
+            {(toNumber(f.monthlyBill) > 0 || toNumber(f.monthlyUnits) > 0) && (
+              <div style={{ fontSize: '.78rem', color: 'var(--muted)', marginBottom: 8 }}>
+                <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px', marginRight: 4 }}>receipt</span>
+                Customer&rsquo;s power bill (from the lead):
+                {toNumber(f.monthlyBill) > 0 && <strong style={{ color: 'var(--dark)', marginLeft: 4 }}>{formatCurrency(f.monthlyBill)} / month</strong>}
+                {toNumber(f.monthlyUnits) > 0 && <span style={{ marginLeft: 4 }}>({f.monthlyUnits} units)</span>}
+              </div>
+            )}
             {/* Live calculation — changes with the system price, as required */}
             <div style={{ background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)', borderRadius: 8, padding: 12, fontSize: '.83rem' }}>
               <div style={{ fontWeight: 700, marginBottom: 6 }}>Generation &amp; Payback (auto-calculated)</div>
@@ -839,16 +904,37 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
                 <tbody>{(f.bomItems || []).map((it, i) => (
                   <tr key={`${it.material}-${i}`}>
                     <td>{i + 1}</td>
-                    <td>{it.material}</td>
+                    {/* The standard materials keep their names; only a line the
+                        user added through "Add Item" has an editable name. */}
+                    <td>{it.added
+                      ? <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={it.material} placeholder="Material name"
+                          onChange={e => set('bomItems', f.bomItems.map((x, j) => j === i ? { ...x, material: e.target.value } : x))} />
+                      : it.material}</td>
                     <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={it.specification}
                       onChange={e => set('bomItems', f.bomItems.map((x, j) => j === i ? { ...x, specification: e.target.value } : x))} /></td>
                     <td style={{ width: 90 }}><input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={it.quantity}
                       onChange={e => set('bomItems', f.bomItems.map((x, j) => j === i ? { ...x, quantity: e.target.value } : x))} /></td>
-                    <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={it.warranty}
-                      onChange={e => set('bomItems', f.bomItems.map((x, j) => j === i ? { ...x, warranty: e.target.value } : x))} /></td>
+                    <td style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+                      <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={it.warranty}
+                        onChange={e => set('bomItems', f.bomItems.map((x, j) => j === i ? { ...x, warranty: e.target.value } : x))} />
+                      {it.added && (
+                        <button type="button" className="btn bsm bo" title="Remove this added item" style={{ padding: '2px 6px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}
+                          onClick={() => set('bomItems', f.bomItems.filter((x, j) => j !== i))}>
+                          <span className="material-icons-round" style={{ fontSize: 15 }}>close</span>
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}</tbody>
               </table>
+            </div>
+            {/* Add Item — for the occasional material a particular job needs on
+                top of the standard list. It joins the table as line N+1 with the
+                same columns, and prints exactly as the others do. */}
+            <div style={{ marginTop: 8 }}>
+              <button type="button" className="btn bsm bo" onClick={() => set('bomItems', [...(f.bomItems || []), { ...EMPTY_BOM_ROW }])}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Item
+              </button>
             </div>
           </div>
         </div>

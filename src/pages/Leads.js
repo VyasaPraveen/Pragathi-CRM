@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { assignableNames, supportingNames, directoryPeople } from '../services/people';
+import { assignableNames, supportingNames } from '../services/people';
 import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../components/SharedUI';
 import { sharePOWhatsApp } from '../services/poUtils';
@@ -13,6 +13,9 @@ import {
   quotationApprovers, canAddLeadPO, canEditLeadPO, canRecommendLeadPO, warehouseUsers,
 } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
+import DispatchPanel from '../components/DispatchPanel';
+import BcoOperationsPanel from '../components/BcoOperationsPanel';
+import { canViewBco, bcoProgress } from '../services/bco';
 import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
 import { getOptions, withCurrent } from '../services/options';
 import { sortBomItems } from '../services/bomOrder';
@@ -609,12 +612,10 @@ function LeadModal({ data, id, onSave, onClose }) {
             </div>
             <div className="fg"><label>Next Follow-up Date</label><DateInput value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div>
           </div>
-          <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => {
-            const val = e.target.value;
-            set('salesExecutive', val);
-            // Dedup: the selected Sales Executive should not also appear in Supporting Team
-            dropFromSupport(val);
-          }}><option value="">-- Select --</option>{directoryPeople(users).map(pp => <option key={pp.email || pp.name} value={pp.name}>{pp.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
+          {/* The "Sales Executive" field that sat here was removed from the
+              form on request. The value stays on existing leads and still
+              shows wherever it did; it just cannot be set from here any more. */}
+          <div className="fr"><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div><div className="fg" /></div>
           <div className="fg"><label>Supporting Team / Names</label>
             {/* Selected supporting names (team members + custom) as removable chips */}
             {(form.supportingTeam || []).length > 0 && (
@@ -687,7 +688,7 @@ function LeadModal({ data, id, onSave, onClose }) {
 /* ============ LEAD DETAIL MODAL (NEW) ============ */
 function LeadDetailModal({ lead, initialTab, onClose }) {
   const [tab, setTab] = useState(initialTab || 'overview');
-  const { leadPOs, installations, users, quotations, settings } = useData();
+  const { leadPOs, installations, users, quotations, settings, bcoOps } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [poModal, setPOModal] = useState(null);
@@ -852,11 +853,16 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
     } catch (e) { toast(e.message, 'er'); }
   };
 
+  // BCO Operations: the seven post-sale stages, for the BCO and the
+  // authorities, and for the lead's own people to look at.
+  const myBco = (bcoOps || []).find(o => o.leadId === lead.id) || null;
+  const bcoDone = bcoProgress(myBco);
   const tabs = [
     ['overview', 'Overview', 'info'],
     ['quotation', myQuote ? 'Quotation (' + myQuote.status + ')' : 'Quotation', 'description'],
     ['followups', 'Follow-ups (' + history.length + ')', 'history'],
-    ['pos', 'Purchase Orders (' + myPOs.length + ')', 'receipt_long']
+    ['pos', 'Purchase Orders (' + myPOs.length + ')', 'receipt_long'],
+    ...(canViewBco(lead, user, role, users) ? [['bco', `BCO Operations (${bcoDone.done}/${bcoDone.total})`, 'fact_check']] : []),
   ];
 
   return (
@@ -1151,6 +1157,10 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.approvalDate)}</span></div></div>}
                     </div>
 
+                    {/* Once approved, the warehouse dispatch — marked item by
+                        item, completed, and confirmed — sits under the PO. */}
+                    <DispatchPanel po={po} lead={lead} />
+
                     {/* Expandable line items */}
                     {(po.items || []).length > 0 && (
                       <details style={{ marginTop: 10 }}>
@@ -1184,6 +1194,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
               )}
             </div>
           )}
+
+          {/* -------- BCO OPERATIONS TAB -------- */}
+          {tab === 'bco' && <BcoOperationsPanel lead={lead} />}
         </div>
       </div>
 

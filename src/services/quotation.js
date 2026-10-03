@@ -182,6 +182,30 @@ export function upgradeWarranty(text) {
   return LEGACY_WARRANTY[t] || text;
 }
 
+// ── The system size a quotation opens with ──────────────────────────────────
+// A lead carries two sizes: the kW the enquiry estimated, and — once the site
+// has been visited — the load actually sanctioned there. The quotation has to
+// be for the second whenever it exists: a 3.43 kW estimate that the visit
+// settles at 2 kW must quote 2 kW. Until there has been a visit, or when the
+// visit recorded no load, the estimate stands in.
+export function quotationKw(lead) {
+  const visited = String(lead?.siteVisit || '').trim().toLowerCase() === 'yes';
+  const sanctioned = toNumber(lead?.sanctionedLoad);
+  if (visited && sanctioned > 0) return String(lead.sanctionedLoad);
+  return lead?.kwRequired || '';
+}
+
+// Where that size came from, so the form can say so.
+export function quotationKwSource(lead) {
+  const visited = String(lead?.siteVisit || '').trim().toLowerCase() === 'yes';
+  return visited && toNumber(lead?.sanctionedLoad) > 0 ? 'site-visit' : 'estimate';
+}
+
+// A blank line for the "Add Item" option on the BOM. Carries the same columns
+// as the standard rows so it prints the same; `added` marks it as the user's
+// own line, which is the only kind whose material name is editable.
+export const EMPTY_BOM_ROW = { material: '', specification: '', quantity: '', warranty: 'NA', added: true };
+
 export function defaultQuoteBOM(kw) {
   const k = toNumber(kw);
   const modules = k > 0 ? Math.ceil((k * 1000) / 595) : '';

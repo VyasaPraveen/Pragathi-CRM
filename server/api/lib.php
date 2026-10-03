@@ -245,6 +245,7 @@ function collection_table(string $collection): ?string {
     'bomTemplates' => 'bom_templates', 'quotations' => 'quotations',
     'activityLog' => 'activity_log', 'notifications' => 'notifications',
     'leaveRequests' => 'leave_requests', 'attendance' => 'attendance', 'tracking' => 'tracking',
+    'bcoOps' => 'bco_ops',
   ];
   return $map[$collection] ?? null;
 }

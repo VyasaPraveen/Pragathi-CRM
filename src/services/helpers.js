@@ -3,14 +3,58 @@ export function formatCurrency(n) {
 }
 
 // All dates display as Date-Month-Year (DD-MM-YYYY) for consistency across the app.
+//
+// A value that carries a time — an ISO timestamp such as approvedAt or a
+// notification's createdAt — is shown with that time as well, in Indian
+// Standard Time: "02-10-2026 11:39 PM". A plain calendar date (a leave date,
+// a PO date, "2026-10-02") stays a date. The distinction is made on the value
+// itself, so every screen that shows an activity gets its time without each
+// one being changed by hand.
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const IST = 'Asia/Kolkata';
+
+function istParts(dt) {
+  // One formatter call, read back as parts, so the day and the clock agree.
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  }).formatToParts(dt);
+  const get = (t) => (parts.find(p => p.type === t) || {}).value || '';
+  return {
+    date: `${get('day')}-${get('month')}-${get('year')}`,
+    time: `${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`.replace(/\s+/g, ' ').trim(),
+  };
+}
+
 export function formatDate(d) {
+  if (!d) return '-';
+  if (typeof d === 'string' && DATE_ONLY.test(d.trim())) {
+    const [y, m, day] = d.trim().split('-');
+    return `${day}-${m}-${y}`;
+  }
+  const dt = d.toDate ? d.toDate() : new Date(d);
+  if (isNaN(dt)) return String(d);
+  // A string with a clock in it, or a Date that is not exactly midnight, is a
+  // moment in time rather than a day, and is shown as one.
+  const timed = typeof d === 'string'
+    ? /[T ]\d{1,2}:\d{2}/.test(d)
+    : (dt.getHours() + dt.getMinutes() + dt.getSeconds()) !== 0 || !!d.toDate;
+  if (!timed) {
+    const dd = String(dt.getDate()).padStart(2, '0');
+    const mm = String(dt.getMonth() + 1).padStart(2, '0');
+    return `${dd}-${mm}-${dt.getFullYear()}`;
+  }
+  const p = istParts(dt);
+  return `${p.date} ${p.time}`;
+}
+
+// Always the date and the IST time, whatever the value looks like.
+export function formatDateTime(d) {
   if (!d) return '-';
   const dt = d.toDate ? d.toDate() : new Date(d);
   if (isNaN(dt)) return String(d);
-  const dd = String(dt.getDate()).padStart(2, '0');
-  const mm = String(dt.getMonth() + 1).padStart(2, '0');
-  const yyyy = dt.getFullYear();
-  return `${dd}-${mm}-${yyyy}`;
+  const p = istParts(dt);
+  return `${p.date} ${p.time}`;
 }
 
 // Today's date as YYYY-MM-DD, on the calendar the employee is actually living

@@ -5,7 +5,10 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
-import { can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf, canSeePaymentRequest } from '../services/permissions';
+import {
+  can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf, canSeePaymentRequest,
+  PR_CATEGORIES, PR_DIRECT_PAY_LIMIT, canDirectPayPr, ownerUsers,
+} from '../services/permissions';
 
 // Payment Request — the step-by-step approval & payment workflow:
 // Team Member → Generate Payment Request → their own Team Leader (Recommend
@@ -214,6 +217,46 @@ export default function PaymentRequests() {
     } catch (e) { toast(e.message, 'er'); }
   };
 
+  // Below Rs.1,000 the Accountant pays straight away, without the approval
+  // step, and the Owner is told — in so many words — that it was paid that
+  // way. The server applies the same limit, so this cannot be reached for a
+  // larger amount by any other route. At Rs.1,000 and above nothing changes.
+  const directPay = async (pr) => {
+    if (!canDirectPayPr(pr, user, role)) { toast('This request cannot be paid directly', 'er'); return; }
+    if (!hasPrNote(pr)) { toast(NOTE_REQUIRED_MESSAGE + ' Edit the request and add one.', 'er'); return; }
+    const limit = '₹' + PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN');
+    const ref = window.prompt(`Pay ${formatCurrency(pr.amount)} directly — below ${limit}, no approval step.\nPayment transfer reference / transaction no.:`, '');
+    if (ref === null) return;
+    if (!ref.trim()) { toast('A payment reference is required', 'er'); return; }
+    try {
+      await updateDocument('paymentRequests', pr.id, {
+        status: PR_STATUS.PAID, paidBy: me, paidByDate: todayStr(), paymentRef: ref.trim(),
+        directPayment: true,
+        directPaymentRule: `Below ${limit} — paid directly by the Accountant without the approval step`,
+      });
+      const who = pr.requestedByName || pr.requestedBy || 'a team member';
+      // The mandatory notice to the Owner.
+      ownerUsers(users).forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: `Direct payment by the Accountant (below ${limit})`,
+        message: `${me} paid "${pr.purpose || ''}" (${formatCurrency(pr.amount)}${pr.category ? ', ' + pr.category : ''}) raised by ${who} DIRECTLY, without the approval step, under the below-${limit} rule. Ref: ${ref.trim()}.`,
+        type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+      }));
+      if (pr.requestedBy && pr.requestedBy !== user?.email) {
+        createNotification({
+          forUser: pr.requestedByName || pr.requestedBy,
+          title: 'Payment Request Paid',
+          message: `Your payment request "${pr.purpose || ''}" (${formatCurrency(pr.amount)}) was paid directly by the Accountant (below ${limit}) · Ref: ${ref.trim()}`,
+          type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+        });
+      }
+      // The rest of the chain carries on as it always has.
+      const next = nextPrStage(PR_STATUS.PAID, pr, users);
+      if (next) notifyActors(next.action, next.label, pr);
+      toast('Paid directly — the Owner has been notified');
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
   const rejectRequest = async (pr) => {
     if (isOwnRequest(pr, user)) { toast('You cannot reject your own payment request', 'er'); return; }
     if (!window.confirm('Reject this payment request? This stops the approval chain.')) return;
@@ -299,7 +342,14 @@ export default function PaymentRequests() {
           return (
             <tr key={pr.id}>
               <td>
-                <strong>{pr.purpose || '-'}</strong><br />
+                <strong>{pr.purpose || '-'}</strong>
+                {pr.category && (
+                  <span style={{ marginLeft: 6, fontSize: '.68rem', fontWeight: 700, color: 'var(--pri)', background: 'rgba(26,58,122,.08)', borderRadius: 10, padding: '1px 7px', verticalAlign: '1px' }}>{pr.category}</span>
+                )}
+                {pr.directPayment && (
+                  <span title={pr.directPaymentRule || ''} style={{ marginLeft: 6, fontSize: '.68rem', fontWeight: 700, color: '#1e8449', background: 'rgba(39,174,96,.1)', borderRadius: 10, padding: '1px 7px', verticalAlign: '1px' }}>Paid directly</span>
+                )}
+                <br />
                 <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>
                   {pr.payTo ? pr.payTo + ' · ' : ''}{pr.paymentMode ? pr.paymentMode : ''}{pr.paymentRef ? ' · Ref ' + pr.paymentRef : ''}{pr.proposalRef ? ' · Proposal ' + pr.proposalRef : ''}
                 </span>
@@ -324,6 +374,14 @@ export default function PaymentRequests() {
                   {canAct && (
                     <button className="btn bsm bp" onClick={() => advanceStage(pr)} title={`${stage.label} (${stage.by})`} style={{ padding: '4px 10px', fontSize: '.78rem' }}>
                       <span className="material-icons-round" style={{ fontSize: 15 }}>arrow_forward</span> {stage.label}
+                    </button>
+                  )}
+                  {/* The Accountant's shortcut for small amounts; the ordinary
+                      approval buttons stay beside it for everyone else. */}
+                  {canDirectPayPr(pr, user, role) && (
+                    <button className="btn bsm bo" onClick={() => directPay(pr)} title={`Below ₹${PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN')} — pay now without waiting for approval; the Owner is notified`}
+                      style={{ padding: '4px 10px', fontSize: '.78rem', color: '#1e8449', borderColor: 'rgba(39,174,96,.4)' }}>
+                      <span className="material-icons-round" style={{ fontSize: 15 }}>bolt</span> Pay Directly
                     </button>
                   )}
                   {pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED && canRejectPr(pr, user, role, users) && (
@@ -360,6 +418,7 @@ export default function PaymentRequests() {
           · final approval needs any ONE of Operation Manager / Management / Admin / Owner.
           A Team Leader&rsquo;s own request skips the recommendation step, and nobody can
           recommend or approve a request they raised themselves.
+          Below &#8377;{PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN')} the Accountant may pay directly without the approval step; the Owner is notified of every such payment.
         </div>
       </div></div>
 
@@ -374,6 +433,7 @@ function PRModal({ data, id, onSave, onClose }) {
   const [saving, setSaving] = useState(false);
   const [f, setF] = useState({
     purpose: data.purpose || '',
+    category: data.category || PR_CATEGORIES[0],
     amount: data.amount || '',
     paymentMode: data.paymentMode || PAYMENT_MODES[0],
     neededBy: data.neededBy || todayStr(),
@@ -396,6 +456,11 @@ function PRModal({ data, id, onSave, onClose }) {
       <form onSubmit={submit}>
         <div className="mb">
           <div className="fg"><label>Payment For *</label><input className="fi" value={f.purpose} onChange={e => set('purpose', e.target.value)} placeholder="e.g. Module transport charges — Tirupati site" required /></div>
+          <div className="fg"><label>Category *</label>
+            <select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>
+              {PR_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
           <div className="fr">
             <div className="fg"><label>Amount (₹) *</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} min="1" required /></div>
             <div className="fg"><label>Payment Mode</label><select className="fi" value={f.paymentMode} onChange={e => set('paymentMode', e.target.value)}>{PAYMENT_MODES.map(m => <option key={m}>{m}</option>)}</select></div>

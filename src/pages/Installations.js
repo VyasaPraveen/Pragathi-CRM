@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument } from '../services/firestore';
 import { formatDate, toNumber, safeStr, hasAccess } from '../services/helpers';
-import { StatusBadge, DetailItem, ProgressBar, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, DetailItem, ProgressBar, Modal, EmptyState, SearchSelect } from '../components/SharedUI';
+import { findLeadByPhone, findLeadByName, leadPickerOptions, applyLeadToForm } from '../services/installations';
 
 const PAGE_SIZE = 10;
 
@@ -125,7 +126,13 @@ export default function Installations() {
 
 function InstallationModal({ data, id, onSave, onClose }) {
   const d = data;
+  // The leads are read here so a customer's details can be carried over.
+  // They are only ever read: nothing on this form writes back to a lead.
+  const { leads } = useData();
+  const [matched, setMatched] = useState(null);
+  const pickerOptions = React.useMemo(() => leadPickerOptions(leads), [leads]);
   const [f, setF] = useState({
+    leadId: d.leadId || '',
     customerName: d.customerName || '', phone: d.phone || '', address: d.address || '',
     siteVisitStatus: d.siteVisitStatus || 'Not Visited',
     roofType: d.roofType || 'RCC', floors: d.floors || 1, structureType: d.structureType || 'Flat',
@@ -158,11 +165,37 @@ function InstallationModal({ data, id, onSave, onClose }) {
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
+  // Bring a lead's details onto the form. Fields the lead does not hold are
+  // left as they are.
+  const applyLead = (lead) => {
+    if (!lead) return;
+    setF(p => applyLeadToForm(p, lead));
+    setMatched(lead);
+  };
+  // Typing a known phone number or an exact customer name finds the lead by
+  // itself; the picker is for everyone else.
+  const matchPhone = (v) => { set('phone', v); const l = findLeadByPhone(leads, v); if (l && l.id !== f.leadId) applyLead(l); };
+  const matchName = (v) => { set('customerName', v); const l = findLeadByName(leads, v); if (l && l.id !== f.leadId) applyLead(l); };
+
   return (
     <Modal title={id ? 'Edit Installation' : 'New Installation'} onClose={onClose} wide>
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
         <div className="mb">
-          <div className="fr"><div className="fg"><label>Customer Name *</label><input className="fi" value={f.customerName} onChange={e => set('customerName', e.target.value)} required /></div><div className="fg"><label>Phone</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} /></div></div>
+          {/* From the lead: pick the customer and their details fill in below.
+              One way only — the lead is read, never changed from here. */}
+          <div className="fg">
+            <label>Customer from Leads <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>pick one to fill the details below</span></label>
+            <SearchSelect value="" options={[...pickerOptions.keys()]} allowFree={false}
+              placeholder={pickerOptions.size ? 'Search a lead by name or phone…' : 'No leads on file'}
+              emptyText="No matching lead" onChange={label => applyLead(pickerOptions.get(label))} />
+            {matched && (
+              <small style={{ display: 'block', marginTop: 4, color: 'var(--ok)' }}>
+                <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>link</span>{' '}
+                Details taken from lead <strong>{matched.name}</strong>{matched.phone ? ` (${matched.phone})` : ''}. The lead itself is not changed by anything entered here.
+              </small>
+            )}
+          </div>
+          <div className="fr"><div className="fg"><label>Customer Name *</label><input className="fi" value={f.customerName} onChange={e => matchName(e.target.value)} required /></div><div className="fg"><label>Phone</label><input className="fi" value={f.phone} onChange={e => matchPhone(e.target.value)} /></div></div>
           <div className="fr"><div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div><div className="fg"><label>Site Visit Status</label><select className="fi" value={f.siteVisitStatus} onChange={e => set('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div></div>
           <div className="fr3"><div className="fg"><label>Roof Type</label><select className="fi" value={f.roofType} onChange={e => set('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option></select></div><div className="fg"><label>Floors</label><input type="number" className="fi" value={f.floors} onChange={e => set('floors', e.target.value)} /></div><div className="fg"><label>Structure</label><select className="fi" value={f.structureType} onChange={e => set('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div></div>
           <div className="fr3"><div className="fg"><label>Start Date</label><input type="date" className="fi" value={f.startDate} onChange={e => set('startDate', e.target.value)} /></div><div className="fg"><label>Total Days</label><input type="number" className="fi" value={f.totalDays} onChange={e => set('totalDays', e.target.value)} /></div><div className="fg"><label>Team Leader</label><input className="fi" value={f.teamLeader} onChange={e => set('teamLeader', e.target.value)} /></div></div>

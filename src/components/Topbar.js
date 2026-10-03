@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { hasAccess, moduleRoute, isSameUser } from '../services/helpers';
+import { hasAccess, moduleRoute, isSameUser, formatDateTime } from '../services/helpers';
 import { updateDocument } from '../services/firestore';
 
 const titles = {
@@ -156,7 +156,10 @@ export default function Topbar({ onMenuClick }) {
                           <p style={{ margin: '2px 0 0', fontSize: '.78rem', color: '#6b7280', lineHeight: 1.4 }}>{n.message}</p>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
                             <span style={{ fontSize: '.72rem', color: '#9ca3af' }}>{n.fromUser}</span>
-                            <span style={{ fontSize: '.72rem', color: '#9ca3af' }}>{timeAgo(n.createdAt)}</span>
+                            {/* How long ago, and the exact date and IST time. */}
+                            <span style={{ fontSize: '.72rem', color: '#9ca3af', whiteSpace: 'nowrap' }} title={formatDateTime(n.createdAt)}>
+                              {timeAgo(n.createdAt)}{n.createdAt ? ' · ' + formatDateTime(n.createdAt) : ''}
+                            </span>
                           </div>
                         </div>
                       </div>

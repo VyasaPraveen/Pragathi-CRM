@@ -234,6 +234,9 @@ function enforce_create(string $collection, array $claims): void {
       // A quotation is raised from a lead, by whoever may work that lead.
       if (!can($role, 'lead_entry')) fail(403, 'Not authorised to create leads');
       break;
+    case 'bcoOps':
+      if (!bco_ops_editor($role)) fail(403, 'Only the BCO, the Operation Manager or an Admin can record BCO operations');
+      break;
     default:
       // other collections: any approved user may create (UI already restricts)
       break;
@@ -262,6 +265,38 @@ function quotation_system_patch(array $patch): bool {
   return true;
 }
 
+// Who may record the BCO operations on a lead: the BCO, with the Operation
+// Manager, Admin, Management and the Owner able to edit as well.
+function bco_ops_editor(string $role): bool {
+  if ($role === 'super_admin' || has_access($role, 'admin')) return true;
+  return in_array(normalize_role($role), ['bco', 'operation_manager'], true);
+}
+
+// The fields the warehouse writes when dispatching an approved purchase
+// order. They are the only fields that may change on a PO after approval, and
+// only the warehouse side (or the office standing in for it) may change them.
+const PO_DISPATCH_FIELDS = [
+  'dispatchItems', 'dispatchStatus', 'dispatchUpdatedAt', 'dispatchUpdatedBy',
+  'dispatchCompletedAt', 'dispatchCompletedBy', 'dispatchNote',
+];
+const PO_DISPATCH_CONFIRM_FIELDS = ['dispatchConfirmedAt', 'dispatchConfirmedBy', 'dispatchConfirmNote'];
+
+function po_dispatch_patch(array $patch): bool {
+  if (!$patch) return false;
+  foreach (array_keys($patch) as $k) {
+    if (!in_array($k, PO_DISPATCH_FIELDS, true) && !in_array($k, PO_DISPATCH_CONFIRM_FIELDS, true)) return false;
+  }
+  return true;
+}
+function po_dispatch_editor(string $role): bool {
+  if ($role === 'super_admin' || has_access($role, 'admin')) return true;
+  return in_array(normalize_role($role), ['warehouse_admin', 'technical_manager', 'operation_manager'], true);
+}
+function po_dispatch_confirmer(string $role): bool {
+  if ($role === 'super_admin' || has_access($role, 'admin')) return true;
+  return normalize_role($role) === 'operation_manager';
+}
+
 function lead_team_leader(string $leadId): string {
   if ($leadId === '') return '';
   try {
@@ -284,7 +319,9 @@ function lead_team_leader(string $leadId): string {
   }
 }
 
-function enforce_status_transition(string $collection, string $role, array $patch, array $existing, string $email = ''): void {
+// $patch is taken by reference: a rule may stamp the record (the below-Rs.1,000
+// direct payment does) and the stamp has to reach what is stored.
+function enforce_status_transition(string $collection, string $role, array &$patch, array $existing, string $email = ''): void {
   // ── Quotations: the revision ladder is enforced here, not in the browser ──
   // The main number never changes; revisions run R1 → R3, one step at a time,
   // and anything past R3 needs an Admin's approval recorded on the quotation.
@@ -363,10 +400,34 @@ function enforce_status_transition(string $collection, string $role, array $patc
     // was recommended, which left no way to fix a PO that came back for a
     // change without an Admin doing it.
     static $lockedAt = ['expenditures' => 'Requested', 'paymentRequests' => 'Requested', 'leaveRequests' => 'Awaiting Replacement', 'purchaseOrders' => 'Draft'];
+    // The warehouse dispatch is written onto the approved PO, and is the one
+    // thing that may change on it after approval. It is open only once the PO
+    // is Approved, only to the warehouse side, and the confirmation only to
+    // the Operation Manager and above. Once confirmed it is fixed.
+    if ($collection === 'leadPOs' && po_dispatch_patch($patch)) {
+      if (($existing['status'] ?? 'Unapproved') !== 'Approved') {
+        fail(409, 'Material can be dispatched only once the purchase order is approved.');
+      }
+      $confirming = count(array_intersect(array_keys($patch), PO_DISPATCH_CONFIRM_FIELDS)) > 0;
+      if ($confirming) {
+        if (!po_dispatch_confirmer($role)) fail(403, 'Only the Operation Manager or an Admin can confirm a dispatch.');
+        if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not marked this dispatch complete yet.');
+      } else {
+        if (!po_dispatch_editor($role)) fail(403, 'Only the warehouse can record a dispatch.');
+        if (!empty($existing['dispatchConfirmedAt']) && $role !== 'super_admin' && !has_access($role, 'admin')) {
+          fail(409, 'This dispatch has been confirmed and can no longer be changed.');
+        }
+      }
+      return;
+    }
     if ($collection === 'leadPOs' && $role !== 'super_admin' && !has_access($role, 'admin')) {
       if (($existing['status'] ?? 'Unapproved') === 'Approved') {
         fail(403, 'This purchase order has been approved and can no longer be edited.');
       }
+    }
+    // The BCO operations record is the BCO's own; the authorities may edit it.
+    if ($collection === 'bcoOps' && !bco_ops_editor($role)) {
+      fail(403, 'Only the BCO, the Operation Manager or an Admin can update BCO operations.');
     }
     if (isset($lockedAt[$collection]) && $role !== 'super_admin' && !has_access($role, 'admin')) {
       $cur = $existing['status'] ?? $lockedAt[$collection];
@@ -388,6 +449,12 @@ function enforce_status_transition(string $collection, string $role, array $patc
     }
     if ($to === 'Management Approved'  && !can($role, 'po_management_approval')) fail(403, 'Only Management can grant this approval');
     if ($to === 'Approved'             && !can($role, 'po_approval'))            fail(403, 'Not authorised to approve POs');
+    // Nothing in the app moves a PO backwards; if one ever has to be reopened
+    // it is the approvers' call, not something the API lets anyone do.
+    if ($to === 'Unapproved' && ($existing['status'] ?? 'Unapproved') !== 'Unapproved'
+        && $role !== 'super_admin' && !has_access($role, 'admin') && !can($role, 'po_approval')) {
+      fail(403, 'Only an Admin or Management can reopen an approved purchase order');
+    }
     // Management approval is mandatory before final approval
     if ($to === 'Approved' && ($existing['status'] ?? '') !== 'Management Approved') fail(409, 'Management approval required before approval');
   }
@@ -470,7 +537,22 @@ function enforce_status_transition(string $collection, string $role, array $patc
     $prev = ['Recommended' => 'Requested', 'Approved' => ($needsRec ? 'Recommended' : 'Requested'), 'Paid' => 'Approved', 'Proposal Submitted' => 'Paid', 'Closed' => 'Proposal Submitted'];
     if (isset($prev[$to])) {
       $from = $existing['status'] ?? 'Requested';
-      if ($from !== $prev[$to]) fail(409, "Out of order: this payment request must be '{$prev[$to]}' before it can move to '{$to}'.");
+      // Below Rs.1,000 the Accountant may pay straight away, without waiting
+      // for the approval step. The amount is read from the record as it
+      // stands, not from the patch, so it cannot be lowered in the same call;
+      // and the request is stamped here as a direct payment so the Owner's
+      // notice and the trail say so. At Rs.1,000 and above nothing changes.
+      $directPay = $to === 'Paid'
+        && in_array($from, ['Requested', 'Recommended'], true)
+        && !array_key_exists('amount', $patch)
+        && (float)($existing['amount'] ?? 0) > 0
+        && (float)($existing['amount'] ?? 0) < 1000;
+      if ($directPay) {
+        $patch['directPayment'] = true;
+        $patch['directPaymentRule'] = 'Below Rs.1,000 - paid directly by the Accountant without the approval step';
+      } elseif ($from !== $prev[$to]) {
+        fail(409, "Out of order: this payment request must be '{$prev[$to]}' before it can move to '{$to}'.");
+      }
     }
     if ($to === 'Rejected') {
       $stageAction = ['Requested' => ($needsRec ? 'pr_recommend' : 'pr_approve'), 'Recommended' => 'pr_approve', 'Approved' => 'pr_transfer', 'Paid' => 'pr_proposal', 'Proposal Submitted' => 'pr_proposal_approve'];

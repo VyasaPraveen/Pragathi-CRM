@@ -235,7 +235,11 @@ function pps_po_pdf(array $po, array $lead = [], string $assetDir = ''): string 
   $row('Customer Scope', popdf_term($po, 'customerScope', PO_DEFAULTS['customerScope']));
   $y += 3;
 
-  $price = popdf_num($po['agreedPrice'] ?? 0) ?: popdf_num($po['amount'] ?? 0) ?: popdf_num($po['totalValue'] ?? 0);
+  // The final agreed price is the figure entered in the PO's "Amount" field.
+  // It used to take "Price After Subsidy" (agreedPrice) first, which is a
+  // different number with its own purpose; that field is left as it is and
+  // only stands in here when no Amount was entered.
+  $price = popdf_num($po['amount'] ?? 0) ?: popdf_num($po['agreedPrice'] ?? 0) ?: popdf_num($po['totalValue'] ?? 0);
   $pdf->setFont('', 10.5);
   $pdf->text($L, $y, 'Final agreed price');
   $pdf->text($valueX - 10, $y, ':');

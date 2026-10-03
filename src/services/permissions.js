@@ -418,7 +418,7 @@ export function prProgress(pr, users) {
   const done = [];
   if (pr.recommendedBy) done.push({ label: 'Recommended', by: pr.recommendedBy, date: pr.recommendedByDate });
   if (pr.approvedBy) done.push({ label: 'Approved', by: pr.approvedBy, date: pr.approvedByDate });
-  if (pr.paidBy) done.push({ label: 'Payment transferred', by: pr.paidBy, date: pr.paidByDate });
+  if (pr.paidBy) done.push({ label: pr.directPayment ? 'Paid directly by the Accountant (below Rs.1,000)' : 'Payment transferred', by: pr.paidBy, date: pr.paidByDate });
   if (pr.proposalBy) done.push({ label: 'Work Proposal / Pre-PO sent', by: pr.proposalBy, date: pr.proposalByDate });
   if (pr.closedBy) done.push({ label: 'Closed', by: pr.closedBy, date: pr.closedByDate });
   if (pr.status === PR_STATUS.REJECTED) {
@@ -696,3 +696,114 @@ export function canRecommendLeadPO(po, lead, user, role, users) {
 export const WAREHOUSE_ROLES = ['warehouse_admin', 'technical_manager'];
 export const warehouseUsers = (users) =>
   (users || []).filter(u => u.approved !== false && WAREHOUSE_ROLES.includes(normalizeRole(u.role)));
+
+// ── Payment requests: the category, and the below-Rs.1,000 direct payment ───
+//
+// Every request now says what kind of payment it is. The three kinds are the
+// company's own; "Expenditure" is the default because that is what nearly all
+// of them are.
+export const PR_CATEGORIES = ['Expenditure', 'Salary Advance', 'Loan'];
+
+// A small payment does not wait for the approval chain: below this amount the
+// Accountant may pay it as soon as it is raised, and the Owner is told that it
+// was paid that way. At this amount or above, nothing changes.
+export const PR_DIRECT_PAY_LIMIT = 1000;
+
+const prAmount = (pr) => Number(pr && pr.amount) || 0;
+
+// Is this request small enough, and early enough in its life, to be paid
+// directly? Once it has been approved the ordinary path applies anyway.
+export function prDirectPayAllowed(pr) {
+  if (!pr) return false;
+  const status = pr.status || PR_STATUS.REQUESTED;
+  if (![PR_STATUS.REQUESTED, PR_STATUS.RECOMMENDED].includes(status)) return false;
+  const amt = prAmount(pr);
+  return amt > 0 && amt < PR_DIRECT_PAY_LIMIT;
+}
+
+// May this user pay it directly? The Accountant's step, and never their own
+// request — the same two rules the ordinary payment step follows.
+export function canDirectPayPr(pr, user, role) {
+  if (!prDirectPayAllowed(pr)) return false;
+  if (isOwnRequest(pr, user)) return false;
+  return can(role, ACTIONS.PR_TRANSFER);
+}
+
+// The Owner(s) — who must hear of every direct payment.
+export const ownerUsers = (users) =>
+  (users || []).filter(u => u.approved !== false && normalizeRole(u.role) === 'super_admin');
+
+// ── Warehouse dispatch, after a purchase order is approved ──────────────────
+//
+// An approved PO is handed to the warehouse, who send the material out item by
+// item. Each item is marked dispatched or not, with a reason when it is not;
+// the warehouse then declares the dispatch complete, the authorities are told,
+// and the Operation Manager confirms it after looking it over. None of this
+// touches the PO's own status, which stays Approved throughout.
+export const DISPATCH_STATUS = { NONE: '', PARTIAL: 'Partial', COMPLETED: 'Completed' };
+
+// Who may mark items and complete a dispatch: the warehouse, with the
+// Operation Manager and Admin able to step in.
+export const DISPATCH_EDITOR_ROLES = ['warehouse_admin', 'technical_manager', 'operation_manager', 'admin', 'management', 'super_admin'];
+// Who confirms it once complete.
+export const DISPATCH_CONFIRM_ROLES = ['operation_manager', 'admin', 'management', 'super_admin'];
+// Who is told when it is complete.
+export const DISPATCH_NOTIFY_ROLES = ['super_admin', 'management', 'operation_manager', 'admin'];
+
+const roleIn = (role, list) => list.includes(normalizeRole(role)) || role === 'super_admin';
+
+export const dispatchOpen = (po) => !!po && po.status === PO_STATUS.APPROVED;
+
+// Items may be marked until the Operation Manager has confirmed the dispatch.
+export function canUpdateDispatch(po, role) {
+  if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  return roleIn(role, DISPATCH_EDITOR_ROLES);
+}
+
+export function canConfirmDispatch(po, role) {
+  if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  if (po.dispatchStatus !== DISPATCH_STATUS.COMPLETED) return false;
+  return roleIn(role, DISPATCH_CONFIRM_ROLES);
+}
+
+export const dispatchNotifyUsers = (users) =>
+  (users || []).filter(u => u.approved !== false && DISPATCH_NOTIFY_ROLES.includes(normalizeRole(u.role)));
+
+// The marks for each item, one per PO line, in the PO's own order. A PO that
+// has never been touched gets a blank mark for every line.
+export function dispatchMarks(po) {
+  const items = (po && po.items) || [];
+  const marks = (po && Array.isArray(po.dispatchItems)) ? po.dispatchItems : [];
+  return items.map((it, i) => ({
+    dispatched: !!(marks[i] && marks[i].dispatched),
+    note: (marks[i] && marks[i].note) || '',
+    at: (marks[i] && marks[i].at) || '',
+    by: (marks[i] && marks[i].by) || '',
+  }));
+}
+
+// How far the dispatch has got.
+export function dispatchSummary(po) {
+  const items = (po && po.items) || [];
+  const marks = dispatchMarks(po);
+  const pending = [];
+  let dispatched = 0;
+  marks.forEach((m, i) => {
+    if (m.dispatched) dispatched++;
+    else pending.push({ index: i, name: (items[i] && items[i].materialName) || `Item ${i + 1}`, note: m.note });
+  });
+  return { total: items.length, dispatched, pending, allDispatched: items.length > 0 && dispatched === items.length };
+}
+
+// What stops the warehouse from declaring the dispatch complete: nothing sent
+// at all, or an item held back without a reason. Partial dispatch is allowed —
+// it just has to say why each missing item is missing.
+export function dispatchCompleteIssue(po, marks) {
+  const items = (po && po.items) || [];
+  if (!items.length) return 'This purchase order has no items to dispatch.';
+  const ms = marks || dispatchMarks(po);
+  if (!ms.some(m => m.dispatched)) return 'Mark at least one item as dispatched first.';
+  const unexplained = ms.map((m, i) => (!m.dispatched && !String(m.note || '').trim()) ? ((items[i] && items[i].materialName) || `Item ${i + 1}`) : '').filter(Boolean);
+  if (unexplained.length) return `Add a note saying why these were not dispatched: ${unexplained.join(', ')}.`;
+  return '';
+}

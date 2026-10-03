@@ -3,11 +3,13 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification } from '../services/firestore';
-import { formatDate, safeStr, hasAccess, todayStr } from '../services/helpers';
+import { formatDate, safeStr, hasAccess, todayStr, toNumber } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
 import { canRecommendLeave, isLeaveLeader, leaderOf } from '../services/permissions';
+// The leave types and how a request is counted live in services/leave.js, so
+// the counting rules can be checked on their own.
+import { LEAVE_TYPES, isShortLeave, leaveDays, countedFor, leaveHours, leaveSpanText } from '../services/leave';
 
-const LEAVE_TYPES = ['Sick Leave', 'Fever Leave', 'Casual Leave', 'Emergency Leave', 'Earned Leave', 'Half Day', 'Other'];
 const PAGE_SIZE = 20;
 
 const ST = {
@@ -19,18 +21,6 @@ const ST = {
 
 // Only the Sales Manager (or higher authority / owner) may approve leave (req #1).
 const isLeaveApprover = (role) => ['sales_manager', 'management', 'admin', 'super_admin'].includes(role);
-
-// Whole calendar days between two ISO dates, inclusive. Half Day counts as 0.5.
-function leaveDays(type, from, to) {
-  if (type === 'Half Day') return 0.5;
-  if (!from) return 0;
-  const a = new Date(from);
-  const b = new Date(to || from);
-  if (isNaN(a) || isNaN(b) || b < a) return 0;
-  return Math.floor((b - a) / 86400000) + 1;
-}
-// The mandated +1 per request (req #2): 3 days requested → 4 counted.
-const countedFor = (days) => (days > 0 ? days + 1 : 0);
 
 export default function Leave() {
   const { leaveRequests, users } = useData();
@@ -69,8 +59,9 @@ export default function Leave() {
   }
   filtered = [...filtered].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
-  // Leave count summary: total COUNTED days (incl. +1) of approved leave. Managers
-  // see the whole team; staff see their own.
+  // Leave count summary: total counted days of approved leave. Managers see
+  // the whole team; staff see their own. (Short Leaves are hours, not days,
+  // and do not add to these.)
   const summary = useMemo(() => {
     const scope = (approver || admin) ? leaveRequests : leaveRequests.filter(mine);
     const approved = scope.filter(lr => lr.status === ST.APPROVED);
@@ -88,9 +79,15 @@ export default function Leave() {
     try {
       const days = leaveDays(data.leaveType, data.fromDate, data.toDate);
       const rep = (users || []).find(u => u.id === data.replacementId);
+      const short = isShortLeave(data.leaveType);
       const payload = {
         ...data,
-        toDate: data.leaveType === 'Half Day' ? data.fromDate : (data.toDate || data.fromDate),
+        // Half Day and a Short Leave are a single day; a Short Leave also
+        // carries its hours and clock times, and counts no days.
+        toDate: (data.leaveType === 'Half Day' || short) ? data.fromDate : (data.toDate || data.fromDate),
+        hours: short ? (toNumber(data.hours) || leaveHours(data.fromTime, data.toTime)) : '',
+        fromTime: short ? (data.fromTime || '') : '',
+        toTime: short ? (data.toTime || '') : '',
         days,
         countedDays: countedFor(days),
         replacementName: rep ? (rep.displayName || rep.email) : (data.replacementName || ''),
@@ -121,7 +118,7 @@ export default function Leave() {
         createNotification({
           forUser: leader ? (leader.displayName || leader.email) : leaderEmail,
           title: 'Leave request from your team',
-          message: `${payload.employeeName || 'A team member'} applied for ${payload.leaveType} (${formatDate(payload.fromDate)}${payload.toDate && payload.toDate !== payload.fromDate ? '–' + formatDate(payload.toDate) : ''}). You can add your recommendation.`,
+          message: `${payload.employeeName || 'A team member'} applied for ${payload.leaveType} (${formatDate(payload.fromDate)}${payload.toDate && payload.toDate !== payload.fromDate ? '–' + formatDate(payload.toDate) : ''}, ${leaveSpanText(payload)}). You can add your recommendation.`,
           type: 'status_update', module: 'leaveRequests', relatedId: savedId || '',
         });
       }
@@ -129,7 +126,7 @@ export default function Leave() {
         createNotification({
           forUser: payload.replacementEmail,
           title: 'Leave Replacement Request',
-          message: `${payload.employeeName || 'A colleague'} asked you to cover their work (${payload.leaveType}, ${formatDate(payload.fromDate)}${payload.toDate && payload.toDate !== payload.fromDate ? '–' + formatDate(payload.toDate) : ''}). Please accept or decline.`,
+          message: `${payload.employeeName || 'A colleague'} asked you to cover their work (${payload.leaveType}, ${formatDate(payload.fromDate)}${payload.toDate && payload.toDate !== payload.fromDate ? '–' + formatDate(payload.toDate) : ''}, ${leaveSpanText(payload)}). Please accept or decline.`,
           type: 'task', module: 'leaveRequests', relatedId: savedId || '',
         });
       }
@@ -144,7 +141,7 @@ export default function Leave() {
       const key = u.email || u.displayName;
       if (!key || seen.has(key)) return;
       seen.add(key);
-      createNotification({ forUser: key, title: 'Leave Awaiting Your Approval', message: `${lr.employeeName}'s ${lr.leaveType} (${lr.days} day${lr.days === 1 ? '' : 's'}) is ready for approval — replacement confirmed.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
+      createNotification({ forUser: key, title: 'Leave Awaiting Your Approval', message: `${lr.employeeName}'s ${lr.leaveType} (${leaveSpanText(lr)}) is ready for approval — replacement confirmed.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
     });
   };
 
@@ -189,7 +186,7 @@ export default function Leave() {
     if (!window.confirm(`Approve ${lr.employeeName}'s leave?`)) return;
     try {
       await updateDocument('leaveRequests', lr.id, { status: ST.APPROVED, approvedBy: myEmail, approvalDate: todayStr() });
-      if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Approved', message: `Your ${lr.leaveType} (${lr.days} day${lr.days === 1 ? '' : 's'}) was approved.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
+      if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Approved', message: `Your ${lr.leaveType} (${leaveSpanText(lr)}) was approved.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       if (lr.replacementEmail) createNotification({ forUser: lr.replacementEmail, title: 'Leave Cover Confirmed', message: `${lr.employeeName}'s leave was approved — you are covering ${formatDate(lr.fromDate)}${lr.toDate && lr.toDate !== lr.fromDate ? '–' + formatDate(lr.toDate) : ''}.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('Leave approved');
     } catch (e) { toast(e.message, 'er'); }
@@ -253,8 +250,15 @@ export default function Leave() {
               <td style={{ fontSize: '.82rem' }}>{lr.leaveType === 'Other' ? (lr.leaveTypeOther || 'Other') : lr.leaveType}</td>
               <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(lr.fromDate)}{lr.toDate && lr.toDate !== lr.fromDate ? ' – ' + formatDate(lr.toDate) : ''}</td>
               <td style={{ fontSize: '.82rem' }}>
-                <strong>{lr.days}</strong> → <strong style={{ color: 'var(--pri)' }}>{lr.countedDays}</strong>
-                <span title="One extra leave is added per request" style={{ marginLeft: 4, background: 'rgba(232,131,12,.12)', color: '#d68910', borderRadius: 10, padding: '1px 6px', fontSize: '.66rem', fontWeight: 700 }}>+1</span>
+                {isShortLeave(lr.leaveType)
+                  ? <><strong>{Number(lr.hours) || 0}</strong> hrs{lr.fromTime && lr.toTime ? <span style={{ color: 'var(--muted)', fontSize: '.74rem' }}> ({lr.fromTime}–{lr.toTime})</span> : null}</>
+                  : <>
+                      <strong style={{ color: 'var(--pri)' }}>{lr.countedDays ?? lr.days}</strong>
+                      {/* Requests from before the +1 was removed still carry it on the record. */}
+                      {Number(lr.countedDays) > Number(lr.days) && (
+                        <span title={`Counted under the earlier rule: ${lr.days} requested, ${lr.countedDays} counted`} style={{ marginLeft: 4, color: 'var(--muted)', fontSize: '.7rem' }}>({lr.days} requested)</span>
+                      )}
+                    </>}
               </td>
               <td style={{ fontSize: '.8rem' }}>{lr.replacementName || '-'}{lr.replacementStatus && <><br /><span style={{ fontSize: '.7rem', color: lr.replacementStatus === 'Accepted' ? 'var(--ok)' : lr.replacementStatus === 'Declined' ? 'var(--err)' : 'var(--muted)' }}>{lr.replacementStatus}</span></>}</td>
               <td>
@@ -293,7 +297,7 @@ export default function Leave() {
 
       <div style={{ marginTop: 12, fontSize: '.76rem', color: 'var(--muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <span className="material-icons-round" style={{ fontSize: 15 }}>info</span>
-        Flow: Apply &amp; assign a replacement → replacement accepts → Sales Manager approves. Each request counts as the days taken <strong>+1</strong>.
+        Flow: Apply &amp; assign a replacement → replacement accepts → Sales Manager approves. A request counts the days it covers; a Sunday in between counts only when the Saturday before and the Monday after are both on leave.
       </div>
 
       {modal && <LeaveModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
@@ -311,13 +315,20 @@ function LeaveModal({ data, id, onSave, onClose }) {
     leaveTypeOther: data.leaveTypeOther || '',
     fromDate: data.fromDate || todayStr(),
     toDate: data.toDate || todayStr(),
+    // Short Leave only: the clock times and the hours between them.
+    fromTime: data.fromTime || '',
+    toTime: data.toTime || '',
+    hours: data.hours || '',
     reason: data.reason || '',
     replacementId: data.replacementId || '',
   });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
 
+  const short = isShortLeave(f.leaveType);
   const days = leaveDays(f.leaveType, f.fromDate, f.toDate);
   const counted = countedFor(days);
+  // The hours follow the clock times until they are typed over.
+  const hours = toNumber(f.hours) || leaveHours(f.fromTime, f.toTime);
   const others = (users || []).filter(u => u.email !== user?.email);
 
   const submit = async (e) => {
@@ -326,9 +337,12 @@ function LeaveModal({ data, id, onSave, onClose }) {
     if (f.leaveType === 'Other' && !f.leaveTypeOther.trim()) { toast('Please specify the leave reason', 'er'); return; }
     if (!f.reason.trim()) { toast('Please add leave details', 'er'); return; }
     if (!f.replacementId) { toast('Assign a replacement colleague before submitting', 'er'); return; }
-    if (days <= 0) { toast('Check the leave dates', 'er'); return; }
+    if (short) {
+      if (!f.fromDate) { toast('Pick the date of the leave', 'er'); return; }
+      if (hours <= 0) { toast('Enter the hours of leave needed (or the from and to times)', 'er'); return; }
+    } else if (days <= 0) { toast('Check the leave dates', 'er'); return; }
     setSaving(true);
-    try { await onSave(f, id); } finally { setSaving(false); }
+    try { await onSave({ ...f, hours: short ? hours : '' }, id); } finally { setSaving(false); }
   };
 
   return (
@@ -341,14 +355,37 @@ function LeaveModal({ data, id, onSave, onClose }) {
               ? <div className="fg"><label>Specify Reason *</label><input className="fi" value={f.leaveTypeOther} onChange={e => set('leaveTypeOther', e.target.value)} placeholder="Custom leave reason" /></div>
               : <div className="fg" />}
           </div>
-          <div className="fr">
-            <div className="fg"><label>From Date *</label><DateInput value={f.fromDate} onChange={e => { set('fromDate', e.target.value); if (f.leaveType === 'Half Day') set('toDate', e.target.value); }} /></div>
-            {f.leaveType !== 'Half Day' && <div className="fg"><label>To Date *</label><DateInput value={f.toDate} onChange={e => set('toDate', e.target.value)} /></div>}
-          </div>
-          <div style={{ background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: '.85rem' }}>
-            Days requested: <strong>{days}</strong> &nbsp;→&nbsp; Leave counted: <strong style={{ color: 'var(--pri)' }}>{counted}</strong>
-            <span style={{ marginLeft: 6, background: 'rgba(232,131,12,.12)', color: '#d68910', borderRadius: 10, padding: '1px 7px', fontSize: '.7rem', fontWeight: 700 }}>+1 added</span>
-          </div>
+          {short ? (
+            /* A few hours off: the day, and the time away. No From / To dates. */
+            <>
+              <div className="fr3">
+                <div className="fg"><label>Date *</label><DateInput value={f.fromDate} onChange={e => { set('fromDate', e.target.value); set('toDate', e.target.value); }} /></div>
+                <div className="fg"><label>From Time</label><input type="time" className="fi" value={f.fromTime} onChange={e => { set('fromTime', e.target.value); set('hours', ''); }} /></div>
+                <div className="fg"><label>To Time</label><input type="time" className="fi" value={f.toTime} onChange={e => { set('toTime', e.target.value); set('hours', ''); }} /></div>
+              </div>
+              <div className="fg"><label>Hours Needed *</label>
+                <input type="number" className="fi" min="0.25" step="0.25" value={f.hours === '' ? (hours || '') : f.hours}
+                  onChange={e => set('hours', e.target.value)} placeholder="e.g. 2" />
+                <small className="lg-hint">Worked out from the times above, or type the hours directly.</small>
+              </div>
+              <div style={{ background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: '.85rem' }}>
+                Short leave of <strong style={{ color: 'var(--pri)' }}>{hours || 0} hour{hours === 1 ? '' : 's'}</strong> on {formatDate(f.fromDate)} — counts as hours, not as a day.
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="fr">
+                <div className="fg"><label>From Date *</label><DateInput value={f.fromDate} onChange={e => { set('fromDate', e.target.value); if (f.leaveType === 'Half Day') set('toDate', e.target.value); }} /></div>
+                {f.leaveType !== 'Half Day' && <div className="fg"><label>To Date *</label><DateInput value={f.toDate} onChange={e => set('toDate', e.target.value)} /></div>}
+              </div>
+              <div style={{ background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: '.85rem' }}>
+                Leave counted: <strong style={{ color: 'var(--pri)' }}>{counted} day{counted === 1 ? '' : 's'}</strong>
+                <span style={{ marginLeft: 8, fontSize: '.74rem', color: 'var(--muted)' }}>
+                  A Sunday in between counts only when the Saturday before and the Monday after are both on leave.
+                </span>
+              </div>
+            </>
+          )}
           <div className="fg"><label>Assign Replacement *</label>
             <select className="fi" value={f.replacementId} onChange={e => set('replacementId', e.target.value)}>
               <option value="">-- Select a colleague to cover your work --</option>
