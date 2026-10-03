@@ -30,9 +30,16 @@ export default function DispatchPanel({ po, lead }) {
   const [marks, setMarks] = useState(() => dispatchMarks(po));
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
-  // A fresh copy from the server replaces local edits only when nothing is
-  // half-done here.
-  useEffect(() => { if (!dirty) setMarks(dispatchMarks(po)); }, [po, dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  // What the server last gave us (or what we last saved), so a refreshed copy
+  // of the PO replaces the marks only when it actually differs — and never
+  // while something is half-done here. Without this, saving cleared the ticks
+  // on screen for a moment: the sync ran against the copy from before the
+  // save and put the old marks back until the refresh arrived.
+  const [baseline, setBaseline] = useState(() => JSON.stringify(dispatchMarks(po)));
+  useEffect(() => {
+    const incoming = JSON.stringify(dispatchMarks(po));
+    if (incoming !== baseline && !dirty) { setMarks(dispatchMarks(po)); setBaseline(incoming); }
+  }, [po, dirty, baseline]);
 
   if (!dispatchOpen(po)) return null;
 
@@ -59,12 +66,19 @@ export default function DispatchPanel({ po, lead }) {
     setBusy(true);
     try {
       const next = stamped();
+      // A dispatch already declared complete stays complete when a mark is
+      // corrected afterwards; it does not slip back to "partly dispatched".
+      const status = extra.dispatchStatus
+        || (po.dispatchStatus === DISPATCH_STATUS.COMPLETED ? DISPATCH_STATUS.COMPLETED
+          : (next.some(m => m.dispatched) ? DISPATCH_STATUS.PARTIAL : DISPATCH_STATUS.NONE));
       await updateDocument('leadPOs', po.id, {
         dispatchItems: next,
-        dispatchStatus: extra.dispatchStatus || (next.some(m => m.dispatched) ? DISPATCH_STATUS.PARTIAL : DISPATCH_STATUS.NONE),
+        dispatchStatus: status,
         dispatchUpdatedAt: nowIso(), dispatchUpdatedBy: meName,
         ...extra,
       });
+      setMarks(next);
+      setBaseline(JSON.stringify(dispatchMarks({ ...po, dispatchItems: next })));
       setDirty(false);
       toast(okMsg);
       return next;
@@ -89,7 +103,7 @@ export default function DispatchPanel({ po, lead }) {
     const seen = new Set();
     dispatchNotifyUsers(users).forEach(u => {
       const key = u.displayName || u.email;
-      if (!key || seen.has(key)) return;
+      if (!key || seen.has(key) || key === meName) return;
       seen.add(key);
       createNotification({
         forUser: key,

@@ -27,7 +27,13 @@ export default function BcoOperationsPanel({ lead }) {
   const { toast } = useToast();
   const meName = user?.displayName || user?.email || '';
 
-  const ops = (bcoOps || []).find(o => o.leadId === lead.id) || null;
+  // The record as last saved from here, kept until the server's copy catches
+  // up. Without it, a second save made before the first record came back
+  // from the server created a second record for the same lead.
+  const [local, setLocal] = useState(null);
+  const fromServer = (bcoOps || []).find(o => o.leadId === lead.id) || null;
+  const ops = (local && (!fromServer || fromServer.id === local.id) && (!fromServer || (fromServer.updatedAt || '') <= (local.updatedAt || '')))
+    ? local : fromServer;
   const mayEdit = canEditBco(role);
   const [editing, setEditing] = useState('');          // the stage key being edited
   const [draft, setDraft] = useState({});
@@ -62,8 +68,14 @@ export default function BcoOperationsPanel({ lead }) {
       };
       delete next.reopen;
       const stages = { ...((ops && ops.stages) || {}), [stage.key]: next };
-      if (ops) await updateDocument('bcoOps', ops.id, { stages, leadName: lead.name || ops.leadName || '' });
-      else await addDocument('bcoOps', { ...emptyBcoOps(lead), stages });
+      const at = nowIso();
+      if (ops && ops.id) {
+        await updateDocument('bcoOps', ops.id, { stages, leadName: lead.name || ops.leadName || '' });
+        setLocal({ ...ops, stages, updatedAt: at });
+      } else {
+        const id = await addDocument('bcoOps', { ...emptyBcoOps(lead), stages });
+        setLocal({ ...emptyBcoOps(lead), id, stages, updatedAt: at });
+      }
       toast(closing ? `Stage ${stage.no} closed` : `Stage ${stage.no} updated`);
       setEditing('');
     } catch (e) { toast(e.message, 'er'); }

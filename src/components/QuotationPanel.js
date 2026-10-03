@@ -205,6 +205,9 @@ export default function QuotationPanel({ lead }) {
         if (q.status === QT_STATUS.REJECTED) {
           Object.assign(patch, {
             status: QT_STATUS.PENDING, rejectedBy: '', rejectionReason: '', rejectedAt: '',
+            // The same record a revision leaves, so the "back for approval"
+            // banner reads the same whichever way it came back.
+            resubmittedAt: nowIso(), resubmittedBy: meName, resubmittedRevision: toNumber(q.revision),
           });
         }
         await updateDocument('quotations', q.id, patch);
@@ -902,7 +905,9 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
               <table style={{ fontSize: '.8rem' }}>
                 <thead><tr><th style={{ width: 38 }}>#</th><th>Material</th><th>Specification</th><th>Qty</th><th>Warranty</th></tr></thead>
                 <tbody>{(f.bomItems || []).map((it, i) => (
-                  <tr key={`${it.material}-${i}`}>
+                  // An added line's name is typed in place, so its key must not
+                  // follow the name or the input would remount on every letter.
+                  <tr key={it.added ? `added-${i}` : `${it.material}-${i}`}>
                     <td>{i + 1}</td>
                     {/* The standard materials keep their names; only a line the
                         user added through "Add Item" has an editable name. */}
