@@ -468,7 +468,9 @@ export default function QuotationPanel({ lead }) {
   // Reqs 1 and 12 — nothing goes to the customer until the quotation has been
   // through the approval the workflow requires. The recommendation is optional
   // and is not part of this gate; the approval is what counts.
-  const approvedForCustomer = [QT_STATUS.APPROVED, QT_STATUS.SHARED, QT_STATUS.ACCEPTED].includes(q.status);
+  // `q` is null until a quotation has been raised for the lead — this runs
+  // before that case is handled below, so it must not touch q.status.
+  const approvedForCustomer = !!q && [QT_STATUS.APPROVED, QT_STATUS.SHARED, QT_STATUS.ACCEPTED].includes(q.status);
 
   const handleWhatsApp = () => {
     if (!approvedForCustomer) {
