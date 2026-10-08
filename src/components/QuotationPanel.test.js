@@ -119,6 +119,76 @@ describe('DispatchPanel', () => {
     mockData = { users };
     expect(() => render(<DispatchPanel po={{ id: 'P2', status: 'Approved' }} lead={null} />)).not.toThrow();
   });
+
+  // 8-Oct R6: the handover after "OK & Send".
+  test('the warehouse sees "OK & Send"; the OM sees the assignment once sent; the person sees the receipt button', () => {
+    mockData = { users };
+    asUser('wh@x.com', 'warehouse_admin');
+    expect(render(<DispatchPanel po={po('Approved')} lead={lead} />)).toContain('OK & Send');
+    const sent = po('Approved', { dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-08T05:00:00Z', dispatchItems: [{ dispatched: true }] });
+    asUser('om@x.com', 'operation_manager');
+    let text = render(<DispatchPanel po={sent} lead={lead} />);
+    expect(text).toContain('Items Handover');
+    expect(text).toContain('Assign Person');
+    expect(text).toContain('Solar PV Module (6 Nos)');
+    // The warehouse does not get the assignment control.
+    asUser('wh@x.com', 'warehouse_admin');
+    expect(render(<DispatchPanel po={sent} lead={lead} />)).not.toContain('Assign Person');
+    const assigned = { ...sent, dispatchAssignedTo: 'Revanth Reddy', dispatchAssignedToEmail: 'revanth@x.com', dispatchAssignedBy: 'OM', dispatchAssignedAt: '2026-10-08T06:00:00Z' };
+    asUser('revanth@x.com', 'executive');
+    // The button renders as its icon name followed by its label; the status
+    // line quotes the label too, so the icon is what tells the two apart.
+    const RECEIVE_BUTTON = 'how_to_reg I have received these items';
+    text = render(<DispatchPanel po={assigned} lead={lead} />);
+    expect(text).toContain(RECEIVE_BUTTON);
+    asUser('yogendra@x.com', 'team_leader');
+    expect(render(<DispatchPanel po={assigned} lead={lead} />)).not.toContain(RECEIVE_BUTTON);
+    asUser('om@x.com', 'operation_manager');
+    text = render(<DispatchPanel po={assigned} lead={lead} />);
+    expect(text).toContain('Re-assign');
+    expect(text).toContain('Awaiting their');
+    const received = { ...assigned, dispatchReceivedBy: 'Revanth Reddy', dispatchReceivedAt: '2026-10-08T07:00:00Z' };
+    text = render(<DispatchPanel po={received} lead={lead} />);
+    expect(text).toContain('Received by Revanth Reddy');
+    expect(text).not.toContain('Re-assign');
+    asUser('revanth@x.com', 'executive');
+    expect(render(<DispatchPanel po={received} lead={lead} />)).not.toContain(RECEIVE_BUTTON);
+  });
+});
+
+describe('Installations page', () => {
+  const Installations = require('../pages/Installations').default;
+  const insts = [
+    { id: 'I1', customerName: 'Mr Rao', phone: '9701461156', progress: 40, teamLeader: 'K.J. Yogendra reddy', numPeople: 3, teamMembers: ['Revanth Reddy', 'Someone'], startDate: '2026-10-01', consumptionReportUrl: 'https://x/r.pdf', consumptionReportName: 'report.pdf' },
+    { id: 'I2', customerName: 'Mrs Devi', progress: 0, discomFeasibility: 'Done', handSketch: 'https://x/s.jpg' },
+  ];
+  test('renders for a manager (add + edit), the installation\'s Team Leader (edit that one) and a member (no edit)', () => {
+    const base = { installations: insts, users, customers: [{ id: 'C1', leadId: 'L1', name: 'Mr Rao', phone: '9701461156' }], leads: [lead] };
+    mockData = base;
+    asUser('om@x.com', 'operation_manager');
+    let text = render(<Installations />);
+    expect(text).toContain('Add Installation');
+    expect(text).toContain('Team Members');
+    expect(text).toContain('report.pdf');
+    expect(text).not.toContain('DISCOM');
+    expect((text.match(/Edit/g) || []).length).toBe(2);
+    asUser('yogendra@x.com', 'team_leader');
+    text = render(<Installations />);
+    expect(text).not.toContain('Add Installation');
+    expect((text.match(/Edit/g) || []).length).toBe(1);
+    asUser('revanth@x.com', 'executive');
+    text = render(<Installations />);
+    expect(text).not.toContain('Add Installation');
+    expect((text.match(/Edit/g) || []).length).toBe(0);
+    // The Admin's per-user grant.
+    mockAuth = { user: { ...users[1], permissions: { installations_manage: true } }, role: 'team_leader' };
+    expect(render(<Installations />)).toContain('Add Installation');
+  });
+  test('renders with no installations and no customers', () => {
+    mockData = { installations: [], users, customers: [], leads: [] };
+    asUser('om@x.com', 'operation_manager');
+    expect(render(<Installations />)).toContain('No installations');
+  });
 });
 
 describe('BcoOperationsPanel', () => {

@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateInput , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import {
   can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf, canSeePaymentRequest,
   PR_CATEGORIES, PR_DIRECT_PAY_LIMIT, canDirectPayPr, ownerUsers,
@@ -34,6 +35,9 @@ const canRejectPr = (pr, user, role, users) => {
   return !!stage && canTakePrStage(stage, pr, user, role, users);
 };
 
+// A payment request's day for the Day / Month filter: when it was raised.
+const PR_DATE_FIELDS = ['requestedDate', 'createdAt'];
+
 export default function PaymentRequests() {
   const { paymentRequests, users } = useData();
   const { role, user } = useAuth();
@@ -42,6 +46,9 @@ export default function PaymentRequests() {
   const [filter, setFilter] = useState('all');
   const [modal, setModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  // The Day / Month filter (R15) — asked for here above all, because the list
+  // keeps growing and a request from last month is hard to find.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   const canRequest = can(role, ACTIONS.PR_CREATE);
   const me = user?.displayName || user?.email || 'unknown';
@@ -107,6 +114,7 @@ export default function PaymentRequests() {
       safeStr(x.requestedBy).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, PR_DATE_FIELDS);
 
   const summary = useMemo(() => {
     const s = { total: 0, pending: 0, approved: 0, paid: 0 };
@@ -134,7 +142,7 @@ export default function PaymentRequests() {
         cleaned.status = PR_STATUS.REQUESTED;
         cleaned.requestedBy = user?.email || 'unknown';
         cleaned.requestedByName = me;
-        cleaned.requestedDate = todayStr();
+        cleaned.requestedDate = new Date().toISOString();
         // The server decides these from the team structure on file; sent here so
         // the row reads correctly straight away.
         cleaned.teamLeaderEmail = needsRecommendation ? myLeaderEmail : '';
@@ -198,7 +206,7 @@ export default function PaymentRequests() {
       await updateDocument('paymentRequests', pr.id, {
         status: stage.to,
         [stage.field]: me,
-        [stage.field + 'Date']: todayStr(),
+        [stage.field + 'Date']: new Date().toISOString(),
         ...extra,
       });
       // Keep the requester informed as their request moves along the chain.
@@ -230,7 +238,7 @@ export default function PaymentRequests() {
     if (!ref.trim()) { toast('A payment reference is required', 'er'); return; }
     try {
       await updateDocument('paymentRequests', pr.id, {
-        status: PR_STATUS.PAID, paidBy: me, paidByDate: todayStr(), paymentRef: ref.trim(),
+        status: PR_STATUS.PAID, paidBy: me, paidByDate: new Date().toISOString(), paymentRef: ref.trim(),
         directPayment: true,
         directPaymentRule: `Below ${limit} — paid directly by the Accountant without the approval step`,
       });
@@ -264,7 +272,7 @@ export default function PaymentRequests() {
       await updateDocument('paymentRequests', pr.id, {
         status: PR_STATUS.REJECTED,
         rejectedBy: me,
-        rejectedDate: todayStr(),
+        rejectedDate: new Date().toISOString(),
       });
       if (pr.requestedBy && pr.requestedBy !== user?.email) {
         createNotification({ forUser: pr.requestedByName || pr.requestedBy, title: 'Payment Request Rejected', message: `Your payment request "${pr.purpose || ''}" (${formatCurrency(pr.amount)}) was rejected by ${me}`, type: 'status_update', module: 'paymentRequests', relatedId: pr.id });
@@ -315,6 +323,7 @@ export default function PaymentRequests() {
           {canRequest && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Generate Payment Request</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={visibleRequests} fields={PR_DATE_FIELDS} /></div>
 
       {/* Summary */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>

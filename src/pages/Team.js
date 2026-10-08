@@ -4,13 +4,16 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatCurrency, getInitials, toNumber, getDaysInMonth, hasAccess, DESIGNATIONS } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import MyTeamPanel from '../components/MyTeamPanel';
 import PasswordManager from '../components/PasswordManager';
 import { normName } from '../services/helpers';
 
 const roles = DESIGNATIONS.map(d => d.label);
 const statusOptions = ['Active', 'On Leave', 'Inactive'];
+
+const TEAM_DATE_FIELDS = ['joiningDate', 'createdAt'];
 
 export default function Team() {
   const { team, users } = useData();
@@ -24,6 +27,8 @@ export default function Team() {
   const canEdit = hasAccess(role, 'manager');
   const isAdmin = hasAccess(role, 'admin');
   const [pwdModal, setPwdModal] = useState(null);
+  // The Day / Month filter (R15): a member belongs to the month they joined.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   // A team member and their login are two separate records, joined on email.
   // This is what lets an Admin give someone a login, or set their password,
@@ -55,7 +60,7 @@ export default function Team() {
     }
   };
 
-  const filtered = team.filter(t => {
+  const filtered = applyDateFilter(team, dateFilter, TEAM_DATE_FIELDS).filter(t => {
     if (filterStatus !== 'all' && t.status !== filterStatus) return false;
     if (search) {
       const s = search.toLowerCase();
@@ -108,6 +113,7 @@ export default function Team() {
         </div>
         {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Member</button>}
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={team} fields={TEAM_DATE_FIELDS} /></div>
 
       {/* Team Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(290px,1fr))', gap: 16 }}>

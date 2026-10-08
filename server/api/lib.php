@@ -204,6 +204,10 @@ const TEAM_LEADER_EXTRA_MODULES = ['team','team_members','team_attendance','team
 function default_module_allowed(?string $role, string $key): bool {
   $r = normalize_role($role);
   if ($key === 'new_po') return can($r, 'po_record');
+  // Adding / editing installations (R6.3, 8-Oct): manager level by default,
+  // granted to an individual by an Admin. Mirrors defaultModuleAllowed() in
+  // permissions.js.
+  if ($key === 'installations_manage') return has_access($r, 'manager');
   if ($r === 'technician') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true);
   if ($r === 'team_leader') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true) || in_array($key, TEAM_LEADER_EXTRA_MODULES, true);
   return true;
@@ -231,6 +235,17 @@ function team_leader_of(string $email): string {
   if (!$r || !$r['data']) return '';
   $d = json_decode($r['data'], true);
   return is_array($d) && !empty($d['teamLeader']) ? strtolower(trim((string)$d['teamLeader'])) : '';
+}
+
+// The display name on a user's account, or '' — records such as a dispatch
+// assignment name people by display name, so a rule that asks "is this the
+// person named?" needs it.
+function display_name_of(string $email): string {
+  if (trim($email) === '') return '';
+  $st = db()->prepare('SELECT display_name FROM users WHERE LOWER(email) = ? LIMIT 1');
+  $st->execute([strtolower(trim($email))]);
+  $r = $st->fetch();
+  return $r ? trim((string)($r['display_name'] ?? '')) : '';
 }
 
 // ── Collection → table allowlist ─────────────────────────────────────────────

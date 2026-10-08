@@ -7,7 +7,7 @@
 // ACTIONS (lead entry, PO record/recommend/approve, expenditure chain, etc.).
 // ============================================================================
 
-import { hasAccess } from './helpers';
+import { hasAccess, isSameUser } from './helpers';
 
 // The 9 canonical roles (order = display order in dropdowns)
 export const ROLES = [
@@ -303,6 +303,9 @@ export function canSeeLead(lead, user, role, users, team) {
     return !!s && (s === email || s === name);
   };
   if (mine(lead.assignedTo) || mine(lead.salesExecutive) || mine(lead.createdBy) || mine(lead.assignedToEmail)) return true;
+  // Whoever has been sent for the site visit needs to see the lead they are
+  // visiting (R7, 8-Oct).
+  if (mine(lead.siteVisitAssignedTo)) return true;
   if (Array.isArray(lead.supportingTeam) && lead.supportingTeam.some(mine)) return true;
   // The lead carries this person's name through the team directory.
   if ((team || []).some(t => (lc(t.email) === email && email) && leadAssignees(lead).includes(lc(t.name)))) return true;
@@ -457,6 +460,7 @@ export const PERMISSION_MODULES = [
   { key: 'materials', label: 'Materials', icon: 'inventory_2', group: 'Operations' },
   { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long', group: 'Operations' },
   { key: 'new_po', label: 'New PO (create a PO)', icon: 'post_add', group: 'Operations', action: true },
+  { key: 'installations_manage', label: 'Add / edit installations', icon: 'edit_note', group: 'Operations', action: true },
 
   { key: 'revenue', label: 'Revenue', icon: 'account_balance_wallet', group: 'Finance' },
   { key: 'expenditure', label: 'Expenditure', icon: 'payments', group: 'Finance' },
@@ -505,6 +509,10 @@ export const TEAM_LEADER_DEFAULT_MODULES = [
 export function defaultModuleAllowed(role, key) {
   const r = normalizeRole(role);
   if (key === 'new_po') return can(r, ACTIONS.PO_RECORD);
+  // Adding and editing installations (R6.3, 8-Oct) is a manager-level job by
+  // default; an Admin grants it to an individual (P. Ganesh) in Settings →
+  // Permission Management. Mirrors default_module_allowed() in lib.php.
+  if (key === 'installations_manage') return hasAccess(r, 'manager');
   if (r === 'technician') return TECHNICIAN_DEFAULT_MODULES.includes(key);
   if (r === 'team_leader') return TEAM_LEADER_DEFAULT_MODULES.includes(key);
   // The Team options only mean anything to someone who has members assigned.
@@ -742,9 +750,10 @@ export const ownerUsers = (users) =>
 // touches the PO's own status, which stays Approved throughout.
 export const DISPATCH_STATUS = { NONE: '', PARTIAL: 'Partial', COMPLETED: 'Completed' };
 
-// Who may mark items and complete a dispatch: the warehouse, with the
+// Who may mark items and complete a dispatch: the warehouse — which the
+// client's "Warehouse / BCO" (8-Oct) says includes the BCO — with the
 // Operation Manager and Admin able to step in.
-export const DISPATCH_EDITOR_ROLES = ['warehouse_admin', 'technical_manager', 'operation_manager', 'admin', 'management', 'super_admin'];
+export const DISPATCH_EDITOR_ROLES = ['warehouse_admin', 'technical_manager', 'bco', 'operation_manager', 'admin', 'management', 'super_admin'];
 // Who confirms it once complete.
 export const DISPATCH_CONFIRM_ROLES = ['operation_manager', 'admin', 'management', 'super_admin'];
 // Who is told when it is complete.
@@ -806,4 +815,91 @@ export function dispatchCompleteIssue(po, marks) {
   const unexplained = ms.map((m, i) => (!m.dispatched && !String(m.note || '').trim()) ? ((items[i] && items[i].materialName) || `Item ${i + 1}`) : '').filter(Boolean);
   if (unexplained.length) return `Add a note saying why these were not dispatched: ${unexplained.join(', ')}.`;
   return '';
+}
+
+// ── Dispatch handover: warehouse → Operation Manager → the person (R6, 8-Oct) ─
+//
+// Once the warehouse has sent its list ("OK & Send", which is the Material
+// Dispatch Completed step above), the Operation Manager hands the items to a
+// named person, who confirms they have received them. Each step is a stamp on
+// the same PO: nothing here changes the PO's status or the dispatch marks.
+export const DISPATCH_ASSIGN_ROLES = DISPATCH_CONFIRM_ROLES;
+
+// The dispatch has been sent to the office — the point from which it can be assigned.
+export const dispatchSent = (po) => !!po && po.dispatchStatus === DISPATCH_STATUS.COMPLETED;
+
+// The Operation Manager (or above) assigns, once the warehouse has sent the
+// list and until the items have been received. Re-assigning before receipt is
+// allowed — people fall ill.
+export function canAssignDispatch(po, role) {
+  if (!dispatchOpen(po) || !dispatchSent(po)) return false;
+  if (po.dispatchReceivedAt) return false;
+  return roleIn(role, DISPATCH_ASSIGN_ROLES);
+}
+
+// Only the person the items were assigned to can say they have received them.
+export function canReceiveDispatch(po, user) {
+  if (!dispatchOpen(po) || !dispatchSent(po)) return false;
+  if (!po.dispatchAssignedTo || po.dispatchReceivedAt) return false;
+  return isSameUser(po.dispatchAssignedTo, user) || isSameUser(po.dispatchAssignedToEmail, user);
+}
+
+// The items that actually went out — what the assigned person is handed.
+export function dispatchedItemNames(po) {
+  const items = (po && po.items) || [];
+  return dispatchMarks(po).map((m, i) => (m.dispatched ? `${(items[i] && items[i].materialName) || `Item ${i + 1}`} (${(items[i] && items[i].quantity) || ''} ${(items[i] && items[i].unit) || ''})`.replace(/\s+\)/, ')') : '')).filter(Boolean);
+}
+
+// Where the handover stands, in one line.
+export function dispatchHandoverState(po) {
+  if (!po || !dispatchSent(po)) return { step: 'none', text: '' };
+  if (po.dispatchReceivedAt) return { step: 'received', text: `Received by ${po.dispatchReceivedBy || po.dispatchAssignedTo || '-'}` };
+  if (po.dispatchAssignedTo) return { step: 'assigned', text: `Assigned to ${po.dispatchAssignedTo} — awaiting their receipt` };
+  return { step: 'sent', text: 'Sent by the warehouse — awaiting the Operation Manager\'s assignment' };
+}
+
+// ── Installations: who may add and edit (R6.3 / R6.4, 8-Oct) ───────────────
+//
+// Adding an installation, and editing any of them, is a manager-level job by
+// default; an Admin can grant it to one person (P. Ganesh) through the
+// per-user permission. On top of that, the Team Leader named on an
+// installation may edit that installation — and only that one. Team members
+// are told they are on it but cannot edit it.
+export const canManageInstallations = (user, role) => hasModule(user, role, 'installations_manage');
+
+export function canEditInstallation(inst, user, role) {
+  if (canManageInstallations(user, role)) return true;
+  if (!inst || !user) return false;
+  return isSameUser(inst.teamLeader, user) || isSameUser(inst.teamLeaderEmail, user);
+}
+
+// The team sizes offered on the form. "Such as 3 or 4" — these cover a crew.
+export const INSTALLATION_TEAM_SIZES = [1, 2, 3, 4, 5, 6, 7, 8];
+
+// The members list trimmed to the chosen size, with blanks and the leader's
+// own name removed, and nobody twice.
+export function installationTeamMembers(members, size, leader) {
+  const n = Math.max(0, Math.min(Number(size) || 0, 20));
+  const seen = new Set();
+  const out = [];
+  (members || []).slice(0, n).forEach(m => {
+    const name = String(m || '').trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key) || key === String(leader || '').trim().toLowerCase()) return;
+    seen.add(key);
+    out.push(name);
+  });
+  return out;
+}
+
+// Who is newly on an installation team after a save: the leader if they
+// changed, and every member who was not there before. These are the people
+// to notify; the ones already on it are not told again.
+export function installationTeamChanges(prev, next) {
+  const lc = (v) => String(v || '').trim().toLowerCase();
+  const before = new Set(((prev && prev.teamMembers) || []).map(lc));
+  const leaderChanged = lc(next && next.teamLeader) && lc(next.teamLeader) !== lc(prev && prev.teamLeader);
+  const newMembers = ((next && next.teamMembers) || []).filter(m => lc(m) && !before.has(lc(m)));
+  return { leaderChanged, newLeader: leaderChanged ? next.teamLeader : '', newMembers };
 }

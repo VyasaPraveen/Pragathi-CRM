@@ -4,8 +4,9 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { assignableNames, supportingNames } from '../services/people';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect } from '../components/SharedUI';
+import { formatCurrency, formatDate, formatDateTime, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
+import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect, DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import { sharePOWhatsApp } from '../services/poUtils';
 import { openPoPdf, downloadPoPdf, poTerm } from '../services/poShare';
 import {
@@ -79,6 +80,10 @@ const DEFAULT_BOM_MATERIALS = [
   { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOT DIP/Other' },
 ];
 
+// The day a lead belongs to for the Day / Month filter: the date it was
+// generated, else the moment the record was created.
+const LEAD_DATE_FIELDS = ['dateGenerated', 'createdAt'];
+
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
   const { leads, customers, users, influencers, team, quotations, leadPOs } = useData();
@@ -90,6 +95,8 @@ export default function Leads() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [detailId, setDetailId] = useState(null);
   const [detailTab, setDetailTab] = useState(null);
+  // The common Day / Month filter (R15). Opens on All, so the list is unchanged until used.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   // A lead belongs to the person it is assigned to: they, the people working it
   // and the hierarchy above them see it — nobody else (19-Sep requirement 6).
@@ -116,6 +123,8 @@ export default function Leads() {
     );
   }
 
+  filtered = applyDateFilter(filtered, dateFilter, LEAD_DATE_FIELDS);
+
   // P2 fix: client-side pagination
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -137,9 +146,35 @@ export default function Leads() {
         sanctionedLoad: toNumber(data.sanctionedLoad)
       };
       const prevLead = id ? leads.find(l => l.id === id) : null;
+      // R7 (8-Oct): a site-visit assignment is stamped with who made it and
+      // when, but only when it actually changes — re-saving the lead for some
+      // other reason neither re-stamps nor re-notifies.
+      const visitAssignee = String(cleaned.siteVisitAssignedTo || '').trim();
+      const visitChanged = visitAssignee && norm(visitAssignee) !== norm(prevLead?.siteVisitAssignedTo);
+      if (visitChanged) {
+        cleaned.siteVisitAssignedBy = assignedByName;
+        cleaned.siteVisitAssignedAt = new Date().toISOString();
+      } else if (!visitAssignee) {
+        cleaned.siteVisitAssignedBy = '';
+        cleaned.siteVisitAssignedAt = '';
+      }
+      const tellVisitAssignee = (leadId) => {
+        if (!visitChanged) return;
+        createNotification({
+          forUser: visitAssignee,
+          title: 'Site Visit Assigned to You',
+          message: `${assignedByName} assigned you the site visit for "${cleaned.name}"`
+            + `${cleaned.phone ? ' · ' + cleaned.phone : ''}`
+            + `${[cleaned.address, cleaned.city].filter(Boolean).length ? ' · ' + [cleaned.address, cleaned.city].filter(Boolean).join(', ') : ''}`
+            + `${cleaned.siteVisitDate ? ' · planned ' + formatDate(cleaned.siteVisitDate) : ''}`
+            + '. Please go for the site visit and inform your Team Leader once it is done.',
+          type: 'lead', module: 'leads', relatedId: leadId,
+        });
+      };
       if (id) {
         await updateDocument('leads', id, cleaned);
         toast('Lead updated');
+        tellVisitAssignee(id);
         // One notice covering the whole edit, sent to everyone with a stake in
         // the lead. It replaces the old pair of messages, which told only the
         // assignee, never said who had changed what, and fired on every save.
@@ -175,6 +210,7 @@ export default function Leads() {
       } else {
         const newId = await addDocument('leads', cleaned);
         toast('Lead added');
+        tellVisitAssignee(newId);
         // Notify assigned user on new lead
         if (cleaned.assignedTo) {
           createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `${assignedByName} assigned you a new lead: "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: newId });
@@ -300,6 +336,7 @@ export default function Leads() {
           <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Lead</button>
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={myLeads} fields={LEAD_DATE_FIELDS} /></div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table style={{ fontSize: '.82rem' }}><thead><tr><th>Name / Phone</th><th>Address</th><th>Source</th><th>Priority</th><th>Assigned</th><th style={{ textAlign: 'center' }}>Visit</th><th style={{ textAlign: 'center' }}>Quote</th><th style={{ textAlign: 'center' }}>Advance</th><th>Status</th><th>Date</th><th>Age</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(l => (
           <tr key={l.id}>
@@ -385,7 +422,8 @@ function LeadModal({ data, id, onSave, onClose }) {
     elevatedNorthHeight: data.elevatedNorthHeight || data.elevatedHeight || '',
     elevatedSouthHeight: data.elevatedSouthHeight || '',
     customerServiceNumber: data.customerServiceNumber || data.meterNumber || '',
-    availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || ''
+    availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || '',
+    siteVisitAssignedTo: data.siteVisitAssignedTo || '',
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const { toast } = useToast();
@@ -496,20 +534,10 @@ function LeadModal({ data, id, onSave, onClose }) {
         if (saving) return;
         if (!id && !form.city.trim()) { toast('City is required for new leads', 'er'); return; }
         if (duplicatePhone && !window.confirm(`Phone ${form.phone} already exists for lead "${duplicatePhone.name}". Save anyway?`)) return;
-        // Validation: Required KW must be <= Sanctioned Load
-        const kw = toNumber(form.kwRequired);
-        const sl = toNumber(form.sanctionedLoad);
-        if (kw > 0 && sl > 0 && kw > sl) {
-          alert(`⚠️ Sanctioned Load (${sl} kW) is less than Required KW (${kw} kW).\nPlease enhance the sanctioned load by ${(kw - sl).toFixed(2)} kW before proceeding.`);
-          return;
-        }
-        // Validation: Available Space must be >= kwRequired * 70
-        const minSpace = kw * 70;
-        const space = toNumber(form.availableSpace);
-        if (kw > 0 && space > 0 && space < minSpace) {
-          alert(`⚠️ Not possible for installation!\nRequired space for ${kw} kW system: ${minSpace} sq.ft\nAvailable space entered: ${space} sq.ft\nRequired space is less than minimum for installation.`);
-          return;
-        }
+        // R9 (8-Oct): the two checks that used to sit here — Sanctioned Load
+        // must be at least the kW Required, and Available Space at least
+        // kW x 70 sq.ft — are gone at the client's request. Any value entered
+        // in either field is accepted; higher, equal or lower.
         setSaving(true);
         try {
           // Anyone named in a field above is not also supporting team — this
@@ -648,6 +676,19 @@ function LeadModal({ data, id, onSave, onClose }) {
               <button type="button" className="btn bsm bo" onClick={addSupportName}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Name</button>
             </div>
           </div>
+          {/* R7 (8-Oct): who goes for the site visit. Picked here, above the
+              Site Visit status; the person is told the moment the lead is
+              saved. The status itself is still updated by the Team Leader
+              once the person reports back, exactly as before. */}
+          <div className="fg">
+            <label>Assign Site Visit To <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>the person who has to go — they are notified on save</span></label>
+            <SearchSelect value={form.siteVisitAssignedTo} onChange={v => set('siteVisitAssignedTo', v)}
+              options={assignableNames(users, form.siteVisitAssignedTo)} allowFree={false}
+              placeholder="Select who goes for the site visit…" />
+            {form.siteVisitAssignedTo && data.siteVisitAssignedTo === form.siteVisitAssignedTo && data.siteVisitAssignedAt && (
+              <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)' }}>Assigned by {data.siteVisitAssignedBy || '-'} on {formatDate(data.siteVisitAssignedAt)}</small>
+            )}
+          </div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>
           {form.advancePaid === 'Yes' && (
             <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
@@ -666,7 +707,7 @@ function LeadModal({ data, id, onSave, onClose }) {
                 <div className="fr"><div className="fg"><label>North Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedNorthHeight} onChange={e => set('elevatedNorthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div><div className="fg"><label>South Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedSouthHeight} onChange={e => set('elevatedSouthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div></div>
               )}
               <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option>{opt('structureType', form.structureType).map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option>{opt('existingConnection', form.existingConnection).map(o => <option key={o}>{o}</option>)}</select></div></div>
-              <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft) <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Min: {toNumber(form.kwRequired) > 0 ? (toNumber(form.kwRequired) * 70) + ' sq.ft' : 'kW × 70'}</span></label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder={toNumber(form.kwRequired) > 0 ? `Min ${toNumber(form.kwRequired) * 70} sq.ft` : 'e.g. 200'} /></div></div>
+              <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft)</label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder="e.g. 200" /></div></div>
               <div className="fg"><label>Customer Service Number</label><input className="fi" value={form.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} placeholder="Service number from electricity bill" /></div>
               <div className="fg"><label>Site Visit Notes</label><textarea className="fi" value={form.siteVisitNotes} onChange={e => set('siteVisitNotes', e.target.value)} rows="2" placeholder="Observations from site visit..." /></div>
             </div>
@@ -781,7 +822,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       await updateDocument('leadPOs', po.id, {
         status: PO_STATUS.RECOMMENDED,
         recommendedBy: user?.email || 'unknown',
-        recommendedDate: todayStr()
+        recommendedDate: new Date().toISOString()
       });
       notifyAdmins(users, { title: 'PO Awaiting Management Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" was recommended and needs Management approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('PO recommended for approval');
@@ -797,7 +838,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       await updateDocument('leadPOs', po.id, {
         status: PO_STATUS.MANAGEMENT_APPROVED,
         managementApprovedBy: user?.email || 'unknown',
-        managementApprovalDate: todayStr()
+        managementApprovalDate: new Date().toISOString()
       });
       notifyAdmins(users, { title: 'PO Ready for Final Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" received Management approval and is ready for final approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('Management approval granted');
@@ -814,7 +855,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       await updateDocument('leadPOs', po.id, {
         status: PO_STATUS.APPROVED,
         approvedBy: user?.email || 'unknown',
-        approvalDate: todayStr()
+        approvalDate: new Date().toISOString()
       });
       // The quotation carried a default BOM while it was still a proposal — now
       // that the PO is approved, the actual PO/BOM details take its place.
@@ -929,6 +970,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <div className="di"><div className="dl">Expected Value</div><div className="dv">{lead.expectedValue ? formatCurrency(lead.expectedValue) : '-'}</div></div>
                 <div className="di"><div className="dl">Date Generated</div><div className="dv">{formatDate(lead.dateGenerated)}</div></div>
                 {lead.expectedSignUpDate && <div className="di"><div className="dl">Expected Sign-up</div><div className="dv">{formatDate(lead.expectedSignUpDate)}</div></div>}
+                {lead.siteVisitAssignedTo && <div className="di"><div className="dl">Site Visit Assigned To</div><div className="dv">{lead.siteVisitAssignedTo}{lead.siteVisitAssignedAt ? <span style={{ color: 'var(--muted)', fontSize: '.76rem' }}><br />by {lead.siteVisitAssignedBy || '-'} · {formatDate(lead.siteVisitAssignedAt)}</span> : null}</div></div>}
                 <div className="di"><div className="dl">Site Visit</div><div className="dv">{lead.siteVisit || 'No'}</div></div>
                 <div className="di"><div className="dl">Quotation Sent</div><div className="dv">{lead.quotationSent || 'No'}</div></div>
                 <div className="di"><div className="dl">Advance Paid</div><div className="dv">{lead.advancePaid || 'No'}</div></div>
@@ -1021,7 +1063,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       {[...history].reverse().map((h, i) => (
                         <tr key={`fup-${h.date}-${i}`}>
                           <td>{history.length - i}</td>
-                          <td style={{ fontSize: '.84rem' }}>{formatDate(h.date)}</td>
+                          <td style={{ fontSize: '.84rem', whiteSpace: 'nowrap' }}>{formatDate(h.date)}{h.at ? <><br /><span style={{ fontSize: '.72rem', color: 'var(--muted)' }}>logged {formatDateTime(h.at)}</span></> : null}</td>
                           <td><StatusBadge status={h.status} /></td>
                           <td style={{ maxWidth: 220, fontSize: '.84rem' }}>{h.notes || '-'}</td>
                           <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{h.by || '-'}</td>

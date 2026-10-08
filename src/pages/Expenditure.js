@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateInput , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import { can, ACTIONS, EXP_STATUS, nextExpStage } from '../services/permissions';
 
 // Only these three categories are offered — the section is deliberately simple.
@@ -26,6 +27,9 @@ const canRejectAtStage = (role, status) => {
   return false;
 };
 
+// An expenditure's day for the Day / Month filter: when it was requested, else its own date.
+const EXP_DATE_FIELDS = ['requestedDate', 'date', 'createdAt'];
+
 export default function Expenditure() {
   const { expenditures, users } = useData();
   const { role, user } = useAuth();
@@ -34,6 +38,7 @@ export default function Expenditure() {
   const [filter, setFilter] = useState('all');
   const [modal, setModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   const canRequest = can(role, ACTIONS.EXPENDITURE_REQUEST);
 
@@ -63,6 +68,7 @@ export default function Expenditure() {
       safeStr(x.requestedBy).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, EXP_DATE_FIELDS);
 
   const summary = useMemo(() => {
     const s = { requested: 0, approved: 0, released: 0, pending: 0 };
@@ -88,7 +94,7 @@ export default function Expenditure() {
       } else {
         cleaned.status = EXP_STATUS.REQUESTED;
         cleaned.requestedBy = user?.email || 'unknown';
-        cleaned.requestedDate = todayStr();
+        cleaned.requestedDate = new Date().toISOString();
         const newId = await addDocument('expenditures', cleaned);
         notifyAdmins(users, { title: 'New Expenditure Request', message: `${expLabel(cleaned)} — ${formatCurrency(cleaned.amount)}`, type: 'info', module: 'expenditure', relatedId: newId });
         // Route it to the concerned managers who can recommend it.
@@ -115,7 +121,7 @@ export default function Expenditure() {
       await updateDocument('expenditures', exp.id, {
         status: stage.to,
         [stage.field]: user?.email || 'unknown',
-        [stage.field + 'Date']: todayStr(),
+        [stage.field + 'Date']: new Date().toISOString(),
         ...extra,
       });
       // Keep the requester informed as their expenditure moves through the chain.
@@ -140,7 +146,7 @@ export default function Expenditure() {
       await updateDocument('expenditures', exp.id, {
         status: EXP_STATUS.REJECTED,
         rejectedBy: user?.email || 'unknown',
-        rejectedDate: todayStr(),
+        rejectedDate: new Date().toISOString(),
       });
       if (exp.requestedBy && exp.requestedBy !== user?.email) {
         createNotification({ forUser: exp.requestedBy, title: 'Expenditure Rejected', message: `Your expenditure "${expLabel(exp)}" (${formatCurrency(exp.amount)}) was rejected`, type: 'status_update', module: 'expenditure', relatedId: exp.id });
@@ -168,6 +174,7 @@ export default function Expenditure() {
           {canRequest && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New Request</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={expenditures} fields={EXP_DATE_FIELDS} /></div>
 
       {/* Summary */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>

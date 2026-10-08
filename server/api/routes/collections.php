@@ -25,12 +25,18 @@ function handle_collections(string $collection, string $id, string $method): voi
       if ($collection === 'paymentRequests' && !pr_visibility_filter($claims)($doc)) {
         fail(403, 'This payment request is not yours to view');
       }
+      if ($collection === 'attendance' && !attendance_visibility_filter($claims)($doc)) {
+        fail(403, 'This attendance record is not yours to view');
+      }
       json_out($doc);
     }
     $rows = db()->query("SELECT * FROM `$table` ORDER BY created_at DESC")->fetchAll();
     $docs = array_map('row_to_doc', $rows);
     if ($collection === 'paymentRequests') {
       $docs = array_values(array_filter($docs, pr_visibility_filter($claims)));
+    }
+    if ($collection === 'attendance') {
+      $docs = array_values(array_filter($docs, attendance_visibility_filter($claims)));
     }
     json_out($docs);
   }
@@ -140,6 +146,9 @@ function handle_batch(string $method): void {
       if ($name === 'paymentRequests') {
         $docs = array_values(array_filter($docs, pr_visibility_filter($claims)));
       }
+      if ($name === 'attendance') {
+        $docs = array_values(array_filter($docs, attendance_visibility_filter($claims)));
+      }
       $out[$name] = $docs;
     } catch (Throwable $e) {
       error_log("batch read failed for $name: " . $e->getMessage());
@@ -186,6 +195,47 @@ function pr_visibility_filter(array $claims): callable {
     $tl = strtolower(trim((string)($doc['teamLeaderEmail'] ?? '')));
     if ($tl !== '' && $tl === $email) return true;              // named as its leader
     return $by !== '' && isset($members[$by]);                  // I lead whoever raised it
+  };
+}
+
+// Attendance is seen by the person it belongs to, by their Team Leader, and by
+// everyone at manager level and above (R4, 8-Oct). The screens always filtered
+// this way; now the API does too, so one member can never fetch another's
+// marks. Mirrors the view rules in src/pages/Attendance.js and
+// TeamAttendancePanel.js, and isMine() in src/services/attendance.js: a row
+// that carries an email is matched by email, an older row by name.
+function attendance_visibility_filter(array $claims): callable {
+  $role  = $claims['role'] ?? '';
+  $email = strtolower(trim((string)($claims['email'] ?? '')));
+  $name  = strtolower(trim((string)($claims['name'] ?? '')));
+  $all = $role === 'super_admin' || has_access($role, 'manager');
+
+  $memberEmails = []; $memberNames = [];
+  if (!$all && $email !== '') {
+    try {
+      foreach (db()->query('SELECT email, display_name, data FROM users') as $r) {
+        $rowEmail = strtolower(trim((string)$r['email']));
+        if ($name === '' && $rowEmail === $email) $name = strtolower(trim((string)($r['display_name'] ?? '')));
+        $d = $r['data'] ? json_decode($r['data'], true) : [];
+        if (is_array($d) && strtolower(trim((string)($d['teamLeader'] ?? ''))) === $email) {
+          $memberEmails[$rowEmail] = true;
+          $n = strtolower(trim((string)($r['display_name'] ?? '')));
+          if ($n !== '') $memberNames[$n] = true;
+        }
+      }
+    } catch (Throwable $e) {
+      error_log('attendance visibility: could not read the team structure: ' . $e->getMessage());
+    }
+  }
+
+  return function (array $doc) use ($all, $email, $name, $memberEmails, $memberNames): bool {
+    if ($all) return true;
+    if ($email === '') return false;
+    $re = strtolower(trim((string)($doc['employeeEmail'] ?? '')));
+    $rn = strtolower(trim((string)($doc['employeeName'] ?? '')));
+    if ($re !== '') return $re === $email || isset($memberEmails[$re]);   // my own, or my member's
+    if ($rn === '') return false;
+    return ($name !== '' && $rn === $name) || isset($memberNames[$rn]);   // an older row, by name
   };
 }
 
@@ -280,17 +330,35 @@ const PO_DISPATCH_FIELDS = [
   'dispatchCompletedAt', 'dispatchCompletedBy', 'dispatchNote',
 ];
 const PO_DISPATCH_CONFIRM_FIELDS = ['dispatchConfirmedAt', 'dispatchConfirmedBy', 'dispatchConfirmNote'];
+// The handover (R6, 8-Oct): the Operation Manager assigns the sent items to
+// a person, and that person records receipt. An assignment also resets the
+// receipt fields, so they appear in both lists; which step a patch is, is
+// decided by whether it names an assignee.
+const PO_DISPATCH_ASSIGN_FIELDS = [
+  'dispatchAssignedTo', 'dispatchAssignedToEmail', 'dispatchAssignedBy', 'dispatchAssignedAt', 'dispatchAssignNote',
+  'dispatchReceivedBy', 'dispatchReceivedAt', 'dispatchReceivedNote',
+];
+const PO_DISPATCH_RECEIVE_FIELDS = ['dispatchReceivedBy', 'dispatchReceivedAt', 'dispatchReceivedNote'];
 
 function po_dispatch_patch(array $patch): bool {
   if (!$patch) return false;
   foreach (array_keys($patch) as $k) {
-    if (!in_array($k, PO_DISPATCH_FIELDS, true) && !in_array($k, PO_DISPATCH_CONFIRM_FIELDS, true)) return false;
+    if (!in_array($k, PO_DISPATCH_FIELDS, true) && !in_array($k, PO_DISPATCH_CONFIRM_FIELDS, true)
+        && !in_array($k, PO_DISPATCH_ASSIGN_FIELDS, true)) return false;
   }
   return true;
 }
 function po_dispatch_editor(string $role): bool {
   if ($role === 'super_admin' || has_access($role, 'admin')) return true;
-  return in_array(normalize_role($role), ['warehouse_admin', 'technical_manager', 'operation_manager'], true);
+  // "Warehouse / BCO" in the client's words (8-Oct): the BCO dispatches too.
+  return in_array(normalize_role($role), ['warehouse_admin', 'technical_manager', 'bco', 'operation_manager'], true);
+}
+// Is this patch the handover's assignment step, or its receipt step?
+function po_dispatch_assigning(array $patch): bool {
+  return count(array_intersect(array_keys($patch), ['dispatchAssignedTo', 'dispatchAssignedToEmail', 'dispatchAssignedBy', 'dispatchAssignedAt', 'dispatchAssignNote'])) > 0;
+}
+function po_dispatch_receiving(array $patch): bool {
+  return count($patch) > 0 && count(array_diff(array_keys($patch), PO_DISPATCH_RECEIVE_FIELDS)) === 0;
 }
 function po_dispatch_confirmer(string $role): bool {
   if ($role === 'super_admin' || has_access($role, 'admin')) return true;
@@ -409,6 +477,28 @@ function enforce_status_transition(string $collection, string $role, array &$pat
         fail(409, 'Material can be dispatched only once the purchase order is approved.');
       }
       $confirming = count(array_intersect(array_keys($patch), PO_DISPATCH_CONFIRM_FIELDS)) > 0;
+      $isAdmin = $role === 'super_admin' || has_access($role, 'admin');
+      // The handover: assignment by the Operation Manager (or above), receipt
+      // by the named person — each only once the warehouse has sent the list.
+      if (po_dispatch_assigning($patch)) {
+        if (!po_dispatch_confirmer($role)) fail(403, 'Only the Operation Manager or an Admin can assign dispatched items.');
+        if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not sent this dispatch yet (OK & Send).');
+        if (!empty($existing['dispatchReceivedAt']) && !$isAdmin) fail(409, 'These items have already been received; the assignment can no longer be changed.');
+        if (count(array_diff(array_keys($patch), PO_DISPATCH_ASSIGN_FIELDS)) > 0) fail(403, 'An assignment may only set the assignment fields.');
+        return;
+      }
+      if (po_dispatch_receiving($patch)) {
+        if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not sent this dispatch yet.');
+        if (empty($existing['dispatchAssignedTo'])) fail(409, 'These items have not been assigned to anyone yet.');
+        $me = strtolower(trim($email));
+        $assignedEmail = strtolower(trim((string)($existing['dispatchAssignedToEmail'] ?? '')));
+        $assignedName = strtolower(trim((string)($existing['dispatchAssignedTo'] ?? '')));
+        $isAssignee = ($assignedEmail !== '' && $assignedEmail === $me)
+          || ($assignedName !== '' && $me !== '' && $assignedName === strtolower(display_name_of($email)));
+        if (!$isAssignee && !$isAdmin) fail(403, 'Only the person the items were assigned to can confirm receipt.');
+        if (!empty($existing['dispatchReceivedAt']) && !$isAdmin) fail(409, 'Receipt has already been recorded for these items.');
+        return;
+      }
       if ($confirming) {
         if (!po_dispatch_confirmer($role)) fail(403, 'Only the Operation Manager or an Admin can confirm a dispatch.');
         if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not marked this dispatch complete yet.');

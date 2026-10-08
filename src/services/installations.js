@@ -65,3 +65,79 @@ export function installationFromLead(lead) {
 export function applyLeadToForm(form, lead) {
   return { ...form, ...installationFromLead(lead) };
 }
+
+// ── R3 (8-Oct): the installation is opened from the Customer, not the lead ──
+//
+// A lead becomes a customer when it converts, and the customer record is what
+// the office works from after that. So the installation picker lists the
+// customers, each with the name and phone they carried over from their lead,
+// and the lead itself is only read for the site details the customer record
+// does not hold (roof, floors, team leader, site visit).
+
+// The lead a customer came from, if it is still on file.
+export function leadOfCustomer(customer, leads) {
+  if (!customer) return null;
+  const list = leads || [];
+  if (customer.leadId) {
+    const byId = list.find(l => l.id === customer.leadId);
+    if (byId) return byId;
+  }
+  // Older customers were made without the link: fall back to the phone.
+  return findLeadByPhone(list, customer.phone) || null;
+}
+
+// A customer matching a phone number (last ten digits), or null.
+export function findCustomerByPhone(customers, phone) {
+  const p = digits(phone);
+  if (p.length < 10) return null;
+  const tail = p.slice(-10);
+  return (customers || []).find(c => digits(c.phone).slice(-10) === tail) || null;
+}
+
+// A customer matching a name exactly (case and spacing aside), or null.
+export function findCustomerByName(customers, name) {
+  const n = norm(name).replace(/\s+/g, ' ');
+  if (!n) return null;
+  return (customers || []).find(c => norm(c.name).replace(/\s+/g, ' ') === n) || null;
+}
+
+// "Name — phone" labels for the picker, and the customer each stands for.
+// The lead's name and phone are searchable too: the label carries whichever
+// of the two differ from the customer's, so a customer renamed after
+// conversion is still found under the name the lead was known by.
+export function customerPickerOptions(customers, leads) {
+  const seen = new Map();
+  (customers || []).forEach(c => {
+    if (!c || !String(c.name || '').trim()) return;
+    const lead = leadOfCustomer(c, leads);
+    let label = String(c.name).trim() + (c.phone ? ' — ' + String(c.phone).trim() : '');
+    if (lead) {
+      const extra = [];
+      if (lead.name && norm(lead.name) !== norm(c.name)) extra.push(String(lead.name).trim());
+      if (lead.phone && digits(lead.phone).slice(-10) !== digits(c.phone).slice(-10)) extra.push(String(lead.phone).trim());
+      if (extra.length) label += ' (lead: ' + extra.join(', ') + ')';
+    }
+    if (!seen.has(label)) seen.set(label, c);
+  });
+  return seen;
+}
+
+// The installation fields a customer (and the lead behind it) can fill in.
+// The customer's own details win; the lead supplies only what the customer
+// record does not hold.
+export function installationFromCustomer(customer, leads) {
+  if (!customer) return {};
+  const lead = leadOfCustomer(customer, leads);
+  const out = lead ? installationFromLead(lead) : {};
+  const put = (k, v) => { if (v !== undefined && v !== null && String(v).trim() !== '') out[k] = v; };
+  put('customerName', customer.name);
+  put('phone', customer.phone);
+  put('address', [customer.address, customer.city, customer.district].filter(v => v && String(v).trim()).join(', '));
+  put('customerId', customer.id);
+  if (customer.leadId) put('leadId', customer.leadId);
+  return out;
+}
+
+export function applyCustomerToForm(form, customer, leads) {
+  return { ...form, ...installationFromCustomer(customer, leads) };
+}

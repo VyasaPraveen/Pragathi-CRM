@@ -4,7 +4,10 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { toNumber, hasAccess } from '../services/helpers';
-import { Modal, EmptyState } from '../components/SharedUI';
+import { Modal, EmptyState, DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+
+const MATERIAL_DATE_FIELDS = ['updatedAt', 'createdAt'];
 
 // Q4 fix: added full CRUD (was read-only)
 export default function Materials() {
@@ -12,7 +15,10 @@ export default function Materials() {
   const { role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
   const canEdit = hasAccess(role, 'manager');
+  // The Day / Month filter (R15): a material belongs to the day it was last updated.
+  const shown = applyDateFilter(materials, dateFilter, MATERIAL_DATE_FIELDS);
 
   const handleSave = async (data, id) => {
     try {
@@ -36,8 +42,9 @@ export default function Materials() {
         <h3>Materials & Inventory</h3>
         {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Material</button>}
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={materials} fields={MATERIAL_DATE_FIELDS} /></div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Material</th><th>Stock</th><th>Dispatched</th><th>Installed</th><th>Balance</th><th>Unit</th><th>Status</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
-        {materials.map(m => (
+        {shown.map(m => (
           <tr key={m.id}>
             <td style={{ fontWeight: 600 }}>{m.name}</td><td>{m.stock}</td><td>{m.dispatched}</td><td>{m.installed}</td>
             <td style={{ fontWeight: 700 }}>{m.balance}</td><td>{m.unit}</td>
@@ -48,7 +55,7 @@ export default function Materials() {
             </div></td>}
           </tr>
         ))}
-        {!materials.length && <tr><td colSpan={canEdit ? 8 : 7}><EmptyState icon="inventory_2" title="No materials" message="Add materials to track inventory." /></td></tr>}
+        {!shown.length && <tr><td colSpan={canEdit ? 8 : 7}><EmptyState icon="inventory_2" title="No materials" message={materials.length ? 'No materials were updated in the chosen period.' : 'Add materials to track inventory.'} /></td></tr>}
       </tbody></table></div></div></div>
       {modal && <MaterialModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
     </>

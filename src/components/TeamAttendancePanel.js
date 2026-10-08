@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { formatDate, hasAccess, isSafeUrl, todayStr } from '../services/helpers';
 import { teamMembersOf } from '../services/permissions';
-import { EmptyState, DateInput } from './SharedUI';
+import { EmptyState, DateInput, MarkLocation } from './SharedUI';
 import {
   teamMonthReport, teamToday, attendanceMonths, previousMonth, monthLabel,
 } from '../services/attendance';
@@ -107,7 +107,7 @@ export default function TeamAttendancePanel() {
 
         {picked.marked > 0 ? (
           <div className="tw"><table><thead><tr>
-            <th>Name</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Location</th>
+            <th>Name</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Check-In Location</th><th>Check-Out Location</th>
           </tr></thead><tbody>
             {picked.rows.filter(r => r.state !== 'Not marked').map(r => {
               const tone = STATE_TONE[r.state];
@@ -117,11 +117,8 @@ export default function TeamAttendancePanel() {
                   <td><span className="st" style={{ background: tone.bg, color: tone.fg, padding: '2px 8px', fontSize: '.72rem' }}>{r.state}</span></td>
                   <td style={{ fontSize: '.82rem' }}>{r.in?.time || '-'}</td>
                   <td style={{ fontSize: '.82rem' }}>{r.out?.time || (r.in ? <span style={{ color: '#e67e22' }}>Still in</span> : '-')}</td>
-                  <td style={{ fontSize: '.8rem' }}>
-                    {r.in?.lat && r.in?.lng
-                      ? <a href={r.in.mapLink || `https://www.google.com/maps?q=${r.in.lat},${r.in.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>View</a>
-                      : '-'}
-                  </td>
+                  <td style={{ fontSize: '.8rem' }}><MarkLocation mark={r.in} /></td>
+                  <td style={{ fontSize: '.8rem' }}><MarkLocation mark={r.out} /></td>
                 </tr>
               );
             })}
@@ -150,7 +147,7 @@ export default function TeamAttendancePanel() {
           </span>
         </div>
         <div className="tw"><table><thead><tr>
-          <th>Team Member</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Location</th><th>Photo</th>
+          <th>Team Member</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Check-In Location</th><th>Check-Out Location</th><th>Photo</th>
         </tr></thead><tbody>
           {roll.rows.map(r => {
             const tone = STATE_TONE[r.state];
@@ -166,11 +163,8 @@ export default function TeamAttendancePanel() {
                 <td style={{ fontSize: '.82rem' }}>
                   {r.out?.time || (r.in ? <span style={{ color: '#e67e22' }}>Still in</span> : '-')}
                 </td>
-                <td style={{ fontSize: '.8rem' }}>
-                  {r.in?.lat && r.in?.lng
-                    ? <a href={r.in.mapLink || `https://www.google.com/maps?q=${r.in.lat},${r.in.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>View</a>
-                    : '-'}
-                </td>
+                <td style={{ fontSize: '.8rem' }}><MarkLocation mark={r.in} /></td>
+                <td style={{ fontSize: '.8rem' }}><MarkLocation mark={r.out} /></td>
                 <td>{isSafeUrl(r.in?.photoUrl)
                   ? <a href={r.in.photoUrl} target="_blank" rel="noreferrer"><img src={r.in.photoUrl} alt="" style={{ width: 32, height: 32, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a>
                   : '-'}</td>
@@ -236,7 +230,7 @@ export default function TeamAttendancePanel() {
                   <td colSpan={7} style={{ background: 'rgba(26,58,122,.03)', padding: 10 }}>
                     {r.days.length ? (
                       <table style={{ fontSize: '.82rem' }}><thead><tr>
-                        <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Location</th>
+                        <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Check-In Location</th><th>Check-Out Location</th>
                       </tr></thead><tbody>
                         {r.days.map(d => (
                           <tr key={d.date}>
@@ -245,9 +239,8 @@ export default function TeamAttendancePanel() {
                             <td>{d.in?.time || '-'}</td>
                             <td>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
                             <td style={{ fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>
-                            <td>{d.in?.lat && d.in?.lng
-                              ? <a href={d.in.mapLink || `https://www.google.com/maps?q=${d.in.lat},${d.in.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>View</a>
-                              : '-'}</td>
+                            <td><MarkLocation mark={d.in} /></td>
+                            <td><MarkLocation mark={d.out} /></td>
                           </tr>
                         ))}
                       </tbody></table>

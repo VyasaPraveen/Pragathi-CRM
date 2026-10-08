@@ -3,7 +3,7 @@ import { apiGet, apiPost, apiPatch, apiDelete } from '../services/api';
 import { addDocument, updateDocument } from '../services/firestore';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { DESIGNATIONS, getRoleFromDesignation, hasAccess, todayStr } from '../services/helpers';
+import { DESIGNATIONS, getRoleFromDesignation, hasAccess, todayStr, formatDateTime } from '../services/helpers';
 import { useToast } from '../context/ToastContext';
 import { Modal } from '../components/SharedUI';
 import PasswordManager, { PASSWORD_NOTE } from '../components/PasswordManager';
@@ -535,7 +535,7 @@ function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, onPasswor
         {detailRow('business', 'Department', user.department)}
         {detailRow('location_on', 'Address', user.address)}
         {detailRow('calendar_today', 'Joined', user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '-')}
-        {detailRow('schedule', 'Last Login', user.lastLogin ? new Date(user.lastLogin).toLocaleString('en-IN') : '-')}
+        {detailRow('schedule', 'Last Login', user.lastLogin ? formatDateTime(user.lastLogin) : '-')}
         {detailRow('key', 'Password', PASSWORD_NOTE)}
         {user.notes && detailRow('notes', 'Admin Notes', user.notes)}
       </div>

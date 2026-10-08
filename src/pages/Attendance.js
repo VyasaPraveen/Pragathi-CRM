@@ -5,13 +5,15 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, deleteDocument, createNotification } from '../services/firestore';
 import { apiUpload } from '../services/api';
 import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage, todayStr } from '../services/helpers';
-import { Modal, EmptyState } from '../components/SharedUI';
+import { Modal, EmptyState, MarkLocation, DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter, thisMonthFilter, isDateFiltered } from '../services/dateFilter';
 import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser } from '../services/attendance';
 import TeamAttendancePanel from '../components/TeamAttendancePanel';
 import { isTeamLeader } from '../services/permissions';
 
 const PAGE_SIZE = 30;
 const today = () => todayStr();
+const ATTENDANCE_DATE_FIELDS = ['date'];
 
 // Marking attendance sends the phone to the camera app, and a low-memory phone
 // can reload the page while that happens — which used to throw the employee back
@@ -43,7 +45,11 @@ export default function Attendance() {
   const [search, setSearch] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [view, setView] = useState('mine');   // 'mine' = My Attendance
-  const [month, setMonth] = useState(today().slice(0, 7));
+  // My Attendance opens on this month, as it always has; the Day / Month
+  // filter (R15) now lets any month or any single day be chosen as well.
+  const [myFilter, setMyFilter] = useState(() => thisMonthFilter(today()));
+  // The records list opens on everything, as before.
+  const [allFilter, setAllFilter] = useState(DATE_FILTER_ALL);
 
   const myEmail = user?.email || '';
   const myName = user?.displayName || '';
@@ -59,6 +65,7 @@ export default function Attendance() {
     const q = search.toLowerCase();
     visible = visible.filter(a => safeStr(a.employeeName).toLowerCase().includes(q) || safeStr(a.type).toLowerCase().includes(q) || safeStr(a.date).includes(q));
   }
+  visible = applyDateFilter(visible, allFilter, ATTENDANCE_DATE_FIELDS);
   visible = [...visible].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
   const myToday = useMemo(() =>
@@ -82,7 +89,7 @@ export default function Attendance() {
     () => foldAttendanceDays(attendance, { email: myEmail, name: myName }),
     [attendance, myEmail, myName]);
 
-  const monthDays = myDays.filter(d => String(d.date).startsWith(month));
+  const monthDays = applyDateFilter(myDays, myFilter, ATTENDANCE_DATE_FIELDS);
   // Where the employee stands right now — the question they actually open this
   // screen to answer.
   const standing = todayStanding(myDays, today());
@@ -90,13 +97,6 @@ export default function Attendance() {
   const TONE = { pending: '#e67e22', done: '#27ae60', active: 'var(--pri)' };
   const todayStatus = { label: standing.label, icon: standing.icon, colour: TONE[standing.tone] };
   const mySummary = useMemo(() => attendanceSummary(monthDays), [monthDays]);
-
-  // The months the employee actually has marks in, newest first.
-  const myMonths = useMemo(() => {
-    const set = new Set(myDays.map(d => String(d.date).slice(0, 7)));
-    set.add(today().slice(0, 7));
-    return [...set].sort().reverse();
-  }, [myDays]);
 
   // Attendance counts — these come straight off the live attendance list, so they
   // update on their own the moment a mark is saved.
@@ -194,9 +194,7 @@ export default function Attendance() {
         <div className="card" style={{ marginBottom: 16 }}><div className="cb">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, flexWrap: 'wrap', marginBottom: 12 }}>
             <strong style={{ fontSize: '.95rem' }}>My Attendance</strong>
-            <select className="fi" style={{ width: 'auto', padding: '6px 10px' }} value={month} onChange={e => setMonth(e.target.value)}>
-              {myMonths.map(m => <option key={m} value={m}>{new Date(m + '-01').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</option>)}
-            </select>
+            <DateFilter value={myFilter} onChange={setMyFilter} records={myDays} fields={ATTENDANCE_DATE_FIELDS} compact />
           </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 12px', borderRadius: 8, marginBottom: 12, background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)' }}>
@@ -226,7 +224,7 @@ export default function Attendance() {
           </div>
           {monthDays.length ? (
             <div className="tw"><table><thead><tr>
-              <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Location</th><th>Photo</th>
+              <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Check-In Location</th><th>Check-Out Location</th><th>Photo</th>
             </tr></thead><tbody>
               {monthDays.map(d => (
                 <tr key={d.date}>
@@ -235,24 +233,22 @@ export default function Attendance() {
                   <td style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
                   <td style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
                   <td style={{ fontSize: '.82rem', fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>
-                  <td style={{ fontSize: '.8rem' }}>
-                    {d.in?.lat && d.in?.lng
-                      ? <a href={d.in.mapLink || `https://www.google.com/maps?q=${d.in.lat},${d.in.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>View</a>
-                      : '-'}
-                  </td>
+                  <td style={{ fontSize: '.8rem' }}><MarkLocation mark={d.in} /></td>
+                  <td style={{ fontSize: '.8rem' }}><MarkLocation mark={d.out} /></td>
                   <td>{isSafeUrl(d.in?.photoUrl) ? <a href={d.in.photoUrl} target="_blank" rel="noreferrer"><img src={d.in.photoUrl} alt="" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
                 </tr>
               ))}
             </tbody></table></div>
           ) : (
-            <EmptyState icon="event_busy" title="No attendance this month" message="Marks you make will appear here with the hours worked." />
+            <EmptyState icon="event_busy" title={isDateFiltered(myFilter) ? 'No attendance in the chosen period' : 'No attendance yet'} message="Marks you make will appear here with the hours worked." />
           )}
         </div></div>
       )}
 
       {view === 'team' && canSeeTeam && <TeamAttendancePanel />}
 
-      {view === 'all' && (
+      {view === 'all' && (<>
+      <div style={{ marginBottom: 10 }}><DateFilter value={allFilter} onChange={setAllFilter} records={attendance} fields={ATTENDANCE_DATE_FIELDS} /></div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
         <th>Employee</th><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Photo</th>{admin && <th style={{ textAlign: 'right' }}>Actions</th>}
       </tr></thead><tbody>
@@ -275,7 +271,7 @@ export default function Attendance() {
       </tbody></table></div>
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({visible.length - visibleCount} remaining)</button></div>}
       </div></div>
-      )}
+      </>)}
 
       {modal && <MarkModal suggestedType={suggestedType} onSave={handleSave} onClose={() => { clearDraft(); setModal(false); }} />}
     </>
@@ -296,6 +292,20 @@ export default function Attendance() {
    Picking a photo from the device is still there as a fallback for any browser
    that will not give us a camera stream.
    ========================================================================== */
+
+// What to tell the employee when the location could not be read — with the
+// one thing that fixes it in each case, because 'could not get location' on
+// its own left two people stuck for weeks.
+export function locationFailureText(err, inApp) {
+  const code = err && err.code;
+  if (code === 1) {
+    return 'Location is blocked for this site in your browser. Tap the lock icon beside the address → Permissions → Location → Allow, then tap Capture location again.'
+      + (inApp ? ` You are inside ${inApp} — open the CRM in Chrome instead.` : '');
+  }
+  if (code === 2) return 'Your phone could not work out where it is. Turn on Location (GPS) in the phone settings and set it to High accuracy, then tap again.';
+  if (code === 3) return 'Finding your location took too long. Step outdoors or near a window, keep the screen on, and tap Capture location again.';
+  return 'Could not get location. Check that Location is on for the phone and allowed for this site, then tap again.';
+}
 
 // How big the captured frame is allowed to be — the memory cost is the square
 // of this, so it is deliberately modest.
@@ -402,25 +412,42 @@ function MarkModal({ suggestedType, onSave, onClose }) {
   };
 
   /* -- location --------------------------------------------------------- */
+  // R10 (8-Oct): two accounts never got a location although GPS was on.
+  // The one attempt made here asked for high accuracy and gave up after 12
+  // seconds, which indoors — or on a phone whose GPS is slow to lock — times
+  // out every time, while a phone with a quick fix sails through. So a second,
+  // less demanding attempt follows (network / Wi-Fi position, longer wait, a
+  // recent cached fix accepted), and the messages now say exactly what to do
+  // when the browser itself is the blocker.
   const captureLocation = useCallback(() => {
     if (!('geolocation' in navigator)) { setLocStatus('Location is not supported on this device.'); return; }
+    if (typeof window !== 'undefined' && window.isSecureContext === false) {
+      setLocStatus('Location needs the secure (https) address of the CRM — open it from the https link.');
+      return;
+    }
     setLocating(true); setLocStatus('Getting your location…');
+    const got = (pos) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      setLoc({ lat: +latitude.toFixed(6), lng: +longitude.toFixed(6), accuracy });
+      setLocStatus('Location captured (±' + Math.round(accuracy) + 'm)');
+      setLocating(false);
+    };
+    const explain = (err) => locationFailureText(err, inApp);
     navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        setLoc({ lat: +latitude.toFixed(6), lng: +longitude.toFixed(6), accuracy });
-        setLocStatus('Location captured (±' + Math.round(accuracy) + 'm)');
-        setLocating(false);
-      },
+      got,
       (err) => {
-        setLocating(false);
-        setLocStatus(err.code === 1
-          ? 'Location permission denied — allow location access and tap again.'
-          : 'Could not get location. Try again, outdoors if you can.');
+        // Permission refused is final; anything else is worth a second try.
+        if (err && err.code === 1) { setLocating(false); setLocStatus(explain(err)); return; }
+        setLocStatus('Still looking — trying the network position…');
+        navigator.geolocation.getCurrentPosition(
+          got,
+          (err2) => { setLocating(false); setLocStatus(explain(err2)); },
+          { enableHighAccuracy: false, timeout: 25000, maximumAge: 120000 }
+        );
       },
       { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
     );
-  }, []);
+  }, [inApp]);
 
   /* -- upload ----------------------------------------------------------- */
   const upload = useCallback(async (blob) => {

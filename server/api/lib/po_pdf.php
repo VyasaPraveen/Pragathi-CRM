@@ -155,10 +155,17 @@ function popdf_inr($n): string {
   return $s;
 }
 
-// "System of 5 kW with 3 Phase of 5 kW Inverter" — the wording the reference
-// uses. The phase follows the system size when it has not been set by hand:
-// anything above 5 kW is a three-phase connection.
-function popdf_system_line(array $po, array $lead = []): string {
+// The three figures of the system line, as they print: system kW, phase and
+// inverter kW. The phase follows the system size when it has not been set by
+// hand: anything above 5 kW is a three-phase connection. A figure nobody has
+// entered prints as a blank to be filled in.
+// "Rs. 3,00,000 /-" - the Final Agreed Price as it is printed (R12, 8-Oct).
+function popdf_price_text($n): string {
+  $inr = popdf_inr($n);
+  return $inr === '' ? '' : 'Rs. ' . $inr . ' /-';
+}
+
+function popdf_system_parts(array $po, array $lead = []): array {
   $kw = popdf_str($po, 'systemKw', popdf_str($po, 'kwRequired', (string)($lead['kwRequired'] ?? '')));
   $kw = trim(preg_replace('/\s*kw\s*/i', '', $kw));
   $invKw = popdf_str($po, 'inverterKw', $kw);
@@ -166,7 +173,57 @@ function popdf_system_line(array $po, array $lead = []): string {
   if ($phase === '' && $kw !== '') $phase = popdf_num($kw) > 5 ? '3' : '1';
   $phase = trim(preg_replace('/\s*phase\s*/i', '', $phase));
   $blank = fn($v) => $v === '' ? '____' : $v;
-  return 'System of ' . $blank($kw) . ' kW with ' . $blank($phase) . ' Phase of ' . $blank($invKw) . ' kW Inverter';
+  return ['kw' => $blank($kw), 'phase' => $blank($phase), 'inverter' => $blank($invKw)];
+}
+
+// "System of 5 kW with 3 Phase of 5 kW Inverter" — the wording the reference uses.
+function popdf_system_line(array $po, array $lead = []): string {
+  $p = popdf_system_parts($po, $lead);
+  return 'System of ' . $p['kw'] . ' kW with ' . $p['phase'] . ' Phase of ' . $p['inverter'] . ' kW Inverter';
+}
+
+// Lay out a paragraph made of runs, some of them underlined, wrapping at $w.
+// Each run is [text, underline]. Words are placed one at a time so a rule can
+// be drawn under exactly the underlined words (and the spaces between two
+// underlined words), and under nothing else. Returns the baseline just past
+// the last line, like PpsPdf::textWrap().
+function popdf_rich_wrap(PpsPdf $pdf, float $x, float $y, float $w, array $segments, float $leading): float {
+  // Break into words, each remembering whether it is underlined. A run's
+  // leading/trailing spaces become breaks between words.
+  $words = [];
+  foreach ($segments as [$text, $ul]) {
+    $text = (string)$text;
+    if ($text === '') continue;
+    $parts = preg_split('/(\s+)/', $text, -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY);
+    foreach ($parts as $p) {
+      if (trim($p) === '') { if ($words) $words[count($words) - 1]['space'] = true; continue; }
+      // Text glued to the previous word with no space (e.g. the "." after a
+      // value) stays on the same line as that word.
+      $glue = $words && empty($words[count($words) - 1]['space']);
+      $words[] = ['text' => $p, 'ul' => (bool)$ul, 'space' => false, 'glue' => $glue];
+    }
+  }
+  $space = $pdf->widthOf(' ');
+  $cx = $x;
+  $lineHasText = false;
+  foreach ($words as $i => $wd) {
+    $tw = $pdf->widthOf($wd['text']);
+    $lead = ($lineHasText && !$wd['glue']) ? $space : 0.0;
+    if ($lineHasText && $cx + $lead + $tw > $x + $w && !$wd['glue']) {
+      $y += $leading; $cx = $x; $lead = 0.0; $lineHasText = false;
+    }
+    $cx += $lead;
+    $pdf->text($cx, $y, $wd['text']);
+    if ($wd['ul']) {
+      // Run the rule back through the space when the previous word is underlined too.
+      $from = ($lead > 0 && $i > 0 && $words[$i - 1]['ul']) ? $cx - $lead : $cx;
+      $pdf->setLineWidth(0.5);
+      $pdf->line($from, $y + 2, $cx + $tw, $y + 2);
+    }
+    $cx += $tw;
+    $lineHasText = true;
+  }
+  return $y + $leading;
 }
 
 // ── the document ────────────────────────────────────────────────────────────
@@ -213,12 +270,22 @@ function pps_po_pdf(array $po, array $lead = [], string $assetDir = ''): string 
   $y += 19;
 
   // The opening paragraph, with the system description in the reference's words.
+  //
+  // R13 (8-Oct): the four values that are edited on the PO — System Size,
+  // Phase, Inverter and the Plant Location / Billing address — are the only
+  // underlined text in the document. The wording and the values are exactly
+  // what popdf_system_line() has always produced; only those four runs carry
+  // a rule beneath them.
   $pdf->setFont('', 10.5);
   $where = popdf_str($po, 'plantLocation', popdf_str($po, 'customerAddress', (string)($lead['address'] ?? '')));
-  $para = 'We are pleased to release the Letter of Indent / PO for the Supply & Installation of Tata Power Solar '
-    . popdf_system_line($po, $lead) . ' on our Residential Building/ Commercial Plant Location @ '
-    . ($where !== '' ? $where : '________________') . '.';
-  $y = $pdf->textWrap($indent, $y, $R - $indent, $para, 15) + 6;
+  $sys = popdf_system_parts($po, $lead);
+  $segments = [
+    ['We are pleased to release the Letter of Indent / PO for the Supply & Installation of Tata Power Solar System of ', false],
+    [$sys['kw'], true], [' kW with ', false], [$sys['phase'], true], [' Phase of ', false], [$sys['inverter'], true],
+    [' kW Inverter on our Residential Building/ Commercial Plant Location @ ', false],
+    [$where !== '' ? $where : '________________', true], ['.', false],
+  ];
+  $y = popdf_rich_wrap($pdf, $indent, $y, $R - $indent, $segments, 15) + 6;
 
   // Scopes and price
   $labelX = $L + 16;
@@ -240,19 +307,29 @@ function pps_po_pdf(array $po, array $lead = [], string $assetDir = ''): string 
   // different number with its own purpose; that field is left as it is and
   // only stands in here when no Amount was entered.
   $price = popdf_num($po['amount'] ?? 0) ?: popdf_num($po['agreedPrice'] ?? 0) ?: popdf_num($po['totalValue'] ?? 0);
+  // R12 (8-Oct): "Final agreed price: Rs. 3,00,000 /- Including GST." — the
+  // figure sits in the middle of the ruled blank, with "Rs." before it and
+  // "/-" generated after it. With no price yet the blank is left to be filled
+  // in by hand, exactly as the reference shows it.
   $pdf->setFont('', 10.5);
   $pdf->text($L, $y, 'Final agreed price');
   $pdf->text($valueX - 10, $y, ':');
-  $pdf->setFont('B', 10.5);
-  $pdf->text($valueX, $y, 'Rs.');
-  $pdf->setFont('', 10.5);
+  $blankFrom = $valueX;
+  $blankTo = $valueX + 165;
   $amountText = $price > 0 ? popdf_inr($price) : '';
-  $pdf->text($valueX + 24, $y, $amountText !== '' ? $amountText : '');
+  $pdf->setFont('B', 10.5);
+  if ($amountText !== '') {
+    $pdf->textCentre(($blankFrom + $blankTo) / 2, $y, popdf_price_text($price));
+  } else {
+    $pdf->text($blankFrom, $y, 'Rs.');
+    $pdf->textRight($blankTo, $y, '/-');
+  }
+  $pdf->setFont('', 10.5);
   // The reference keeps a ruled blank for the figure, so the line is drawn
   // whether or not a price has been agreed yet.
   $pdf->setLineWidth(0.6);
-  $pdf->line($valueX + 22, $y + 2, $valueX + 165, $y + 2);
-  $pdf->text($valueX + 170, $y, 'Including GST.');
+  $pdf->line($blankFrom - 2, $y + 2, $blankTo + 2, $y + 2);
+  $pdf->text($blankTo + 8, $y, 'Including GST.');
   $y += 18;
 
   if (popdf_str($po, 'referenceNumber') !== '') {

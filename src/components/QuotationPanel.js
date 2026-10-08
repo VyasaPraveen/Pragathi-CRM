@@ -6,7 +6,7 @@ import { addDocument, updateDocument, createNotification } from '../services/fir
 import { formatCurrency, formatDate, toNumber, todayStr } from '../services/helpers';
 import {
   buildQuotationPdf, sendQuotationOnWhatsApp, quotationReadyToShare,
-  openInNewTab, downloadUrl, canShareFiles,
+  openInNewTab, downloadUrl,
 } from '../services/quotationShare';
 import { StatusBadge, Modal, EmptyState, DateInput } from './SharedUI';
 import {
@@ -483,9 +483,8 @@ export default function QuotationPanel({ lead }) {
     if (stop) { toast(stop, 'er'); return; }
     withPdf('whatsapp', async () => {
       const res = await sendQuotationOnWhatsApp(q, q.customerPhone || lead.phone);
-      if (res.via === 'file') { toast('Quotation PDF handed to WhatsApp'); return; }
       toast(res.toNumber
-        ? 'WhatsApp opened for ' + res.toNumber + ' with the quotation PDF link'
+        ? 'WhatsApp opened on ' + res.toNumber + ' with the quotation PDF'
         : 'WhatsApp opened — this lead has no mobile number on file');
     });
   };
@@ -548,9 +547,7 @@ export default function QuotationPanel({ lead }) {
             onClick={handleWhatsApp} disabled={!!pdfBusy || !approvedForCustomer}
             title={!approvedForCustomer
               ? 'Frozen until the quotation is approved — it then becomes active on its own'
-              : canShareFiles()
-                ? 'Send the quotation PDF to this lead on WhatsApp'
-                : 'Open WhatsApp for this lead with the quotation PDF link'}>
+              : "Open WhatsApp on the customer's number from the lead, with the quotation PDF"}>
             <span className="material-icons-round" style={{ fontSize: 16 }}>share</span>
             {pdfBusy === 'whatsapp' ? 'Preparing…' : 'Send on WhatsApp'}
           </button>

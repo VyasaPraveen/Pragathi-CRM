@@ -124,13 +124,21 @@ export function shareQuotationLink(q, phone, pdfUrl) {
   return !!num;
 }
 
-// What the "Send on WhatsApp" button does: build the PDF, try to attach it,
-// and fall back to the lead's number with the link.
-// → { via: 'file' | 'link', url, toNumber }
+// What the "Send on WhatsApp" button does: build the PDF and open WhatsApp
+// straight on the customer's number from the lead, with the message and the
+// PDF's link already in the box.
+//
+// R14 (8-Oct): the share sheet (route 1) used to be tried first. On a Windows
+// PC that is the Windows "Share" panel, and on a phone it is a picker of apps
+// and then of contacts — exactly the intermediate screens the client asked to
+// be rid of. So the number is dialled directly, every time, on every device.
+// The PDF travels as a link rather than an attached file: a browser cannot
+// put a document into a specific chat without the sender choosing it, and
+// attaching it unattended needs the WhatsApp Business API (see the note at
+// the top of this file).
+// → { via: 'link', url, toNumber }
 export async function sendQuotationOnWhatsApp(q, phone) {
   const pdf = await buildQuotationPdf(q.id);
-  const sent = await shareQuotationFile(q, pdf);
-  if (sent) return { via: 'file', url: pdf.absoluteUrl, toNumber: waNumber(phone || q.customerPhone) };
   const hadNumber = shareQuotationLink(q, phone, pdf.absoluteUrl);
   return { via: 'link', url: pdf.absoluteUrl, toNumber: hadNumber ? waNumber(phone || q.customerPhone) : '' };
 }

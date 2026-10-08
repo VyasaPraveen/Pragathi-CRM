@@ -3,13 +3,17 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatDate, safeStr, priorityClass, hasAccess, todayStr } from '../services/helpers';
-import { StatCard, StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { formatDate, formatDateTime, safeStr, priorityClass, hasAccess, todayStr } from '../services/helpers';
+import { StatCard, StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 
 const taskStatuses = ['Pending', 'In Progress', 'Completed', 'Overdue'];
 const taskPriorities = ['High', 'Medium', 'Low'];
 const taskCategories = ['Installation', 'Service', 'Follow-up', 'Documentation', 'Other'];
 const PAGE_SIZE = 20;
+
+// A task's day for the Day / Month filter: when it was assigned, else its due date.
+const TASK_DATE_FIELDS = ['assignedDate', 'dueDate', 'createdAt'];
 
 export default function EmployeeTasks() {
   const { employeeTasks, team, users } = useData();
@@ -21,6 +25,7 @@ export default function EmployeeTasks() {
   const [modal, setModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   const pending = employeeTasks.filter(t => t.status === 'Pending').length;
   const inProgress = employeeTasks.filter(t => t.status === 'In Progress').length;
@@ -38,6 +43,7 @@ export default function EmployeeTasks() {
       safeStr(t.relatedCustomer).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, TASK_DATE_FIELDS);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -117,6 +123,7 @@ export default function EmployeeTasks() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New Task</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={employeeTasks} fields={TASK_DATE_FIELDS} /></div>
 
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
         <th>Task</th><th>Assigned To</th><th>Assigned Date</th><th>Due Date</th><th>Priority</th><th>Category</th><th>Status</th><th>Actions</th>
@@ -259,7 +266,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
                   <tr key={`wu-${wu.date}-${i}`}>
                     <td style={{ fontSize: '.82rem', whiteSpace: 'nowrap' }}>{formatDate(wu.date)}</td>
                     <td style={{ fontSize: '.84rem' }}>{wu.update}</td>
-                    <td style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{wu.by}<br />{wu.at ? new Date(wu.at).toLocaleString() : ''}</td>
+                    <td style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{wu.by}<br />{wu.at ? formatDateTime(wu.at) : ''}</td>
                   </tr>
                 ))}
               </tbody>

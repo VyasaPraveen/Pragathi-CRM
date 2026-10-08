@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely, todayStr } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
 import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
 import { can, ACTIONS, hasModule, PO_STATUS, DISPATCH_STATUS, dispatchSummary } from '../services/permissions';
@@ -29,6 +30,9 @@ const DEFAULT_BOM_MATERIALS = [
   'Cable Glands', 'Module Earth Wire 6sqmm'
 ];
 
+// A purchase order's day for the Day / Month filter: its PO date, else when it was recorded.
+const PO_DATE_FIELDS = ['poDate', 'createdAt'];
+
 export default function PurchaseOrders() {
   const { purchaseOrders, leadPOs, leads } = useData();
   const { role, user } = useAuth();
@@ -39,6 +43,8 @@ export default function PurchaseOrders() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expanded, setExpanded] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
+  // The Day / Month filter (R15) sits beside the status filters, which stay as they are.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
   // Creating a PO needs the role action AND the per-user "New PO" permission
   // an Admin can switch on/off for an individual employee.
   const canEdit = can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po');
@@ -76,6 +82,7 @@ export default function PurchaseOrders() {
       safeStr(po._leadName).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, PO_DATE_FIELDS);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -124,6 +131,7 @@ export default function PurchaseOrders() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New PO</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={allPOs} fields={PO_DATE_FIELDS} /></div>
       {/* Summary */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ fontSize: '.82rem', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>

@@ -1,6 +1,44 @@
 import React from 'react';
-import { statusClass, formatDate } from '../services/helpers';
+import { statusClass, formatDate, todayStr } from '../services/helpers';
 import { searchNames } from '../services/people';
+import { DATE_FILTER_ALL, thisMonthFilter, dateFilterMonths, monthName, isDateFiltered } from '../services/dateFilter';
+
+// The common Day / Month filter (R2 and R15, 8-Oct). One control, the same on
+// every list: All · This Month · a month to choose · a day to choose. It only
+// narrows what is shown — it never touches the records. It opens on "All", so
+// no list looks any different until somebody uses it.
+//
+//   const [df, setDf] = useState(DATE_FILTER_ALL);
+//   <DateFilter value={df} onChange={setDf} records={rows} fields={['date', 'createdAt']} />
+//   rows = applyDateFilter(rows, df, ['date', 'createdAt']);
+export function DateFilter({ value, onChange, records, fields, compact }) {
+  const f = value || DATE_FILTER_ALL;
+  const today = todayStr();
+  const months = React.useMemo(() => dateFilterMonths(records, fields, today), [records, fields, today]);
+  const month = f.mode === 'month' ? f.month : '';
+  const date = f.mode === 'date' ? f.date : '';
+  const thisMonth = today.slice(0, 7);
+  const small = { padding: compact ? '4px 8px' : '5px 10px', fontSize: '.78rem', width: 'auto' };
+  return (
+    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} title="Show records from one month or one day">
+      <span className="material-icons-round" style={{ fontSize: 17, color: isDateFiltered(f) ? 'var(--pri)' : 'var(--muted)' }}>calendar_month</span>
+      <span className={`fc ${f.mode === 'all' ? 'act' : ''}`} style={{ padding: '4px 10px', fontSize: '.74rem' }} onClick={() => onChange(DATE_FILTER_ALL)}>All</span>
+      <span className={`fc ${month === thisMonth ? 'act' : ''}`} style={{ padding: '4px 10px', fontSize: '.74rem' }} onClick={() => onChange(thisMonthFilter(today))}>This Month</span>
+      <select className="fi" style={small} value={month} aria-label="Month"
+        onChange={e => onChange(e.target.value ? { mode: 'month', month: e.target.value, date: '' } : DATE_FILTER_ALL)}>
+        <option value="">Month…</option>
+        {months.map(m => <option key={m} value={m}>{monthName(m)}</option>)}
+      </select>
+      <input type="date" className="fi" style={{ ...small, minWidth: 130 }} value={date} aria-label="Day"
+        onChange={e => onChange(e.target.value ? { mode: 'date', date: e.target.value, month: '' } : DATE_FILTER_ALL)} />
+      {isDateFiltered(f) && (
+        <button type="button" className="btn bsm bo" style={{ padding: '3px 8px' }} title="Clear the date filter" onClick={() => onChange(DATE_FILTER_ALL)}>
+          <span className="material-icons-round" style={{ fontSize: 15 }}>close</span>
+        </button>
+      )}
+    </div>
+  );
+}
 
 export function StatusBadge({ status }) {
   return <span className={`st ${statusClass(status)}`}>{status || 'N/A'}</span>;
@@ -87,6 +125,22 @@ export function DateInput({ value, onChange, required, min, max, style }) {
         </span>
       )}
     </>
+  );
+}
+
+// R1 (8-Oct): the check-in and the check-out each keep their own location.
+// They always did in the records — one row per mark — but the folded tables
+// only ever showed the check-in's, which read as if the check-out had none or
+// had replaced it. This renders one mark's link, or a dash.
+export function MarkLocation({ mark }) {
+  if (!mark || !mark.lat || !mark.lng) return <span style={{ color: 'var(--muted)' }}>-</span>;
+  return (
+    <a href={mark.mapLink || `https://www.google.com/maps?q=${mark.lat},${mark.lng}`} target="_blank" rel="noreferrer"
+      style={{ color: 'var(--pri)', display: 'inline-flex', alignItems: 'center', gap: 3, whiteSpace: 'nowrap' }}
+      title={`Lat ${mark.lat}, Lng ${mark.lng}${mark.accuracy ? ` (±${Math.round(mark.accuracy)}m)` : ''}`}>
+      <span className="material-icons-round" style={{ fontSize: 15 }}>place</span>
+      {mark.time || 'View'}{mark.accuracy ? <span style={{ color: 'var(--muted)', fontSize: '.7rem' }}> ±{Math.round(mark.accuracy)}m</span> : null}
+    </a>
   );
 }
 

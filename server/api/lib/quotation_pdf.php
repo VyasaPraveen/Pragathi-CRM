@@ -25,10 +25,35 @@ const QPDF_UNITS_PER_KW = 141;
 const QPDF_TARIFF      = 8;
 const QPDF_LOAN_RATE   = 0.07;
 
-// The company's authorised signatory. Quotations go out over this name
-// whoever they are assigned to, so it is a constant rather than a field.
+// The company's authorised signatory — the fallback when a quotation has no
+// assigned person (R11, 8-Oct: the assigned person signs; see qpdf_signatory).
 const QPDF_AUTHORISED_SIGNATORY = 'K. Chandrasekhar';
 const QPDF_SIGNATORY_MOBILE = '9701426440';
+// The company's own number, printed as the PPS number when the assigned
+// person has no PPS employee number on the quotation.
+const QPDF_COMPANY_MOBILE = '9701461156';
+
+// Who signs page 1, and with which numbers.
+//   name   — the assigned person (executiveName), else the company signatory
+//   mobile — executivePhone (the route fills it from the user's account), else
+//            the company signatory's number
+//   pps    — the person's PPS employee number (executiveId, e.g. PPS-114),
+//            else the company's number
+function qpdf_signatory(array $q): array {
+  $name = qpdf_str($q, 'executiveName', '');
+  $mobile = preg_replace('/[^0-9+ ]/', '', qpdf_str($q, 'executivePhone', ''));
+  $pps = qpdf_str($q, 'executiveId', '');
+  if ($name === '') {
+    return ['name' => QPDF_AUTHORISED_SIGNATORY, 'mobile' => $mobile !== '' ? $mobile : QPDF_SIGNATORY_MOBILE,
+            'pps' => QPDF_COMPANY_MOBILE, 'ppsLabel' => 'PPS'];
+  }
+  return [
+    'name' => $name,
+    'mobile' => $mobile !== '' ? $mobile : QPDF_SIGNATORY_MOBILE,
+    'pps' => $pps !== '' ? $pps : QPDF_COMPANY_MOBILE,
+    'ppsLabel' => $pps !== '' ? 'PPS No' : 'PPS',
+  ];
+}
 // Blank height left between the company name and "Authorized Signature"
 // for the signature to be written in by hand.
 const QPDF_SIGNATURE_GAP = 52.0;
@@ -296,15 +321,17 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
     $y = $pdf->textWrap($L, $y, $W, $para, 15) + 8;
   }
 
-  // Req 4 — the authorised signature.
+  // The authorised signature (R11, 8-Oct — back to the earlier format).
   //
-  // The name here is the company's authorised signatory and is always
-  // K. Chandrasekhar, whoever the quotation happens to be assigned to. It
-  // used to print executiveName, which is why quotations went out over the
-  // assigned executive's name.
+  // The block is signed over the person the quotation is assigned to: their
+  // name, their mobile number and their PPS number, all taken from the
+  // quotation (the mobile is filled from the user's account by the route when
+  // the quotation does not carry one). The 2-Oct change had fixed this on
+  // K. Chandrasekhar; that name now stands in only when no one is assigned.
   //
   // The gap below the company name is left deliberately empty: the printed
   // copy is signed by hand there, so nothing may be drawn into it.
+  $sign = qpdf_signatory($q);
   $y += 24;
   $pdf->text($L, $y, 'Yours Truly,');
   $y += 15;
@@ -313,10 +340,12 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
   $pdf->text($L, $y, 'Authorized Signature');
   $y += 15;
   $pdf->setFont('B', 10);
-  $pdf->text($L, $y, QPDF_AUTHORISED_SIGNATORY);
+  $pdf->text($L, $y, $sign['name']);
   $pdf->setFont('', 10);
   $y += 15;
-  $pdf->text($L, $y, 'Mobile : ' . qpdf_str($q, 'executivePhone', QPDF_SIGNATORY_MOBILE));
+  $pdf->text($L, $y, 'Mobile : ' . $sign['mobile']);
+  $y += 15;
+  $pdf->text($L, $y, $sign['ppsLabel'] . ' : ' . $sign['pps']);
   $footer();
 
   // ── Pages 2-5 — the company's marketing pages ──────────────────────────────

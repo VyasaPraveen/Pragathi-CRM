@@ -4,7 +4,8 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification } from '../services/firestore';
 import { formatDate, safeStr, hasAccess, todayStr, toNumber } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState, DateInput } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateInput , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import { canRecommendLeave, isLeaveLeader, leaderOf } from '../services/permissions';
 // The leave types and how a request is counted live in services/leave.js, so
 // the counting rules can be checked on their own.
@@ -22,6 +23,9 @@ const ST = {
 // Only the Sales Manager (or higher authority / owner) may approve leave (req #1).
 const isLeaveApprover = (role) => ['sales_manager', 'management', 'admin', 'super_admin'].includes(role);
 
+// A leave request's day for the Day / Month filter: the first day of leave.
+const LEAVE_DATE_FIELDS = ['fromDate', 'requestedDate', 'createdAt'];
+
 export default function Leave() {
   const { leaveRequests, users } = useData();
   const { user, role } = useAuth();
@@ -30,6 +34,7 @@ export default function Leave() {
   const [filter, setFilter] = useState('all');
   const [modal, setModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   const myEmail = user?.email || '';
   const myName = user?.displayName || '';
@@ -57,6 +62,7 @@ export default function Leave() {
       safeStr(lr.reason).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, LEAVE_DATE_FIELDS);
   filtered = [...filtered].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
   // Leave count summary: total counted days of approved leave. Managers see
@@ -107,7 +113,7 @@ export default function Leave() {
       } else {
         payload.status = ST.AWAIT_REPLACEMENT;
         payload.replacementStatus = 'Pending';
-        payload.requestedDate = todayStr();
+        payload.requestedDate = new Date().toISOString();
         savedId = await addDocument('leaveRequests', payload);
         toast('Leave request submitted');
       }
@@ -148,7 +154,7 @@ export default function Leave() {
   const acceptReplacement = async (lr) => {
     if (!window.confirm(`Accept covering ${lr.employeeName}'s work during their leave?`)) return;
     try {
-      await updateDocument('leaveRequests', lr.id, { replacementStatus: 'Accepted', status: ST.AWAIT_MANAGER, replacementAcceptedDate: todayStr() });
+      await updateDocument('leaveRequests', lr.id, { replacementStatus: 'Accepted', status: ST.AWAIT_MANAGER, replacementAcceptedDate: new Date().toISOString() });
       notifyApprovers({ ...lr, status: ST.AWAIT_MANAGER });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Replacement Accepted', message: `${myName || myEmail} accepted to cover your leave. It is now with the Sales Manager for approval.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('You accepted the replacement');
@@ -173,7 +179,7 @@ export default function Leave() {
       await updateDocument('leaveRequests', lr.id, {
         recommendedBy: myEmail,
         recommendedByName: myName || myEmail,
-        recommendedDate: todayStr(),
+        recommendedDate: new Date().toISOString(),
         recommendNote: note || '',
       });
       notifyApprovers({ ...lr, recommendedByName: myName || myEmail });
@@ -185,7 +191,7 @@ export default function Leave() {
   const approve = async (lr) => {
     if (!window.confirm(`Approve ${lr.employeeName}'s leave?`)) return;
     try {
-      await updateDocument('leaveRequests', lr.id, { status: ST.APPROVED, approvedBy: myEmail, approvalDate: todayStr() });
+      await updateDocument('leaveRequests', lr.id, { status: ST.APPROVED, approvedBy: myEmail, approvalDate: new Date().toISOString() });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Approved', message: `Your ${lr.leaveType} (${leaveSpanText(lr)}) was approved.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       if (lr.replacementEmail) createNotification({ forUser: lr.replacementEmail, title: 'Leave Cover Confirmed', message: `${lr.employeeName}'s leave was approved — you are covering ${formatDate(lr.fromDate)}${lr.toDate && lr.toDate !== lr.fromDate ? '–' + formatDate(lr.toDate) : ''}.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('Leave approved');
@@ -196,7 +202,7 @@ export default function Leave() {
     const reason = window.prompt('Reason for rejection (optional):', '');
     if (reason === null) return;
     try {
-      await updateDocument('leaveRequests', lr.id, { status: ST.REJECTED, rejectedBy: myEmail, rejectionReason: reason, rejectedDate: todayStr() });
+      await updateDocument('leaveRequests', lr.id, { status: ST.REJECTED, rejectedBy: myEmail, rejectionReason: reason, rejectedDate: new Date().toISOString() });
       if (lr.employeeEmail) createNotification({ forUser: lr.employeeEmail, title: 'Leave Rejected', message: `Your ${lr.leaveType} request was rejected${reason ? ': ' + reason : ''}.`, type: 'status_update', module: 'leaveRequests', relatedId: lr.id });
       toast('Leave rejected', 'er');
     } catch (e) { toast(e.message, 'er'); }
@@ -219,6 +225,7 @@ export default function Leave() {
           <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>event_available</span> Apply for Leave</button>
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={visible} fields={LEAVE_DATE_FIELDS} /></div>
 
       {/* Leave count summary — the +1 per request is called out explicitly (req #2). */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(160px,1fr))', gap: 12, marginBottom: 16 }}>

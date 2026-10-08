@@ -15,6 +15,29 @@ if (!defined('PPS_API')) { http_response_code(404); exit; }
 
 require_once __DIR__ . '/../lib/quotation_pdf.php';
 
+// The mobile number on the account of the person with this display name, or
+// '' when there is none. The phone column is what Settings / User Management
+// write; a number kept in the data JSON is accepted as well.
+function qpdf_user_phone(string $displayName): string {
+  $name = strtolower(trim($displayName));
+  if ($name === '') return '';
+  try {
+    $st = db()->prepare('SELECT phone, data FROM `users` WHERE LOWER(display_name) = ? LIMIT 1');
+    $st->execute([$name]);
+    $r = $st->fetch();
+    if (!$r) return '';
+    $phone = trim((string)($r['phone'] ?? ''));
+    if ($phone === '' && !empty($r['data'])) {
+      $d = json_decode((string)$r['data'], true);
+      if (is_array($d)) $phone = trim((string)($d['phone'] ?? ''));
+    }
+    return $phone;
+  } catch (Throwable $e) {
+    error_log('quotation pdf: could not read the signatory phone: ' . $e->getMessage());
+    return '';
+  }
+}
+
 function handle_quotation_pdf(string $method): void {
   $claims = require_auth();
   if (!in_array($method, ['GET', 'POST'], true)) fail(405, 'Method not allowed');
@@ -31,6 +54,13 @@ function handle_quotation_pdf(string $method): void {
   $q = json_decode((string)$row['data'], true);
   if (!is_array($q)) fail(500, 'Quotation could not be read');
   $q['id'] = $row['id'];
+
+  // R11 (8-Oct): page 1 is signed by the assigned person, with their mobile.
+  // The quotation rarely carries the number, so it is taken from the person's
+  // own account here; the quotation record itself is not changed.
+  if (trim((string)($q['executivePhone'] ?? '')) === '' && trim((string)($q['executiveName'] ?? '')) !== '') {
+    $q['executivePhone'] = qpdf_user_phone((string)$q['executiveName']);
+  }
 
   // The artwork lives beside the app, not in the API folder.
   $assets = realpath(__DIR__ . '/../../quotation') ?: (__DIR__ . '/../../quotation');
