@@ -199,7 +199,9 @@ function pr_visibility_filter(array $claims): callable {
 }
 
 // Attendance is seen by the person it belongs to, by their Team Leader, and by
-// everyone at manager level and above (R4, 8-Oct). The screens always filtered
+// the higher authorities - Owner, Management, Admin, Operation Manager (R4,
+// 8-Oct; narrowed from "manager level and above" on 9-Oct, RR2, so a Sales or
+// Technical Manager who leads a team sees that team and not every other). The screens always filtered
 // this way; now the API does too, so one member can never fetch another's
 // marks. Mirrors the view rules in src/pages/Attendance.js and
 // TeamAttendancePanel.js, and isMine() in src/services/attendance.js: a row
@@ -208,7 +210,7 @@ function attendance_visibility_filter(array $claims): callable {
   $role  = $claims['role'] ?? '';
   $email = strtolower(trim((string)($claims['email'] ?? '')));
   $name  = strtolower(trim((string)($claims['name'] ?? '')));
-  $all = $role === 'super_admin' || has_access($role, 'manager');
+  $all = $role === 'super_admin' || in_array(normalize_role($role), ['management', 'admin', 'operation_manager'], true);
 
   $memberEmails = []; $memberNames = [];
   if (!$all && $email !== '') {

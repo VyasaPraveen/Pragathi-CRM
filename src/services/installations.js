@@ -141,3 +141,24 @@ export function installationFromCustomer(customer, leads) {
 export function applyCustomerToForm(form, customer, leads) {
   return { ...form, ...installationFromCustomer(customer, leads) };
 }
+
+// ── RR1 (9-Oct): a customer made from a lead ─────────────────────────────────
+// The customer form can pick a lead by name or phone; these are the fields the
+// lead fills in. Only what the lead holds is written, so nothing already typed
+// on the form is blanked, and the lead itself is never written.
+export function customerFromLead(form, lead) {
+  if (!lead) return form;
+  const out = { ...form };
+  const put = (k, v) => { if (v !== undefined && v !== null && String(v).trim() !== '') out[k] = v; };
+  put('leadId', lead.id);
+  put('name', lead.name);
+  put('phone', lead.phone);
+  put('email', lead.email);
+  put('address', lead.address);
+  put('pincode', lead.pincode);
+  put('city', lead.city);
+  put('district', lead.district);
+  put('kwRequired', lead.kwRequired);
+  put('customerServiceNumber', lead.customerServiceNumber || lead.meterNumber);
+  return out;
+}

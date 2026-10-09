@@ -33,7 +33,6 @@ export const WATCHED_LEAD_FIELDS = [
   { key: 'expectedSignUpDate', label: 'Expected Sign-up Date' },
   { key: 'nextFollowUpDate', label: 'Next Follow-up' },
   { key: 'supportingTeam', label: 'Supporting Team' },
-  { key: 'siteVisitAssignedTo', label: 'Site Visit Assigned To' },
 ];
 
 const asText = (v) => {

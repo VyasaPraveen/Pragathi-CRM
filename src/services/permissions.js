@@ -228,6 +228,15 @@ export const teamMembersOf = (users, leaderEmail) => {
 
 export const isTeamLeader = (users, email) => teamMembersOf(users, email).length > 0;
 
+// Who sees every employee's attendance (RR2, 9-Oct): the higher authorities -
+// the Owner, Management, Admin and the Operation Manager. Everyone else sees
+// their own marks, plus their mapped team members' if they lead a team. This
+// used to be "manager level and above", which let a Sales Manager or
+// Technical Manager who leads a team see every other team as well. Mirrors
+// attendance_visibility_filter() in collections.php.
+export const ATTENDANCE_AUTHORITY_ROLES = ['super_admin', 'management', 'admin', 'operation_manager'];
+export const seesAllAttendance = (role) => role === 'super_admin' || ATTENDANCE_AUTHORITY_ROLES.includes(normalizeRole(role));
+
 // The leader who should recommend this person's requests, if any.
 export const leaderOf = (users, email) => {
   const me = (users || []).find(u => String(u.email || '').toLowerCase() === String(email || '').toLowerCase());
@@ -303,9 +312,6 @@ export function canSeeLead(lead, user, role, users, team) {
     return !!s && (s === email || s === name);
   };
   if (mine(lead.assignedTo) || mine(lead.salesExecutive) || mine(lead.createdBy) || mine(lead.assignedToEmail)) return true;
-  // Whoever has been sent for the site visit needs to see the lead they are
-  // visiting (R7, 8-Oct).
-  if (mine(lead.siteVisitAssignedTo)) return true;
   if (Array.isArray(lead.supportingTeam) && lead.supportingTeam.some(mine)) return true;
   // The lead carries this person's name through the team directory.
   if ((team || []).some(t => (lc(t.email) === email && email) && leadAssignees(lead).includes(lc(t.name)))) return true;

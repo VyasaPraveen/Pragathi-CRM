@@ -160,7 +160,7 @@ describe('Installations page', () => {
   const Installations = require('../pages/Installations').default;
   const insts = [
     { id: 'I1', customerName: 'Mr Rao', phone: '9701461156', progress: 40, teamLeader: 'K.J. Yogendra reddy', numPeople: 3, teamMembers: ['Revanth Reddy', 'Someone'], startDate: '2026-10-01', consumptionReportUrl: 'https://x/r.pdf', consumptionReportName: 'report.pdf' },
-    { id: 'I2', customerName: 'Mrs Devi', progress: 0, discomFeasibility: 'Done', handSketch: 'https://x/s.jpg' },
+    { id: 'I2', customerName: 'Mrs Devi', progress: 0, discomFeasibility: 'Done', handSketch: 'https://x/s.jpg', siteVisitAssignedTo: 'Revanth Reddy', siteVisitAssignedBy: 'OM', siteVisitAssignedAt: '2026-10-09T05:00:00Z' },
   ];
   test('renders for a manager (add + edit), the installation\'s Team Leader (edit that one) and a member (no edit)', () => {
     const base = { installations: insts, users, customers: [{ id: 'C1', leadId: 'L1', name: 'Mr Rao', phone: '9701461156' }], leads: [lead] };
@@ -183,6 +183,24 @@ describe('Installations page', () => {
     // The Admin's per-user grant.
     mockAuth = { user: { ...users[1], permissions: { installations_manage: true } }, role: 'team_leader' };
     expect(render(<Installations />)).toContain('Add Installation');
+  });
+  // RR3 (9-Oct): the site visit is assigned on the installation; only the
+  // assigned person gets the "Site Visit Done" button, and it goes once reported.
+  test('the site-visit assignee sees "Site Visit Done"; nobody else does; it goes once reported', () => {
+    mockData = { installations: insts, users, customers: [], leads: [] };
+    asUser('revanth@x.com', 'executive');
+    let text = render(<Installations />);
+    expect(text).toContain('Site Visit Assigned To');
+    expect(text).toContain('Site Visit Done');
+    asUser('om@x.com', 'operation_manager');
+    text = render(<Installations />);
+    expect(text).toContain('Awaiting the site visit');
+    expect(text).not.toContain('Site Visit Done');
+    mockData = { installations: [{ ...insts[1], siteVisitReportedBy: 'Revanth Reddy', siteVisitReportedAt: '2026-10-09T09:00:00Z' }], users, customers: [], leads: [] };
+    asUser('revanth@x.com', 'executive');
+    text = render(<Installations />);
+    expect(text).toContain('Visit done');
+    expect(text).not.toContain('Site Visit Done');
   });
   test('renders with no installations and no customers', () => {
     mockData = { installations: [], users, customers: [], leads: [] };

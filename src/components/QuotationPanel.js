@@ -479,10 +479,13 @@ export default function QuotationPanel({ lead }) {
         : 'This quotation has not been approved yet. It can be sent to the customer once an approver signs it off.', 'er');
       return;
     }
-    const stop = quotationReadyToShare(q);
+    // RR5 (9-Oct): the number is the lead's, read fresh each time - the copy
+    // on the quotation can be stale if the lead's phone was corrected later.
+    const customerPhone = lead.phone || q.customerPhone;
+    const stop = quotationReadyToShare(q, customerPhone);
     if (stop) { toast(stop, 'er'); return; }
     withPdf('whatsapp', async () => {
-      const res = await sendQuotationOnWhatsApp(q, q.customerPhone || lead.phone);
+      const res = await sendQuotationOnWhatsApp(q, customerPhone);
       toast(res.toNumber
         ? 'WhatsApp opened on ' + res.toNumber + ' with the quotation PDF'
         : 'WhatsApp opened — this lead has no mobile number on file');

@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { formatDate, hasAccess, isSafeUrl, todayStr } from '../services/helpers';
-import { teamMembersOf } from '../services/permissions';
+import { formatDate, isSafeUrl, todayStr } from '../services/helpers';
+import { teamMembersOf, seesAllAttendance } from '../services/permissions';
 import { EmptyState, DateInput, MarkLocation } from './SharedUI';
 import {
   teamMonthReport, teamToday, attendanceMonths, previousMonth, monthLabel,
@@ -37,9 +37,9 @@ export default function TeamAttendancePanel() {
   // screen reads exactly as it did before anyone touches it.
   const [pickedDate, setPickedDate] = useState(today);
 
-  // A Team Leader sees their own members. Anyone at manager level or above is
-  // answerable for everybody, so they see every approved account.
-  const seesEveryone = hasAccess(role, 'manager');
+  // A team's leader sees their own members. The higher authorities are
+  // answerable for everybody, so they see every approved account (RR2, 9-Oct).
+  const seesEveryone = seesAllAttendance(role);
   const members = useMemo(() => {
     const approved = (users || []).filter(u => u.approved !== false);
     if (seesEveryone) return approved;

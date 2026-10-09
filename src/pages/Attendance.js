@@ -9,7 +9,7 @@ import { Modal, EmptyState, MarkLocation, DateFilter } from '../components/Share
 import { DATE_FILTER_ALL, applyDateFilter, thisMonthFilter, isDateFiltered } from '../services/dateFilter';
 import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser } from '../services/attendance';
 import TeamAttendancePanel from '../components/TeamAttendancePanel';
-import { isTeamLeader } from '../services/permissions';
+import { isTeamLeader, seesAllAttendance } from '../services/permissions';
 
 const PAGE_SIZE = 30;
 const today = () => todayStr();
@@ -53,7 +53,8 @@ export default function Attendance() {
 
   const myEmail = user?.email || '';
   const myName = user?.displayName || '';
-  const canSeeAll = hasAccess(role, 'manager'); // managers/admin/owner see the whole team
+  // The higher authorities see everyone; a team's leader sees their team (RR2, 9-Oct).
+  const canSeeAll = seesAllAttendance(role);
   const admin = hasAccess(role, 'admin');
   // A Team Leader is answerable for their members' attendance, so they get the
   // team view as well — they sit below manager level, which is why they never

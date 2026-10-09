@@ -12,7 +12,8 @@ import {
   canManageInstallations, canEditInstallation, INSTALLATION_TEAM_SIZES,
   installationTeamMembers, installationTeamChanges, normalizeRole,
 } from '../services/permissions';
-import { directoryPeople } from '../services/people';
+import { directoryPeople, assignableNames } from '../services/people';
+import { isSameUser } from '../services/helpers';
 
 const PAGE_SIZE = 10;
 // An installation's day for the Day / Month filter: its start date, else when it was recorded.
@@ -68,15 +69,67 @@ export default function Installations() {
     newMembers.forEach(m => tell(m, 'Installation Team Assignment', 'a team member'));
   };
 
+  // RR3 (9-Oct): the site visit is assigned from here. The assignment is
+  // stamped with who made it and when, but only when it actually changes, so
+  // re-saving the installation for some other reason neither re-stamps nor
+  // re-notifies. The person is told at once.
+  const stampSiteVisit = (data, prev) => {
+    const who = String(data.siteVisitAssignedTo || '').trim();
+    const changed = who && !isSameUser(who, { displayName: prev?.siteVisitAssignedTo || '', email: '' });
+    if (changed) {
+      data.siteVisitAssignedBy = meName;
+      data.siteVisitAssignedAt = new Date().toISOString();
+      // A new assignee starts afresh: any earlier "visited" report is cleared.
+      data.siteVisitReportedBy = '';
+      data.siteVisitReportedAt = '';
+    } else if (!who) {
+      data.siteVisitAssignedBy = '';
+      data.siteVisitAssignedAt = '';
+    }
+    return changed;
+  };
+  const tellSiteVisitAssignee = (inst, id) => {
+    const where = [inst.customerName, inst.address].filter(Boolean).join(', ');
+    createNotification({
+      forUser: inst.siteVisitAssignedTo,
+      title: 'Site Visit Assigned to You',
+      message: `${meName} assigned you the site visit for "${where}"${inst.phone ? ' · ' + inst.phone : ''}. Please go for the site visit, then open the installation and press "Site Visit Done" to inform your Team Leader${inst.teamLeader ? ' (' + inst.teamLeader + ')' : ''}.`,
+      type: 'task', module: 'installations', relatedId: id,
+    });
+  };
+
   const handleSave = async (data, id) => {
     try {
       data.progress = Math.min(100, Math.max(0, toNumber(data.progress)));
       data.floors = toNumber(data.floors);
       data.teamMembers = installationTeamMembers(data.teamMembers, data.numPeople, data.teamLeader);
       const prev = id ? installations.find(i => i.id === id) : null;
-      if (id) { await updateDocument('installations', id, data); toast('Installation updated'); tellTeam(data, prev, id); }
-      else { const newId = await addDocument('installations', data); toast('Installation added'); tellTeam(data, null, newId); }
+      const visitChanged = stampSiteVisit(data, prev);
+      if (id) { await updateDocument('installations', id, data); toast('Installation updated'); tellTeam(data, prev, id); if (visitChanged) tellSiteVisitAssignee(data, id); }
+      else { const newId = await addDocument('installations', data); toast('Installation added'); tellTeam(data, null, newId); if (visitChanged) tellSiteVisitAssignee(data, newId); }
       setModal(null);
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
+  // The assigned person, back from the site, informs the Team Leader. This
+  // only records that the visit was made and tells the leader; the Site Visit
+  // Status itself is still the Team Leader's to update, as before.
+  const reportSiteVisit = async (inst) => {
+    if (!window.confirm(`Confirm that you have completed the site visit for "${inst.customerName}"? Your Team Leader will be informed.`)) return;
+    try {
+      await updateDocument('installations', inst.id, { siteVisitReportedBy: meName, siteVisitReportedAt: new Date().toISOString() });
+      const seen = new Set();
+      [inst.teamLeader, inst.siteVisitAssignedBy].forEach(name => {
+        const key = String(name || '').trim();
+        if (!key || seen.has(key.toLowerCase()) || key === meName) return;
+        seen.add(key.toLowerCase());
+        createNotification({
+          forUser: key, title: 'Site Visit Completed',
+          message: `${meName} has completed the site visit for "${[inst.customerName, inst.address].filter(Boolean).join(', ')}". Please confirm and update the Site Visit Status on the installation.`,
+          type: 'status_update', module: 'installations', relatedId: inst.id,
+        });
+      });
+      toast('Your Team Leader has been informed');
     } catch (e) { toast(e.message, 'er'); }
   };
 
@@ -103,6 +156,15 @@ export default function Installations() {
               <div className="dg">
                 <DetailItem label="Phone" value={inst.phone} /><DetailItem label="Address" value={inst.address} />
                 <DetailItem label="Site Visit" value={inst.siteVisitStatus === 'Visited' ? <span className="st st-g">Visited</span> : <span className="st st-x">Not Visited</span>} />
+                {inst.siteVisitAssignedTo && <DetailItem label="Site Visit Assigned To" value={<>
+                  {inst.siteVisitAssignedTo}
+                  {inst.siteVisitAssignedAt ? <span style={{ color: 'var(--muted)', fontSize: '.76rem' }}><br />by {inst.siteVisitAssignedBy || '-'} · {formatDate(inst.siteVisitAssignedAt)}</span> : null}
+                  {inst.siteVisitReportedAt
+                    ? <span style={{ color: '#1e8449', fontSize: '.78rem', fontWeight: 600 }}><br /><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Visit done — reported {formatDate(inst.siteVisitReportedAt)}{inst.siteVisitStatus !== 'Visited' ? ' · awaiting the Team Leader\'s status update' : ''}</span>
+                    : (isSameUser(inst.siteVisitAssignedTo, user)
+                      ? <><br /><button className="btn bsm bp" style={{ marginTop: 4 }} onClick={() => reportSiteVisit(inst)} title="Record that the site visit is done and inform your Team Leader"><span className="material-icons-round" style={{ fontSize: 15 }}>task_alt</span> Site Visit Done — inform Team Leader</button></>
+                      : <span style={{ color: '#d68910', fontSize: '.76rem' }}><br />Awaiting the site visit</span>)}
+                </>} />}
                 <DetailItem label="Roof Type" value={inst.roofType} /><DetailItem label="Floors" value={inst.floors} />
                 <DetailItem label="Structure" value={inst.structureType} /><DetailItem label="Start Date" value={formatDate(inst.startDate)} />
                 <DetailItem label="Total Days" value={inst.totalDays} /><DetailItem label="Team Size" value={inst.numPeople} />
@@ -193,6 +255,7 @@ function InstallationModal({ data, id, users, onSave, onClose }) {
     leadId: d.leadId || '', customerId: d.customerId || '',
     customerName: d.customerName || '', phone: d.phone || '', address: d.address || '',
     siteVisitStatus: d.siteVisitStatus || 'Not Visited',
+    siteVisitAssignedTo: d.siteVisitAssignedTo || '',
     roofType: d.roofType || 'RCC', floors: d.floors || 1, structureType: d.structureType || 'Flat',
     startDate: d.startDate || '', totalDays: d.totalDays || '', teamLeader: d.teamLeader || '',
     numPeople: d.numPeople || '', teamMembers: Array.isArray(d.teamMembers) ? d.teamMembers : [],
@@ -276,7 +339,16 @@ function InstallationModal({ data, id, users, onSave, onClose }) {
             )}
           </div>
           <div className="fr"><div className="fg"><label>Customer Name *</label><input className="fi" value={f.customerName} onChange={e => matchName(e.target.value)} required /></div><div className="fg"><label>Phone</label><input className="fi" value={f.phone} onChange={e => matchPhone(e.target.value)} /></div></div>
-          <div className="fr"><div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div><div className="fg"><label>Site Visit Status</label><select className="fi" value={f.siteVisitStatus} onChange={e => set('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div></div>
+          <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
+          {/* RR3 (9-Oct): who goes for the site visit, above the Site Visit
+              Status. The person is notified when this is saved; the status
+              below stays the Team Leader's to update once they report back. */}
+          <div className="fr"><div className="fg"><label>Assign Site Visit To <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>notified on save</span></label>
+            <SearchSelect value={f.siteVisitAssignedTo} onChange={v => set('siteVisitAssignedTo', v)} options={assignableNames(users, f.siteVisitAssignedTo)} allowFree={false} placeholder="Select who goes for the site visit…" />
+            {f.siteVisitAssignedTo && d.siteVisitAssignedTo === f.siteVisitAssignedTo && d.siteVisitAssignedAt && (
+              <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)' }}>Assigned by {d.siteVisitAssignedBy || '-'} on {formatDate(d.siteVisitAssignedAt)}{d.siteVisitReportedAt ? ` · visit reported done ${formatDate(d.siteVisitReportedAt)}` : ''}</small>
+            )}
+          </div><div className="fg"><label>Site Visit Status</label><select className="fi" value={f.siteVisitStatus} onChange={e => set('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div></div>
           <div className="fr3"><div className="fg"><label>Roof Type</label><select className="fi" value={f.roofType} onChange={e => set('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option></select></div><div className="fg"><label>Floors</label><input type="number" className="fi" value={f.floors} onChange={e => set('floors', e.target.value)} /></div><div className="fg"><label>Structure</label><select className="fi" value={f.structureType} onChange={e => set('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div></div>
           <div className="fr"><div className="fg"><label>Start Date</label><input type="date" className="fi" value={f.startDate} onChange={e => set('startDate', e.target.value)} /></div><div className="fg"><label>Total Days</label><input type="number" className="fi" value={f.totalDays} onChange={e => set('totalDays', e.target.value)} /></div></div>
 

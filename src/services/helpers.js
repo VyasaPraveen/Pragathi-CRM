@@ -81,11 +81,18 @@ export function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// An Indian mobile number as WhatsApp wants it: 91 followed by the ten-digit
+// subscriber number, or '' when there are not ten digits to work with. The
+// last ten digits are taken, so a leading 0, a +91, or both, are all fine.
+export function indianWhatsAppNumber(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return '';
+  return '91' + digits.slice(-10);
+}
+
 export function sendWhatsApp(phone, msg) {
-  if (!phone) return;
-  const cleaned = String(phone).replace(/\D/g, '');
-  if (cleaned.length < 10) return;
-  const num = cleaned.length === 10 ? '91' + cleaned : cleaned;
+  const num = indianWhatsAppNumber(phone);
+  if (!num) return;
   const w = window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
   if (!w) alert('Popup blocked — please allow popups for WhatsApp sharing.');
 }

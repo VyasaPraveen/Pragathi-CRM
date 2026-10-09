@@ -337,8 +337,8 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
   $y += 15;
   $pdf->text($L, $y, 'Pragathi Power Solutions,');
   $y += QPDF_SIGNATURE_GAP;        // room for the physical signature
-  $pdf->text($L, $y, 'Authorized Signature');
-  $y += 15;
+  // RR4 (9-Oct): the "Authorized Signature" heading is gone; the block goes
+  // straight to the person's name, with the signing gap kept as it was.
   $pdf->setFont('B', 10);
   $pdf->text($L, $y, $sign['name']);
   $pdf->setFont('', 10);

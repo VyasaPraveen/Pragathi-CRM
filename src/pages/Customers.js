@@ -4,8 +4,9 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
-import { StatusBadge, Modal, EmptyState, DateFilter } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateFilter , SearchSelect } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { leadPickerOptions, customerFromLead } from '../services/installations';
 import { printBOM, downloadBOM } from '../services/poUtils';
 import WorkflowTab from '../components/WorkflowTab';
 import { completedCount, TOTAL_STAGES } from '../services/workflow';
@@ -202,7 +203,12 @@ function CustomerModal({ data, id, onSave, onClose }) {
   const pipeItem  = findItem('Conduit') || findItem('UPVC') || findItem('PVC Pipe');
 
   const [tab, setTab] = useState('info');
+  // RR1 (9-Oct): the customer can be picked from the Leads by name or phone;
+  // the lead's details fill the form. One way only - the lead is not changed.
+  const leadOptions = React.useMemo(() => leadPickerOptions(leads), [leads]);
+  const [pickedLead, setPickedLead] = useState(null);
   const [f, setF] = useState({
+    leadId: data.leadId || '',
     // Basic Info
     name: data.name || '', phone: data.phone || '', email: data.email || '',
     alternatePhone: data.alternatePhone || '', address: data.address || '',
@@ -386,6 +392,18 @@ function CustomerModal({ data, id, onSave, onClose }) {
 
           {/* Tab 1: Customer Info */}
           {tab === 'info' && (<>
+            <div className="fg">
+              <label>Customer from Leads <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>search by the lead's name or phone - pick one to fill the details below</span></label>
+              <SearchSelect value="" options={[...leadOptions.keys()]} allowFree={false}
+                placeholder={leadOptions.size ? 'Search a lead by name or phone…' : 'No leads on file'}
+                emptyText="No matching lead" onChange={label => { const l = leadOptions.get(label); if (l) { setF(p => customerFromLead(p, l)); setPickedLead(l); } }} />
+              {pickedLead && (
+                <small style={{ display: 'block', marginTop: 4, color: 'var(--ok)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>link</span>{' '}
+                  Details taken from lead <strong>{pickedLead.name}</strong>{pickedLead.phone ? ` (${pickedLead.phone})` : ''}. The lead itself is not changed.
+                </small>
+              )}
+            </div>
             <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
             <div className="fr"><div className="fg"><label>Email</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Alternate Phone</label><input className="fi" value={f.alternatePhone} onChange={e => set('alternatePhone', e.target.value)} /></div></div>
             <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>

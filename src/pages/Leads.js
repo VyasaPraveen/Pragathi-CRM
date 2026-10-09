@@ -146,35 +146,9 @@ export default function Leads() {
         sanctionedLoad: toNumber(data.sanctionedLoad)
       };
       const prevLead = id ? leads.find(l => l.id === id) : null;
-      // R7 (8-Oct): a site-visit assignment is stamped with who made it and
-      // when, but only when it actually changes — re-saving the lead for some
-      // other reason neither re-stamps nor re-notifies.
-      const visitAssignee = String(cleaned.siteVisitAssignedTo || '').trim();
-      const visitChanged = visitAssignee && norm(visitAssignee) !== norm(prevLead?.siteVisitAssignedTo);
-      if (visitChanged) {
-        cleaned.siteVisitAssignedBy = assignedByName;
-        cleaned.siteVisitAssignedAt = new Date().toISOString();
-      } else if (!visitAssignee) {
-        cleaned.siteVisitAssignedBy = '';
-        cleaned.siteVisitAssignedAt = '';
-      }
-      const tellVisitAssignee = (leadId) => {
-        if (!visitChanged) return;
-        createNotification({
-          forUser: visitAssignee,
-          title: 'Site Visit Assigned to You',
-          message: `${assignedByName} assigned you the site visit for "${cleaned.name}"`
-            + `${cleaned.phone ? ' · ' + cleaned.phone : ''}`
-            + `${[cleaned.address, cleaned.city].filter(Boolean).length ? ' · ' + [cleaned.address, cleaned.city].filter(Boolean).join(', ') : ''}`
-            + `${cleaned.siteVisitDate ? ' · planned ' + formatDate(cleaned.siteVisitDate) : ''}`
-            + '. Please go for the site visit and inform your Team Leader once it is done.',
-          type: 'lead', module: 'leads', relatedId: leadId,
-        });
-      };
       if (id) {
         await updateDocument('leads', id, cleaned);
         toast('Lead updated');
-        tellVisitAssignee(id);
         // One notice covering the whole edit, sent to everyone with a stake in
         // the lead. It replaces the old pair of messages, which told only the
         // assignee, never said who had changed what, and fired on every save.
@@ -210,7 +184,6 @@ export default function Leads() {
       } else {
         const newId = await addDocument('leads', cleaned);
         toast('Lead added');
-        tellVisitAssignee(newId);
         // Notify assigned user on new lead
         if (cleaned.assignedTo) {
           createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `${assignedByName} assigned you a new lead: "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: newId });
@@ -422,8 +395,7 @@ function LeadModal({ data, id, onSave, onClose }) {
     elevatedNorthHeight: data.elevatedNorthHeight || data.elevatedHeight || '',
     elevatedSouthHeight: data.elevatedSouthHeight || '',
     customerServiceNumber: data.customerServiceNumber || data.meterNumber || '',
-    availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || '',
-    siteVisitAssignedTo: data.siteVisitAssignedTo || '',
+    availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || ''
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
   const { toast } = useToast();
@@ -675,19 +647,6 @@ function LeadModal({ data, id, onSave, onClose }) {
               <input className="fi" value={supportName} onChange={e => setSupportName(e.target.value)} placeholder="Or type a name not on the list..." onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSupportName(); } }} />
               <button type="button" className="btn bsm bo" onClick={addSupportName}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Name</button>
             </div>
-          </div>
-          {/* R7 (8-Oct): who goes for the site visit. Picked here, above the
-              Site Visit status; the person is told the moment the lead is
-              saved. The status itself is still updated by the Team Leader
-              once the person reports back, exactly as before. */}
-          <div className="fg">
-            <label>Assign Site Visit To <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>the person who has to go — they are notified on save</span></label>
-            <SearchSelect value={form.siteVisitAssignedTo} onChange={v => set('siteVisitAssignedTo', v)}
-              options={assignableNames(users, form.siteVisitAssignedTo)} allowFree={false}
-              placeholder="Select who goes for the site visit…" />
-            {form.siteVisitAssignedTo && data.siteVisitAssignedTo === form.siteVisitAssignedTo && data.siteVisitAssignedAt && (
-              <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)' }}>Assigned by {data.siteVisitAssignedBy || '-'} on {formatDate(data.siteVisitAssignedAt)}</small>
-            )}
           </div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>
           {form.advancePaid === 'Yes' && (
@@ -970,7 +929,6 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <div className="di"><div className="dl">Expected Value</div><div className="dv">{lead.expectedValue ? formatCurrency(lead.expectedValue) : '-'}</div></div>
                 <div className="di"><div className="dl">Date Generated</div><div className="dv">{formatDate(lead.dateGenerated)}</div></div>
                 {lead.expectedSignUpDate && <div className="di"><div className="dl">Expected Sign-up</div><div className="dv">{formatDate(lead.expectedSignUpDate)}</div></div>}
-                {lead.siteVisitAssignedTo && <div className="di"><div className="dl">Site Visit Assigned To</div><div className="dv">{lead.siteVisitAssignedTo}{lead.siteVisitAssignedAt ? <span style={{ color: 'var(--muted)', fontSize: '.76rem' }}><br />by {lead.siteVisitAssignedBy || '-'} · {formatDate(lead.siteVisitAssignedAt)}</span> : null}</div></div>}
                 <div className="di"><div className="dl">Site Visit</div><div className="dv">{lead.siteVisit || 'No'}</div></div>
                 <div className="di"><div className="dl">Quotation Sent</div><div className="dv">{lead.quotationSent || 'No'}</div></div>
                 <div className="di"><div className="dl">Advance Paid</div><div className="dv">{lead.advancePaid || 'No'}</div></div>

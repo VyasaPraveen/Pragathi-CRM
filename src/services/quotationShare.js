@@ -24,7 +24,7 @@
 // ============================================================================
 
 import { apiGet } from './api';
-import { toNumber } from './helpers';
+import { toNumber, indianWhatsAppNumber } from './helpers';
 import { quotationRef, quotationWhatsAppText } from './quotation';
 
 // Ask the server to build the PDF and tell us where it put it.
@@ -67,11 +67,12 @@ export function downloadUrl(url, filename) {
 }
 
 // 91XXXXXXXXXX, or '' if there is nothing usable to dial.
-export function waNumber(phone) {
-  const cleaned = String(phone || '').replace(/\D/g, '');
-  if (cleaned.length < 10) return '';
-  return cleaned.length === 10 ? '91' + cleaned : cleaned;
-}
+// RR5 (9-Oct): this used to pass anything longer than ten digits through as
+// it was, so a number saved as 09701461156 or +91 0 97014 61156 reached
+// WhatsApp as a number it does not know - WhatsApp then opened with no chat
+// selected. Now the last ten digits are the subscriber number and 91 is put
+// in front, whatever else was typed around them.
+export const waNumber = (phone) => indianWhatsAppNumber(phone);
 
 // The message that goes with the PDF. The link is what makes the quotation
 // reachable when the file itself cannot be attached.
@@ -144,9 +145,10 @@ export async function sendQuotationOnWhatsApp(q, phone) {
 }
 
 // A quotation with no price on it is not something to send a customer.
-export function quotationReadyToShare(q) {
+// The number checked is the lead's, which is what the message is sent to.
+export function quotationReadyToShare(q, phone) {
   if (!q || !q.id) return 'Save the quotation first.';
   if (toNumber(q.systemCost) <= 0) return 'Set the system cost before sharing this quotation.';
-  if (!waNumber(q.customerPhone)) return 'This lead has no usable mobile number — add one on the lead first.';
+  if (!waNumber(phone || q.customerPhone)) return 'This lead has no usable mobile number — add one on the lead first.';
   return '';
 }
