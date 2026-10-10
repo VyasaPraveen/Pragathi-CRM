@@ -64,6 +64,15 @@ try {
       handle_po_pdf($method);
       break;
 
+    // The stock ledger: receipts, discrepancy corrections, the Owner's
+    // approval and the final dispatch that takes stock out. Each is one
+    // locked database transaction; the generic collection route refuses to
+    // change a material's figures.
+    case 'stock':
+      require __DIR__ . '/routes/stock.php';
+      handle_stock($seg[1] ?? '', $method);
+      break;
+
     case 'push':
       require __DIR__ . '/routes/push.php';
       handle_push($seg[1] ?? '', $method);

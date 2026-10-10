@@ -224,3 +224,100 @@ describe('BcoOperationsPanel', () => {
     }
   });
 });
+
+// 10-Oct: Materials & Inventory — the ledger-driven page and the final
+// dispatch step on the PO.
+describe('Materials page', () => {
+  const Materials = require('../pages/Materials').default;
+  const materials = [
+    { id: 'M1', name: 'AC Cable (4 sq mm)', unit: 'mtrs', stock: 70, dispatched: 25, installed: 20, balance: 45, category: 'AC Cable' },
+    { id: 'M2', name: 'Solar Module', unit: 'Nos', stock: 5, dispatched: 0, installed: 0, balance: 5 },
+  ];
+  const txns = [
+    { id: 'T1', type: 'receipt', materialId: 'M1', materialName: 'AC Cable (4 sq mm)', unit: 'mtrs', quantity: 10, status: 'Pending Review', reference: 'RCP-261010-AAAAA', submittedBy: 'Warehouse', submittedByEmail: 'wh@x.com', submittedAt: '2026-10-10T05:00:00Z', receiptDate: '2026-10-10', balanceAtSubmission: 45, poNumber: 'VPO-1', poItemName: 'AC Cable 4sqmm', poOrderedQty: 100 },
+    { id: 'T2', type: 'adjustment', materialId: 'M2', materialName: 'Solar Module', unit: 'Nos', quantity: -1, countedQuantity: 4, balanceAtSubmission: 5, reason: 'one damaged', status: 'Forwarded to Owner', reference: 'ADJ-261010-BBBBB', submittedBy: 'Warehouse', submittedAt: '2026-10-10T06:00:00Z', reviewedBy: 'OM', reviewedAt: '2026-10-10T07:00:00Z' },
+    { id: 'T3', type: 'dispatch', materialId: 'M1', materialName: 'AC Cable (4 sq mm)', unit: 'mtrs', quantity: 25, status: 'Applied', appliedAt: 'x', previousBalance: 70, newBalance: 45, reference: 'DSP-261010-CCCCC', confirmedBy: 'Revanth Reddy', assignedTo: 'Revanth Reddy', submittedBy: 'Revanth Reddy', submittedAt: '2026-10-09T05:00:00Z', dispatchDate: '2026-10-09', poNumber: 'PO-7', customerName: 'Mr Rao' },
+  ];
+  const data = (extra = {}) => ({ materials, stockTransactions: txns, purchaseOrders: [], leadPOs: [], leads: [], users, ...extra });
+
+  test('the summary table is still there, with the pending quantity and the status', () => {
+    mockData = data();
+    asUser('x@x.com', 'technician');
+    const text = render(<Materials />);
+    expect(text).toContain('AC Cable (4 sq mm)');
+    expect(text).toContain('Low Stock');
+    expect(text).toContain('Good');
+    expect(text).toContain('+10 receipt');
+    expect(text).toContain('1 correction');
+    // A technician sees, but has none of the buttons.
+    expect(text).not.toContain('Receive Stock');
+    expect(text).not.toContain('Add Material');
+    expect(text).not.toContain('Approvals');
+  });
+
+  test('the warehouse records and reports; the OM reviews; the Owner approves and corrects; the Admin does not get the Owner\'s buttons', () => {
+    mockData = data();
+    asUser('wh@x.com', 'warehouse_admin');
+    let text = render(<Materials />);
+    expect(text).toContain('Receive Stock');
+    expect(text).toContain('Report Discrepancy');
+    expect(text).not.toContain('Correct Stock');
+    expect(text).toContain('Add Material');     // warehouse_admin is manager level, as before
+    asUser('om@x.com', 'operation_manager');
+    text = render(<Materials />);
+    expect(text).toContain('Approvals');
+    asUser('owner@x.com', 'super_admin');
+    text = render(<Materials />);
+    expect(text).toContain('Correct Stock');
+    expect(text).not.toContain('Report Discrepancy');
+    asUser('admin@x.com', 'admin');
+    text = render(<Materials />);
+    expect(text).toContain('Report Discrepancy');
+    expect(text).not.toContain('Correct Stock');
+  });
+
+  test('renders with nothing at all', () => {
+    mockData = data({ materials: [], stockTransactions: [] });
+    asUser('om@x.com', 'operation_manager');
+    expect(render(<Materials />)).toContain('No materials');
+  });
+});
+
+describe('DispatchPanel — final dispatch', () => {
+  const materials = [{ id: 'M1', name: 'Solar PV Module', unit: 'Nos', balance: 10 }];
+  const received = { id: 'P1', poNumber: 'PO-1', leadId: 'L1', status: 'Approved', dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-08T05:00:00Z',
+    items: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos' }], dispatchItems: [{ dispatched: true }],
+    dispatchAssignedTo: 'Revanth Reddy', dispatchAssignedToEmail: 'revanth@x.com', dispatchAssignedBy: 'OM', dispatchAssignedAt: '2026-10-08T06:00:00Z',
+    dispatchReceivedBy: 'Revanth Reddy', dispatchReceivedAt: '2026-10-08T07:00:00Z' };
+  test('the assignee and the OM get "Confirm Final Dispatch" once the items are received; the warehouse does not; it goes once deducted', () => {
+    mockData = { users, materials };
+    asUser('revanth@x.com', 'executive');
+    let text = render(<DispatchPanel po={received} lead={lead} />);
+    expect(text).toContain('Final Dispatch');
+    expect(text).toContain('Confirm Final Dispatch');
+    expect(text).toContain('matched by name');
+    expect(text).toContain('10 Nos');
+    asUser('om@x.com', 'operation_manager');
+    expect(render(<DispatchPanel po={received} lead={lead} />)).toContain('Confirm Final Dispatch');
+    asUser('wh@x.com', 'warehouse_admin');
+    text = render(<DispatchPanel po={received} lead={lead} />);
+    expect(text).toContain('Awaiting the final dispatch confirmation');
+    expect(text).not.toContain('Confirm Final Dispatch');
+    // Not before receipt.
+    asUser('revanth@x.com', 'executive');
+    expect(render(<DispatchPanel po={{ ...received, dispatchReceivedAt: '', dispatchReceivedBy: '' }} lead={lead} />)).not.toContain('Final Dispatch');
+    // Done: the deduction is shown, the button is gone.
+    const done = { ...received, stockDispatchedAt: '2026-10-08T08:00:00Z', stockDispatchedBy: 'Revanth Reddy', stockDispatchRef: 'DSP-261008-ZZZZZ',
+      stockDispatchItems: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos', previousBalance: 16, newBalance: 10 }] };
+    text = render(<DispatchPanel po={done} lead={lead} />);
+    expect(text).toContain('Stock deducted');
+    expect(text).toContain('DSP-261008-ZZZZZ');
+    expect(text).toContain('16 → 10');
+    expect(text).not.toContain('Confirm Final Dispatch');
+  });
+  test('survives no materials loaded yet', () => {
+    mockData = { users, materials: undefined };
+    asUser('revanth@x.com', 'executive');
+    expect(() => render(<DispatchPanel po={received} lead={lead} />)).not.toThrow();
+  });
+});

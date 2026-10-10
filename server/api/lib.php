@@ -261,6 +261,9 @@ function collection_table(string $collection): ?string {
     'activityLog' => 'activity_log', 'notifications' => 'notifications',
     'leaveRequests' => 'leave_requests', 'attendance' => 'attendance', 'tracking' => 'tracking',
     'bcoOps' => 'bco_ops',
+    // The stock ledger (10-Oct). Read like any collection; written only by
+    // routes/stock.php — see enforce_materials_write() in collections.php.
+    'stockTransactions' => 'stock_transactions',
   ];
   return $map[$collection] ?? null;
 }

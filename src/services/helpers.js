@@ -116,7 +116,10 @@ export const statusClass = (s) => {
     'Awaiting Replacement': 'st-o', 'Awaiting Manager': 'st-b',
     // Quotation workflow
     'Pending Approval': 'st-o', 'Shared with Customer': 'st-b',
-    'Accepted': 'st-g', 'Not Accepted': 'st-r', 'Pending Follow-up': 'st-o'
+    'Accepted': 'st-g', 'Not Accepted': 'st-r', 'Pending Follow-up': 'st-o',
+    // The stock ledger (10-Oct)
+    'Pending Review': 'st-o', 'Forwarded to Owner': 'st-b', 'Applied': 'st-g',
+    'Low Stock': 'st-r', 'Good': 'st-g',
   };
   return m[s] || 'st-x';
 };

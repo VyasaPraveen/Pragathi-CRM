@@ -44,11 +44,18 @@ function handle_collections(string $collection, string $id, string $method): voi
   // ── all writes require an approved account ──
   if (!(int)($claims['approved'] ?? 0)) fail(403, 'Account not approved');
 
+  // The stock ledger is written only through /stock, where every line is
+  // made under lock and applied once. Nothing in it is edited or deleted.
+  if ($collection === 'stockTransactions') {
+    fail(403, 'Stock transactions are recorded through the stock workflow (receipt, review, approval, dispatch) and are never edited or deleted.');
+  }
+
   // ── CREATE ──
   if ($method === 'POST' && $id === '') {
     enforce_create($collection, $claims);
     $data = body();
     unset($data['id'], $data['createdAt'], $data['updatedAt']);
+    if ($collection === 'materials') enforce_materials_write('POST', $claims, $data, []);
     // Force the correct initial status for approval-chain collections so the
     // workflow can't be bypassed by POSTing an already-advanced status (the UI
     // always starts here; this stops the raw API from skipping stages).
@@ -81,6 +88,11 @@ function handle_collections(string $collection, string $id, string $method): voi
     $st->execute([$newId, json_encode($data, JSON_UNESCAPED_UNICODE), $email]);
     // A new in-app notification → also fire a web push to the target device(s).
     if ($collection === 'notifications') maybe_send_push($data);
+    // The Owner's opening figure on a new material is the ledger's first line.
+    if ($collection === 'materials' && (float)($data['balance'] ?? 0) > 0) {
+      require_once __DIR__ . '/stock.php';
+      stock_record_opening($newId, $data, $claims);
+    }
     json_out(['id' => $newId] + $data, 201);
   }
 
@@ -97,6 +109,7 @@ function handle_collections(string $collection, string $id, string $method): voi
 
     $patch = body();
     unset($patch['id'], $patch['createdAt'], $patch['updatedAt']);
+    if ($collection === 'materials') enforce_materials_write('PATCH', $claims, $patch, $existing);
     enforce_status_transition($collection, $role, $patch, $existing, $email);
 
     $merged = array_merge($existing, $patch);
@@ -108,6 +121,11 @@ function handle_collections(string $collection, string $id, string $method): voi
 
   // ── DELETE (admins — plus, for gallery photos, the uploader themselves) ──
   if ($method === 'DELETE') {
+    // A material with a history keeps it: deleting the row would orphan the
+    // receipts and dispatches recorded against it.
+    if ($collection === 'materials' && material_has_ledger($id)) {
+      fail(409, 'This material has stock transactions recorded against it and cannot be deleted. Correct its figures with a stock adjustment instead.');
+    }
     if (!has_access($role, 'admin')) {
       // A photo may only be removed by the person who uploaded it.
       if ($collection !== 'gallery') fail(403, 'Only admins can delete');
@@ -249,6 +267,94 @@ function leave_recommendation_only(array $patch): bool {
   if (!$patch) return false;
   $allowed = ['recommendedBy', 'recommendedByName', 'recommendedDate', 'recommendNote'];
   return count(array_diff(array_keys($patch), $allowed)) === 0;
+}
+
+// ── Materials: the figures are the ledger's to change (10-Oct) ──────────────
+//
+// A material's stock, dispatched and balance figures used to be typed into
+// the Add / Edit form by anyone at manager level. Now they move only through
+// routes/stock.php — a receipt the Owner has approved, a correction the Owner
+// has approved or made, or the final dispatch — each recorded as a
+// transaction. So here: a new material is created with its figures at zero
+// unless the Owner is creating it with an opening figure (recorded as the
+// ledger's first line); an edit may change the name, unit and category, and
+// a figure that is sent back unchanged is simply dropped from the patch; a
+// figure that differs is refused for everybody, Owner included — the Owner
+// corrects stock through an adjustment, with the reason on record.
+// `installed` is informational (it is not part of the balance) and stays the
+// Owner's to set directly. Mirrors MATERIAL_FIGURE_FIELDS in stock.js.
+const MATERIAL_FIGURE_FIELDS = ['stock', 'dispatched', 'balance'];
+
+function enforce_materials_write(string $method, array $claims, array &$data, array $existing): void {
+  $role = (string)($claims['role'] ?? '');
+  $owner = $role === 'super_admin';
+  $num = fn($v) => is_numeric($v) ? round((float)$v, 3) : 0.0;
+
+  if ($method === 'POST') {
+    $name = trim((string)($data['name'] ?? ''));
+    if ($name === '') fail(422, 'A material needs a name.');
+    if (material_name_taken($name, '')) fail(409, "A material called \"$name\" already exists. Receive stock against it rather than adding it again.");
+    if ($owner) {
+      // The Owner may open a material with stock in hand: stock = balance.
+      $opening = $num($data['openingStock'] ?? ($data['stock'] ?? ($data['balance'] ?? 0)));
+      if ($opening < 0) fail(422, 'The opening stock cannot be negative.');
+      $data['stock'] = $opening; $data['balance'] = $opening; $data['openingStock'] = $opening;
+      $data['dispatched'] = 0;
+      $data['installed'] = $num($data['installed'] ?? 0);
+    } else {
+      foreach (['stock', 'dispatched', 'balance', 'openingStock'] as $k) {
+        if ($num($data[$k] ?? 0) != 0.0) fail(403, 'A material starts at zero stock; its figures change only through a stock receipt approved by the Owner. Record a receipt once the material is added.');
+        $data[$k] = 0;
+      }
+      $data['installed'] = 0;
+    }
+    return;
+  }
+
+  // PATCH
+  if (array_key_exists('name', $data)) {
+    $name = trim((string)$data['name']);
+    if ($name === '') fail(422, 'A material needs a name.');
+    if ($name !== trim((string)($existing['name'] ?? '')) && material_name_taken($name, (string)($existing['id'] ?? ''))) {
+      fail(409, "A material called \"$name\" already exists.");
+    }
+  }
+  foreach (MATERIAL_FIGURE_FIELDS as $k) {
+    if (!array_key_exists($k, $data)) continue;
+    if (abs($num($data[$k]) - $num($existing[$k] ?? 0)) < 1e-9) { unset($data[$k]); continue; }   // unchanged — resent by the form
+    fail(403, 'Stock figures are not edited here. Receive stock, record a dispatch, or ' . ($owner ? 'make a stock correction with its reason.' : 'report a discrepancy for the Owner to approve.'));
+  }
+  if (array_key_exists('openingStock', $data)) unset($data['openingStock']);
+  if (array_key_exists('installed', $data) && !$owner && abs($num($data['installed']) - $num($existing['installed'] ?? 0)) >= 1e-9) {
+    fail(403, 'Only the Owner can change the installed figure.');
+  }
+  foreach (['lastStockChangeAt', 'lastStockChangeBy', 'lastStockChangeRef'] as $k) unset($data[$k]);
+}
+
+// Is this name (ignoring case, spaces and punctuation) already a material?
+function material_name_taken(string $name, string $exceptId): bool {
+  $squash = fn($s) => preg_replace('/[^a-z0-9]/', '', strtolower($s));
+  $want = $squash($name);
+  if ($want === '') return false;
+  try {
+    foreach (db()->query('SELECT id, data FROM materials') as $r) {
+      if ((string)$r['id'] === $exceptId) continue;
+      $d = $r['data'] ? json_decode((string)$r['data'], true) : [];
+      if (is_array($d) && $squash((string)($d['name'] ?? '')) === $want) return true;
+    }
+  } catch (Throwable $e) { error_log('materials: name check failed: ' . $e->getMessage()); }
+  return false;
+}
+
+function material_has_ledger(string $materialId): bool {
+  if ($materialId === '') return false;
+  try {
+    foreach (db()->query('SELECT data FROM stock_transactions') as $r) {
+      $d = $r['data'] ? json_decode((string)$r['data'], true) : [];
+      if (is_array($d) && (string)($d['materialId'] ?? '') === $materialId) return true;
+    }
+  } catch (Throwable $e) { /* no ledger table yet: nothing recorded */ }
+  return false;
 }
 
 // Who may CREATE in a given collection.
@@ -474,6 +580,15 @@ function enforce_status_transition(string $collection, string $role, array &$pat
     // thing that may change on it after approval. It is open only once the PO
     // is Approved, only to the warehouse side, and the confirmation only to
     // the Operation Manager and above. Once confirmed it is fixed.
+    // The final-dispatch stamps are written by /stock/dispatch alone, when
+    // the stock actually comes off; they are not something a patch may set.
+    if ($collection === 'leadPOs') {
+      foreach (array_keys($patch) as $k) {
+        if (strncmp((string)$k, 'stockDispatch', 13) === 0) {
+          fail(403, 'The final dispatch is recorded through "Confirm Final Dispatch", which deducts the stock; it cannot be set by hand.');
+        }
+      }
+    }
     if ($collection === 'leadPOs' && po_dispatch_patch($patch)) {
       if (($existing['status'] ?? 'Unapproved') !== 'Approved') {
         fail(409, 'Material can be dispatched only once the purchase order is approved.');

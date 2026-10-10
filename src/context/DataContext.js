@@ -34,6 +34,7 @@ export function DataProvider({ children }) {
   const [attendance, setAttendance] = useState([]);
   const [tracking, setTracking] = useState([]);
   const [bcoOps, setBcoOps] = useState([]);
+  const [stockTransactions, setStockTransactions] = useState([]);
   const [settings, setSettings] = useState({});
 
   useEffect(() => {
@@ -54,7 +55,7 @@ export function DataProvider({ children }) {
       ['bomTemplates', setBomTemplates], ['quotations', setQuotations],
       ['activityLog', setActivityLog], ['notifications', setNotifications],
       ['leaveRequests', setLeaveRequests], ['attendance', setAttendance], ['tracking', setTracking],
-      ['bcoOps', setBcoOps],
+      ['bcoOps', setBcoOps], ['stockTransactions', setStockTransactions],
     ];
     const names = cfg.map(c => c[0]).join(',');
 
@@ -117,7 +118,7 @@ export function DataProvider({ children }) {
       leads, customers, installations, team, materials,
       ongoingWork, income, expenses, reminders, gallery,
       purchaseOrders, retailers, influencers, employeeTasks, leadPOs, expenditures, paymentRequests, bomTemplates, quotations, activityLog, notifications, users,
-      leaveRequests, attendance, tracking, bcoOps, settings
+      leaveRequests, attendance, tracking, bcoOps, stockTransactions, settings
     }}>
       {children}
     </DataContext.Provider>

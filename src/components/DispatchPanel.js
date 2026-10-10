@@ -10,9 +10,14 @@ import {
   canAssignDispatch, canReceiveDispatch, dispatchedItemNames, dispatchHandoverState, dispatchSent,
 } from '../services/permissions';
 import { directoryPeople } from '../services/people';
+import {
+  finalDispatchOpen, canFinalDispatch, finalDispatchLines, finalDispatchIssue, finalDispatchBody, finalDispatchState, stockDispatched, qtyText,
+} from '../services/stock';
+import { confirmFinalDispatch } from '../services/stockApi';
 import { SearchSelect } from './SharedUI';
 
 const nowIso = () => new Date().toISOString();
+const NOT_STOCKED = '— not kept in inventory —';
 
 // ============================================================================
 // Material dispatch on an approved purchase order.
@@ -28,9 +33,15 @@ const nowIso = () => new Date().toISOString();
 // these items", and the Operation Manager is told who received what. Each
 // step is a stamp on the same PO. Everyone else sees the same read-only.
 // The PO's own status is never touched here.
+//
+// 10-Oct: none of the above moves the inventory. Marking, sending, assigning
+// and receiving are preparation; the stock comes off only at the last step,
+// "Confirm Final Dispatch", when the assigned person (or the Operation
+// Manager) names the inventory material each sent line is and the server
+// deducts it — once per PO, and only if there is enough of it.
 // ============================================================================
 export default function DispatchPanel({ po, lead }) {
-  const { users } = useData();
+  const { users, materials } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const meName = user?.displayName || user?.email || '';
@@ -40,6 +51,12 @@ export default function DispatchPanel({ po, lead }) {
   const [dirty, setDirty] = useState(false);
   const [assignee, setAssignee] = useState('');
   const [assignNote, setAssignNote] = useState('');
+  // The final dispatch: which inventory material each sent line is. The
+  // suggestion comes from the names; a line can be changed or marked as not
+  // kept in inventory, in which case it is left out of the deduction.
+  const [mapOverride, setMapOverride] = useState({});
+  const [destination, setDestination] = useState('');
+  const [dispatchNote, setDispatchNote] = useState('');
   // What the server last gave us (or what we last saved), so a refreshed copy
   // of the PO replaces the marks only when it actually differs — and never
   // while something is half-done here. Without this, saving cleared the ticks
@@ -63,6 +80,14 @@ export default function DispatchPanel({ po, lead }) {
   const label = `PO ${po.poNumber || ''}${leadName ? ` for "${leadName}"` : ''}`;
   const sentItems = dispatchedItemNames(po);
   const handover = dispatchHandoverState(po);
+  const mayFinalDispatch = canFinalDispatch(po, user, role);
+  const finalState = finalDispatchState(po);
+  const stockList = materials || [];
+  const finalLines = finalDispatchLines(po, stockList).map(l => (
+    Object.prototype.hasOwnProperty.call(mapOverride, l.index) ? { ...l, materialId: mapOverride[l.index], suggested: false } : l));
+  const finalIssue = finalDispatchIssue(finalLines, stockList);
+  const materialName = (id) => { const m = stockList.find(x => x.id === id); return m ? m.name : ''; };
+  const defaultDestination = [leadName, po.customerAddress || (lead && lead.address) || ''].filter(Boolean).join(', ');
 
   const setMark = (i, patch) => {
     setDirty(true);
@@ -182,6 +207,21 @@ export default function DispatchPanel({ po, lead }) {
     finally { setBusy(false); }
   };
 
+  // The last step: the stock comes off, once.
+  const finalDispatch = async () => {
+    if (finalIssue) { toast(finalIssue, 'er'); return; }
+    const chosen = finalLines.filter(l => l.materialId);
+    const list = chosen.map(l => `${materialName(l.materialId)} −${qtyText(l.quantity, l.unit)}`).join('\n');
+    if (!window.confirm(`Confirm the FINAL DISPATCH for ${label}?\n\nThis deducts the stock now and cannot be repeated:\n${list}`)) return;
+    setBusy(true);
+    try {
+      const res = await confirmFinalDispatch(finalDispatchBody(po, finalLines, { destination: (destination || defaultDestination).trim(), note: dispatchNote.trim() }));
+      toast(`Final dispatch confirmed — stock deducted (ref ${res.reference || ''}). The Operations Manager and the Owner have been notified.`);
+      setMapOverride({}); setDispatchNote('');
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
+  };
+
   const tone = po.dispatchConfirmedAt ? '#1e8449'
     : po.dispatchStatus === DISPATCH_STATUS.COMPLETED ? '#1e8449'
       : po.dispatchStatus === DISPATCH_STATUS.PARTIAL ? '#d68910' : 'var(--muted)';
@@ -285,7 +325,7 @@ export default function DispatchPanel({ po, lead }) {
               Assigned to <strong style={{ color: 'var(--dark)' }}>{po.dispatchAssignedTo}</strong> by {po.dispatchAssignedBy || '-'} on {formatDate(po.dispatchAssignedAt)}
               {po.dispatchAssignNote ? <> · Note: {po.dispatchAssignNote}</> : null}
               {po.dispatchReceivedAt
-                ? <><br /><span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Received by {po.dispatchReceivedBy || po.dispatchAssignedTo} on {formatDate(po.dispatchReceivedAt)}</span> — work / dispatch can proceed.</>
+                ? <><br /><span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Received by {po.dispatchReceivedBy || po.dispatchAssignedTo} on {formatDate(po.dispatchReceivedAt)}</span> — {stockDispatched(po) ? 'the final dispatch has been confirmed.' : 'the stock is deducted at the final dispatch confirmation below.'}</>
                 : <><br /><span style={{ color: '#d68910' }}>Awaiting their "I have received these items".</span></>}
             </div>
           )}
@@ -312,6 +352,71 @@ export default function DispatchPanel({ po, lead }) {
                 <span className="material-icons-round" style={{ fontSize: 16 }}>how_to_reg</span> I have received these items
               </button>
             </div>
+          )}
+        </div>
+      )}
+
+      {/* ── The final dispatch: the one step that takes stock out ─────────── */}
+      {(finalDispatchOpen(po) || stockDispatched(po)) && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--bor)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+            <span className="material-icons-round" style={{ fontSize: 18, color: finalState.step === 'done' ? '#1e8449' : '#c0392b' }}>{finalState.step === 'done' ? 'inventory' : 'outbox'}</span>
+            <strong style={{ fontSize: '.84rem' }}>Final Dispatch — Stock Deduction</strong>
+            <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{finalState.text}</span>
+          </div>
+
+          {stockDispatched(po) ? (
+            <div style={{ fontSize: '.78rem' }}>
+              <div style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Stock deducted on {formatDate(po.stockDispatchedAt)} by {po.stockDispatchedBy || '-'} · ref {po.stockDispatchRef}</div>
+              <ul style={{ margin: '4px 0 0 18px', padding: 0, color: 'var(--dark)' }}>
+                {(po.stockDispatchItems || []).map((it, i) => <li key={i}>{it.materialName}: −{qtyText(it.quantity, it.unit)} ({qtyText(it.previousBalance, '')} → {qtyText(it.newBalance, '')})</li>)}
+              </ul>
+              {po.stockDispatchDestination ? <div style={{ color: 'var(--muted)', marginTop: 4 }}>Destination: {po.stockDispatchDestination}{po.stockDispatchNote ? ` · ${po.stockDispatchNote}` : ''}</div> : null}
+            </div>
+          ) : mayFinalDispatch ? (
+            <>
+              <div className="tw">
+                <table style={{ fontSize: '.8rem' }}>
+                  <thead><tr><th>Sent item</th><th>Qty</th><th style={{ minWidth: 220 }}>Inventory material to deduct</th><th>Available</th></tr></thead>
+                  <tbody>
+                    {finalLines.map(l => {
+                      const m = stockList.find(x => x.id === l.materialId);
+                      const short = m && l.quantity > (Number(m.balance) || 0);
+                      return (
+                        <tr key={l.index}>
+                          <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{qtyText(l.quantity, l.unit)}</td>
+                          <td>
+                            <SearchSelect
+                              value={l.materialId ? (m ? m.name : '') : (Object.prototype.hasOwnProperty.call(mapOverride, l.index) ? NOT_STOCKED : '')}
+                              onChange={name => setMapOverride(o => ({ ...o, [l.index]: name === NOT_STOCKED ? '' : ((stockList.find(x => x.name === name) || {}).id || '') }))}
+                              options={[NOT_STOCKED, ...stockList.map(x => x.name).filter(Boolean).sort()]} allowFree={false} placeholder="Choose the material…" disabled={busy} />
+                            {l.suggested && <div style={{ fontSize: '.7rem', color: 'var(--muted)' }}>matched by name — change it if wrong</div>}
+                          </td>
+                          <td style={{ whiteSpace: 'nowrap', color: short ? '#c0392b' : 'var(--dark)', fontWeight: short ? 700 : 400 }}>{m ? qtyText(m.balance, m.unit) : '—'}{short ? ' (short)' : ''}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+                <div style={{ minWidth: 220, flex: 2 }}>
+                  <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Destination / project</label>
+                  <input className="fi" value={destination} onChange={e => setDestination(e.target.value)} placeholder={defaultDestination || 'Site / customer'} disabled={busy} />
+                </div>
+                <div style={{ minWidth: 180, flex: 1 }}>
+                  <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Note (optional)</label>
+                  <input className="fi" value={dispatchNote} onChange={e => setDispatchNote(e.target.value)} placeholder="Vehicle, challan no., …" disabled={busy} />
+                </div>
+                <button className="btn bsm bp" disabled={busy || !!finalIssue} onClick={finalDispatch} style={{ background: '#c0392b' }} title={finalIssue || 'Deduct the stock for the chosen materials — once'}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>outbox</span> Confirm Final Dispatch
+                </button>
+              </div>
+              {finalIssue && <div style={{ fontSize: '.76rem', color: '#c0392b', marginTop: 6 }}>{finalIssue}</div>}
+            </>
+          ) : (
+            <div style={{ fontSize: '.78rem', color: 'var(--muted)' }}>Awaiting the final dispatch confirmation by {po.dispatchAssignedTo || 'the assigned person'} or the Operation Manager; the stock is deducted then.</div>
           )}
         </div>
       )}
