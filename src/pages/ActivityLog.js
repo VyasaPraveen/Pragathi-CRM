@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, formatDateTime } from '../services/helpers';
 
 const moduleColors = {
   leads: '#6366f1', customers: '#22c55e', installations: '#f59e0b', team: '#3b82f6',
@@ -54,7 +54,8 @@ export default function ActivityLog() {
     if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
     if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
     if (diff < 172800) return 'Yesterday';
-    return d.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) + ' ' + d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
+    // Older than that, the exact date and time shown beside it is enough.
+    return '';
   };
 
   return (
@@ -101,7 +102,10 @@ export default function ActivityLog() {
                       <span style={{ color: 'var(--muted)', fontSize: '.84rem' }}> {(a.action || '').toLowerCase()} </span>
                       <span style={{ background: (moduleColors[a.module] || '#64748b') + '14', color: moduleColors[a.module] || '#64748b', padding: '1px 8px', borderRadius: 10, fontSize: '.74rem', fontWeight: 600 }}>{a.module}</span>
                     </div>
-                    <span style={{ fontSize: '.74rem', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{formatTime(a.timestamp)}</span>
+                    {/* How long ago, and the exact date and IST time beside it. */}
+                    <span style={{ fontSize: '.74rem', color: 'var(--muted)', whiteSpace: 'nowrap' }} title={formatDateTime(a.timestamp)}>
+                      {formatTime(a.timestamp)}{formatTime(a.timestamp) && a.timestamp ? ' · ' : ''}{a.timestamp ? formatDateTime(a.timestamp) : ''}
+                    </span>
                   </div>
                   {a.details && <p style={{ margin: '2px 0 0', fontSize: '.82rem', color: 'var(--muted)' }}>{a.details}</p>}
                 </div>

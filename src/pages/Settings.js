@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { hasAccess } from '../services/helpers';
-import { db } from '../services/firebase';
-import { collection, getDocs, doc, updateDoc, getDoc, setDoc } from 'firebase/firestore';
+import { hasAccess, todayStr } from '../services/helpers';
+import { apiGet, apiPatch } from '../services/api';
+import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../services/permissions';
+import { DEFAULT_TARIFF } from '../services/quotation';
+import { attendanceRulesFrom, DEFAULT_ATTENDANCE_RULES } from '../services/attendance';
+import OptionListsEditor from '../components/OptionListsEditor';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -39,25 +42,6 @@ const NEW_BOM_MATERIALS = [
   { materialName: 'MCS - Cleaning System', unit: 'Nos', make: '' },
 ];
 
-// Module permissions that admin can toggle per user
-const PERMISSION_MODULES = [
-  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
-  { key: 'leads', label: 'Leads', icon: 'leaderboard' },
-  { key: 'customers', label: 'Customers', icon: 'people' },
-  { key: 'installations', label: 'Installations', icon: 'solar_power' },
-  { key: 'ongoing_work', label: 'Ongoing Work', icon: 'engineering' },
-  { key: 'materials', label: 'Materials', icon: 'inventory_2' },
-  { key: 'revenue', label: 'Revenue', icon: 'account_balance' },
-  { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long' },
-  { key: 'retailers', label: 'Retailers', icon: 'storefront' },
-  { key: 'influencers', label: 'Influencers', icon: 'record_voice_over' },
-  { key: 'tasks', label: 'Tasks', icon: 'task_alt' },
-  { key: 'team', label: 'Team', icon: 'groups' },
-  { key: 'reminders', label: 'Reminders', icon: 'notifications_active' },
-  { key: 'reports', label: 'Reports', icon: 'assessment' },
-  { key: 'gallery', label: 'Gallery', icon: 'photo_library' },
-];
-
 export default function Settings() {
   const { user, role } = useAuth();
   const { toast } = useToast();
@@ -68,21 +52,62 @@ export default function Settings() {
   const [selectedUser, setSelectedUser] = useState(null);
   const [perms, setPerms] = useState({});
   const [saving, setSaving] = useState(false);
+  const [leaderSaving, setLeaderSaving] = useState(false);
 
   // Global workflow-gating toggle (company-wide)
   const [gatingEnabled, setGatingEnabled] = useState(true);
   const [gatingSaving, setGatingSaving] = useState(false);
   useEffect(() => {
     if (!isAdmin) return;
-    getDoc(doc(db, 'company', 'settings'))
-      .then(snap => { if (snap.exists()) setGatingEnabled(snap.data().workflowGatingEnabled !== false); })
+    apiGet('/settings')
+      .then(s => {
+        if (!s) return;
+        setCompanySettings(s);
+        setGatingEnabled(s.workflowGatingEnabled !== false);
+        setEbTariff(String(s.ebTariff || DEFAULT_TARIFF));
+        const r = attendanceRulesFrom(s);
+        setAttRules({ halfDayHours: String(r.halfDayHours), fullDayHours: String(r.fullDayHours) });
+      })
       .catch(() => {});
   }, [isAdmin]);
+
+  // Electricity tariff used across the app: it turns a customer's monthly bill
+  // into units on the lead form, and drives the savings on the quotation.
+  const [companySettings, setCompanySettings] = useState({});
+  const [ebTariff, setEbTariff] = useState('');
+  const [tariffSaving, setTariffSaving] = useState(false);
+  const saveTariff = async () => {
+    const val = Number(ebTariff);
+    if (!val || val <= 0) { toast('Enter a tariff greater than zero', 'er'); return; }
+    setTariffSaving(true);
+    try {
+      await apiPatch('/settings', { ebTariff: val });
+      toast(`Electricity tariff saved — ₹${val} per unit`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setTariffSaving(false);
+  };
+
+  // Attendance duration rules (Req 5, 15-Oct): the hours that make a Half Day
+  // and a Full Day. Read by the Attendance screens through company settings.
+  const [attRules, setAttRules] = useState({ halfDayHours: String(DEFAULT_ATTENDANCE_RULES.halfDayHours), fullDayHours: String(DEFAULT_ATTENDANCE_RULES.fullDayHours) });
+  const [attSaving, setAttSaving] = useState(false);
+  const saveAttendanceRules = async () => {
+    const half = Number(attRules.halfDayHours), full = Number(attRules.fullDayHours);
+    if (!(half > 0) || !(full > 0)) { toast('Both thresholds must be more than zero hours', 'er'); return; }
+    if (half > full) { toast('The Half Day threshold cannot be more than the Full Day threshold', 'er'); return; }
+    if (full > 24) { toast('A day has 24 hours', 'er'); return; }
+    setAttSaving(true);
+    try {
+      await apiPatch('/settings', { attendanceRules: { halfDayHours: half, fullDayHours: full } });
+      toast(`Attendance rules saved — Half Day from ${half} h, Full Day from ${full} h`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setAttSaving(false);
+  };
 
   const toggleGating = async (val) => {
     setGatingSaving(true);
     try {
-      await setDoc(doc(db, 'company', 'settings'), { workflowGatingEnabled: val }, { merge: true });
+      await apiPatch('/settings', { workflowGatingEnabled: val });
       setGatingEnabled(val);
       toast(val ? 'Workflow gating ON — Customer tabs unlock stage by stage' : 'Workflow gating OFF — all Customer tabs unlocked');
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
@@ -93,8 +118,8 @@ export default function Settings() {
   useEffect(() => {
     if (!isAdmin) return;
     setLoading(true);
-    getDocs(collection(db, 'users')).then(snap => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(u => u.approved).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
+    apiGet('/auth/users').then(res => {
+      const list = (res.users || []).filter(u => u.approved).sort((a, b) => (a.displayName || '').localeCompare(b.displayName || ''));
       setUsers(list);
       setLoading(false);
     }).catch((err) => { console.error('Failed to load users:', err.message); setLoading(false); });
@@ -103,13 +128,33 @@ export default function Settings() {
   // When a user is selected, load their permissions
   const selectUser = (u) => {
     setSelectedUser(u);
-    // Default: all permissions ON if no permissions object exists
+    // Anything the Admin has not set explicitly shows its role default (a
+    // Technician, for example, starts with only the options their work needs).
     const existing = u.permissions || {};
     const p = {};
     PERMISSION_MODULES.forEach(m => {
-      p[m.key] = existing[m.key] !== undefined ? existing[m.key] : true;
+      p[m.key] = existing[m.key] !== undefined && existing[m.key] !== null
+        ? !!existing[m.key]
+        : defaultModuleAllowed(u.role, m.key);
     });
     setPerms(p);
+  };
+
+  // Who this user reports to. This one field drives the whole Team Leader ->
+  // Team Member structure: the leader's "My Team" list and the routing of their
+  // payment requests for recommendation.
+  const setTeamLeader = async (leaderEmail) => {
+    if (!selectedUser) return;
+    setLeaderSaving(true);
+    try {
+      await apiPatch('/auth/users/' + selectedUser.id, { teamLeader: leaderEmail });
+      setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, teamLeader: leaderEmail } : u));
+      setSelectedUser(prev => ({ ...prev, teamLeader: leaderEmail }));
+      toast(leaderEmail ? 'Team Leader assigned' : 'Team Leader cleared');
+    } catch (err) {
+      toast('Failed to save: ' + err.message, 'er');
+    }
+    setLeaderSaving(false);
   };
 
   const togglePerm = (key) => {
@@ -126,7 +171,7 @@ export default function Settings() {
     if (!selectedUser) return;
     setSaving(true);
     try {
-      await updateDoc(doc(db, 'users', selectedUser.id), { permissions: perms });
+      await apiPatch('/auth/users/' + selectedUser.id, { permissions: perms });
       setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, permissions: perms } : u));
       setSelectedUser(prev => ({ ...prev, permissions: perms }));
       toast('Permissions saved');
@@ -148,8 +193,7 @@ export default function Settings() {
     setMigrating(true);
     setMigrateResult(null);
     try {
-      const snap = await getDocs(collection(db, 'leadPOs'));
-      const allPOs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const allPOs = await apiGet('/collections/leadPOs');
       let updated = 0;
 
       for (let idx = 0; idx < allPOs.length; idx++) {
@@ -214,17 +258,16 @@ export default function Settings() {
 
         // Migrate PO number if old format
         if (po.poNumber && !po.poNumber.startsWith('PO-PPSPO-')) {
-          const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
+          const dateStr = (po.poDate || todayStr());
           updates.poNumber = 'PO-PPSPO-' + String(idx + 1).padStart(4, '0') + '/' + dateStr;
         }
 
-        await updateDoc(doc(db, 'leadPOs', po.id), updates);
+        await apiPatch('/collections/leadPOs/' + po.id, updates);
         updated++;
       }
 
       // Also migrate purchaseOrders collection
-      const poSnap = await getDocs(collection(db, 'purchaseOrders'));
-      const allPurchaseOrders = poSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const allPurchaseOrders = await apiGet('/collections/purchaseOrders');
       for (let idx = 0; idx < allPurchaseOrders.length; idx++) {
         const po = allPurchaseOrders[idx];
         const oldItems = po.items || [];
@@ -256,10 +299,10 @@ export default function Settings() {
 
         updates.items = newItems;
         if (po.poNumber && !po.poNumber.startsWith('PO-PPSPO-')) {
-          const dateStr = (po.poDate || new Date().toISOString().slice(0, 10));
+          const dateStr = (po.poDate || todayStr());
           updates.poNumber = 'PO-PPSPO-' + String(allPOs.length + idx + 1).padStart(4, '0') + '/' + dateStr;
         }
-        await updateDoc(doc(db, 'purchaseOrders', po.id), updates);
+        await apiPatch('/collections/purchaseOrders/' + po.id, updates);
         updated++;
       }
 
@@ -282,7 +325,7 @@ export default function Settings() {
     setSaving(true);
     try {
       for (const uid of bulkSelected) {
-        await updateDoc(doc(db, 'users', uid), { permissions: perms });
+        await apiPatch('/auth/users/' + uid, { permissions: perms });
       }
       setUsers(prev => prev.map(u => bulkSelected.includes(u.id) ? { ...u, permissions: perms } : u));
       setBulkSelected([]);
@@ -359,20 +402,58 @@ export default function Settings() {
                         </div>
                       </div>
 
-                      {/* Permission toggles grid */}
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8, marginBottom: 16 }}>
-                        {PERMISSION_MODULES.map(m => (
-                          <label key={m.key} style={{
-                            display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
-                            border: '1px solid var(--bor)', background: perms[m.key] ? 'rgba(39,174,96,.06)' : 'rgba(231,76,60,.04)',
-                            transition: 'all .15s',
-                          }}>
-                            <input type="checkbox" checked={perms[m.key] || false} onChange={() => togglePerm(m.key)} style={{ accentColor: 'var(--pri)' }} />
-                            <span className="material-icons-round" style={{ fontSize: 18, color: perms[m.key] ? '#27ae60' : '#e74c3c' }}>{m.icon}</span>
-                            <span style={{ fontSize: '.84rem', fontWeight: 500 }}>{m.label}</span>
-                          </label>
-                        ))}
+                      {/* Team structure: who this person reports to */}
+                      <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '10px 12px', marginBottom: 14, background: 'var(--bg)' }}>
+                        <label style={{ fontSize: '.78rem', fontWeight: 700, display: 'block', marginBottom: 6 }}>Reports to (Team Leader)</label>
+                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                          <select
+                            className="fi"
+                            style={{ maxWidth: 320 }}
+                            value={selectedUser.teamLeader || ''}
+                            disabled={leaderSaving}
+                            onChange={e => setTeamLeader(e.target.value)}
+                          >
+                            <option value="">— No Team Leader —</option>
+                            {users.filter(u => u.id !== selectedUser.id).map(u => (
+                              <option key={u.id} value={u.email}>{u.displayName || u.email}{u.designation ? ' · ' + u.designation : ''}</option>
+                            ))}
+                          </select>
+                          {leaderSaving && <span className="ssm"></span>}
+                          {(() => {
+                            const led = users.filter(u => (u.teamLeader || '').toLowerCase() === (selectedUser.email || '').toLowerCase());
+                            return led.length
+                              ? <span style={{ fontSize: '.78rem', color: 'var(--ok)' }}>Leads {led.length} member{led.length === 1 ? '' : 's'}: {led.map(u => u.displayName || u.email).join(', ')}</span>
+                              : <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>No members assigned under this user yet.</span>;
+                          })()}
+                        </div>
+                        <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: '6px 0 0' }}>
+                          The Team options below only appear for someone who has members assigned under them.
+                        </p>
                       </div>
+
+                      {/* Permission toggles, grouped the same way as the sidebar */}
+                      {PERMISSION_GROUPS.map(group => (
+                        <div key={group} style={{ marginBottom: 14 }}>
+                          <p style={{ fontSize: '.72rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', margin: '0 0 6px' }}>{group}</p>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(180px,1fr))', gap: 8 }}>
+                            {PERMISSION_MODULES.filter(m => m.group === group).map(m => (
+                              <label key={m.key} style={{
+                                display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 8, cursor: 'pointer',
+                                border: '1px solid var(--bor)', background: perms[m.key] ? 'rgba(39,174,96,.06)' : 'rgba(231,76,60,.04)',
+                                transition: 'all .15s',
+                              }}>
+                                <input type="checkbox" checked={perms[m.key] || false} onChange={() => togglePerm(m.key)} style={{ accentColor: 'var(--pri)' }} />
+                                <span className="material-icons-round" style={{ fontSize: 18, color: perms[m.key] ? '#27ae60' : '#e74c3c' }}>{m.icon}</span>
+                                <span style={{ fontSize: '.84rem', fontWeight: 500 }}>{m.label}</span>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      <p style={{ fontSize: '.76rem', color: 'var(--muted)', marginBottom: 14 }}>
+                        <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: 'middle', marginRight: 4 }}>info</span>
+                        Admin, Management and the Owner account always keep full access. Everything switched off here is hidden from that user&rsquo;s menu and blocked if they open the page directly.
+                      </p>
 
                       {/* Actions */}
                       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -446,6 +527,57 @@ export default function Settings() {
         </div>
       )}
 
+      {/* Dropdown options — admin only */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>tune</span>Manage Options</h3></div>
+          <div className="cb">
+            <OptionListsEditor settings={companySettings} onSaved={setCompanySettings} />
+          </div>
+        </div>
+      )}
+
+      {/* Attendance duration rules — admin / owner only (Req 5, 15-Oct) */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>schedule</span>Attendance Rules</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              The hours between an employee's check-in and check-out decide the day: a <strong>Full Day</strong> from the first threshold, a <strong>Half Day</strong> from the second, a <strong>Short Day</strong> below it. A Short Day counts one day on the leave counter and a Half Day half a day. The counter is worked out from the marks each time it is shown, so a day is never deducted twice.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap' }}>
+              <div className="fg" style={{ marginBottom: 0 }}><label>Half Day from (hours)</label>
+                <input type="number" className="fi" step="0.5" min="0.5" max="24" style={{ width: 140 }} value={attRules.halfDayHours} onChange={e => setAttRules(r => ({ ...r, halfDayHours: e.target.value }))} /></div>
+              <div className="fg" style={{ marginBottom: 0 }}><label>Full Day from (hours)</label>
+                <input type="number" className="fi" step="0.5" min="0.5" max="24" style={{ width: 140 }} value={attRules.fullDayHours} onChange={e => setAttRules(r => ({ ...r, fullDayHours: e.target.value }))} /></div>
+              <button className="btn bp" onClick={saveAttendanceRules} disabled={attSaving} style={{ padding: '8px 20px', fontSize: '.86rem' }}>
+                {attSaving ? <><span className="ssm"></span> Saving...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save rules</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Electricity tariff — admin only */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>bolt</span>Electricity Tariff</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              The rate per unit used to convert a customer's <strong>Monthly Current Bill</strong> into <strong>Monthly Units</strong> on the lead form, and to work out the EB savings printed on the quotation.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <input type="number" className="fi" step="0.1" min="0.1" style={{ width: 140 }}
+                value={ebTariff} onChange={e => setEbTariff(e.target.value)} placeholder={String(DEFAULT_TARIFF)} />
+              <span style={{ fontSize: '.86rem', color: 'var(--muted)' }}>₹ per unit</span>
+              <button className="btn bp" onClick={saveTariff} disabled={tariffSaving} style={{ padding: '8px 20px', fontSize: '.86rem' }}>
+                {tariffSaving ? <><span className="ssm"></span> Saving...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save tariff</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* BOM Data Migration — admin only */}
       {isAdmin && (
         <div className="card" style={{ marginBottom: 18 }}>
@@ -474,7 +606,7 @@ export default function Settings() {
         <div className="ch"><h3>Deployment</h3></div>
         <div className="cb">
           <p style={{ fontSize: '.88rem', color: 'var(--muted)', lineHeight: 1.6 }}>
-            To deploy updates, run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm run build</code> followed by <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>firebase deploy</code> from the project root.
+            This CRM runs on Hostinger (PHP + MySQL API at <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>/api</code>). To deploy front-end updates, run <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>npm run build</code> and upload the <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>build/</code> folder to the <code style={{ background: 'var(--bg)', padding: '2px 6px', borderRadius: 4 }}>crm/</code> directory on the server.
           </p>
         </div>
       </div>

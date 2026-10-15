@@ -4,9 +4,13 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatDate, toNumber, safeStr, hasAccess } from '../services/helpers';
-import { StatusBadge, ProgressBar, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, ProgressBar, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 
 const statuses = ['In Progress', 'Pending', 'Completed', 'Delayed'];
+
+// A project's day for the Day / Month filter: its start date, else its install date, else when it was recorded.
+const WORK_DATE_FIELDS = ['startDate', 'installDate', 'createdAt'];
 
 // Q4 fix: added full CRUD (was read-only)
 export default function OngoingWork() {
@@ -16,6 +20,7 @@ export default function OngoingWork() {
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
   const canEdit = hasAccess(role, 'manager');
 
   let filtered = ongoingWork;
@@ -24,6 +29,7 @@ export default function OngoingWork() {
     const q = search.toLowerCase();
     filtered = filtered.filter(w => safeStr(w.projectName).toLowerCase().includes(q));
   }
+  filtered = applyDateFilter(filtered, dateFilter, WORK_DATE_FIELDS);
 
   const handleSave = async (data, id) => {
     try {
@@ -52,6 +58,7 @@ export default function OngoingWork() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Project</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={ongoingWork} fields={WORK_DATE_FIELDS} /></div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(320px,1fr))', gap: 16 }}>
         {filtered.map(w => (
           <div className="card" key={w.id}>

@@ -3,17 +3,21 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatDate, safeStr, priorityClass, hasAccess } from '../services/helpers';
-import { StatCard, StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { formatDate, formatDateTime, safeStr, priorityClass, hasAccess, todayStr } from '../services/helpers';
+import { StatCard, StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 
 const taskStatuses = ['Pending', 'In Progress', 'Completed', 'Overdue'];
 const taskPriorities = ['High', 'Medium', 'Low'];
 const taskCategories = ['Installation', 'Service', 'Follow-up', 'Documentation', 'Other'];
 const PAGE_SIZE = 20;
 
+// A task's day for the Day / Month filter: when it was assigned, else its due date.
+const TASK_DATE_FIELDS = ['assignedDate', 'dueDate', 'createdAt'];
+
 export default function EmployeeTasks() {
   const { employeeTasks, team, users } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -21,6 +25,7 @@ export default function EmployeeTasks() {
   const [modal, setModal] = useState(null);
   const [detailModal, setDetailModal] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   const pending = employeeTasks.filter(t => t.status === 'Pending').length;
   const inProgress = employeeTasks.filter(t => t.status === 'In Progress').length;
@@ -38,15 +43,20 @@ export default function EmployeeTasks() {
       safeStr(t.relatedCustomer).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, TASK_DATE_FIELDS);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
+
+  // Who is assigning the work — included in the notification so the employee
+  // knows at a glance who gave them the task.
+  const assignedByName = user?.displayName || user?.email || 'a team leader';
 
   const handleSave = async (data, id) => {
     try {
       const cleaned = { ...data };
       if (cleaned.status === 'Completed' && !cleaned.completedDate) {
-        cleaned.completedDate = new Date().toISOString().slice(0, 10);
+        cleaned.completedDate = todayStr();
       }
       if (cleaned.status !== 'Completed') {
         cleaned.completedDate = '';
@@ -57,7 +67,7 @@ export default function EmployeeTasks() {
         toast('Task updated');
         // Notify assigned user if assignment changed
         if (cleaned.assignedTo && cleaned.assignedTo !== (prevTask?.assignedTo || '')) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Task Assigned to You', message: `Task "${cleaned.title}" has been assigned to you`, type: 'task', module: 'employeeTasks', relatedId: id });
+          createNotification({ forUser: cleaned.assignedTo, title: 'Task Assigned to You', message: `${assignedByName} assigned you the task "${cleaned.title}". Due: ${cleaned.dueDate || 'Not set'}${cleaned.priority ? ' · ' + cleaned.priority + ' priority' : ''}`, type: 'task', module: 'employeeTasks', relatedId: id });
         }
         // Notify admin when status changes (user updated their task)
         if (prevTask && cleaned.status !== prevTask.status) {
@@ -68,12 +78,12 @@ export default function EmployeeTasks() {
           }
         }
       } else {
-        if (!cleaned.assignedDate) cleaned.assignedDate = new Date().toISOString().slice(0, 10);
+        if (!cleaned.assignedDate) cleaned.assignedDate = todayStr();
         const newId = await addDocument('employeeTasks', cleaned);
         toast('Task created');
         // Notify assigned user about new task
         if (cleaned.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'New Task Assigned', message: `Task "${cleaned.title}" has been assigned to you. Due: ${cleaned.dueDate || 'Not set'}`, type: 'task', module: 'employeeTasks', relatedId: newId });
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Task Assigned', message: `${assignedByName} assigned you the task "${cleaned.title}". Due: ${cleaned.dueDate || 'Not set'}${cleaned.priority ? ' · ' + cleaned.priority + ' priority' : ''}`, type: 'task', module: 'employeeTasks', relatedId: newId });
         }
         // Notify admins about new task
         notifyAdmins(users, { title: 'New Task Created', message: `Task "${cleaned.title}" assigned to ${cleaned.assignedTo || 'Unassigned'}`, type: 'task', module: 'employeeTasks', relatedId: newId });
@@ -113,6 +123,7 @@ export default function EmployeeTasks() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New Task</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={employeeTasks} fields={TASK_DATE_FIELDS} /></div>
 
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
         <th>Task</th><th>Assigned To</th><th>Assigned Date</th><th>Due Date</th><th>Priority</th><th>Category</th><th>Status</th><th>Actions</th>
@@ -183,7 +194,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
   const canEdit = hasAccess(role, 'coordinator');
 
   const [showUpdateForm, setShowUpdateForm] = useState(false);
-  const [updateData, setUpdateData] = useState({ date: new Date().toISOString().slice(0, 10), update: '' });
+  const [updateData, setUpdateData] = useState({ date: todayStr(), update: '' });
 
   const workUpdates = task.workUpdates || [];
 
@@ -195,7 +206,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
       await updateDocument('employeeTasks', task.id, { workUpdates: updated });
       toast('Work update logged');
       setShowUpdateForm(false);
-      setUpdateData({ date: new Date().toISOString().slice(0, 10), update: '' });
+      setUpdateData({ date: todayStr(), update: '' });
     } catch (e) { toast(e.message, 'er'); }
   };
 
@@ -241,7 +252,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
             </div>
             <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
               <button type="button" className="btn bsm bp" onClick={handleAddWorkUpdate}>Save Update</button>
-              <button type="button" className="btn bsm bo" onClick={() => { setShowUpdateForm(false); setUpdateData({ date: new Date().toISOString().slice(0, 10), update: '' }); }}>Cancel</button>
+              <button type="button" className="btn bsm bo" onClick={() => { setShowUpdateForm(false); setUpdateData({ date: todayStr(), update: '' }); }}>Cancel</button>
             </div>
           </div>
         )}
@@ -255,7 +266,7 @@ function TaskDetailModal({ task, onClose, onEdit }) {
                   <tr key={`wu-${wu.date}-${i}`}>
                     <td style={{ fontSize: '.82rem', whiteSpace: 'nowrap' }}>{formatDate(wu.date)}</td>
                     <td style={{ fontSize: '.84rem' }}>{wu.update}</td>
-                    <td style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{wu.by}<br />{wu.at ? new Date(wu.at).toLocaleString() : ''}</td>
+                    <td style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{wu.by}<br />{wu.at ? formatDateTime(wu.at) : ''}</td>
                   </tr>
                 ))}
               </tbody>

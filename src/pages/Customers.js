@@ -4,7 +4,9 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateFilter , SearchSelect } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { leadPickerOptions, customerFromLead } from '../services/installations';
 import { printBOM, downloadBOM } from '../services/poUtils';
 import WorkflowTab from '../components/WorkflowTab';
 import { completedCount, TOTAL_STAGES } from '../services/workflow';
@@ -29,6 +31,9 @@ function workflowGateLevel(customer) {
   return completedCount(customer || {});
 }
 
+// A customer's day for the Day / Month filter: when the record was created.
+const CUSTOMER_DATE_FIELDS = ['createdAt'];
+
 export default function Customers() {
   const { customers, leadPOs, installations, leads, users } = useData();
   const { role } = useAuth();
@@ -40,9 +45,11 @@ export default function Customers() {
   const [modal, setModal] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
   const areas = [...new Set(customers.map(c => c.area).filter(Boolean))].sort();
 
+  const leadOf = (c) => (c.leadId && leads.find(l => l.id === c.leadId)) || null;
   let filtered = customers;
   if (typeFilter !== 'all') filtered = filtered.filter(c => c.customerType === typeFilter);
   if (areaFilter !== 'all') filtered = filtered.filter(c => c.area === areaFilter);
@@ -53,9 +60,14 @@ export default function Customers() {
       safeStr(c.phone).includes(q) ||
       safeStr(c.email).toLowerCase().includes(q) ||
       safeStr(c.area).toLowerCase().includes(q) ||
-      safeStr(c.pincode).includes(q)
+      safeStr(c.pincode).includes(q) ||
+      // R3 (8-Oct): a customer is also found by the name and phone on the
+      // lead they came from, which can differ from what was typed on the customer.
+      safeStr(leadOf(c)?.name).toLowerCase().includes(q) ||
+      safeStr(leadOf(c)?.phone).includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, CUSTOMER_DATE_FIELDS);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -109,6 +121,7 @@ export default function Customers() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={customers} fields={CUSTOMER_DATE_FIELDS} /></div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>Type</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(c => {
           const paid = c.paymentType === 'Finance'
@@ -190,7 +203,12 @@ function CustomerModal({ data, id, onSave, onClose }) {
   const pipeItem  = findItem('Conduit') || findItem('UPVC') || findItem('PVC Pipe');
 
   const [tab, setTab] = useState('info');
+  // RR1 (9-Oct): the customer can be picked from the Leads by name or phone;
+  // the lead's details fill the form. One way only - the lead is not changed.
+  const leadOptions = React.useMemo(() => leadPickerOptions(leads), [leads]);
+  const [pickedLead, setPickedLead] = useState(null);
   const [f, setF] = useState({
+    leadId: data.leadId || '',
     // Basic Info
     name: data.name || '', phone: data.phone || '', email: data.email || '',
     alternatePhone: data.alternatePhone || '', address: data.address || '',
@@ -374,6 +392,18 @@ function CustomerModal({ data, id, onSave, onClose }) {
 
           {/* Tab 1: Customer Info */}
           {tab === 'info' && (<>
+            <div className="fg">
+              <label>Customer from Leads <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>search by the lead's name or phone - pick one to fill the details below</span></label>
+              <SearchSelect value="" options={[...leadOptions.keys()]} allowFree={false}
+                placeholder={leadOptions.size ? 'Search a lead by name or phone…' : 'No leads on file'}
+                emptyText="No matching lead" onChange={label => { const l = leadOptions.get(label); if (l) { setF(p => customerFromLead(p, l)); setPickedLead(l); } }} />
+              {pickedLead && (
+                <small style={{ display: 'block', marginTop: 4, color: 'var(--ok)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>link</span>{' '}
+                  Details taken from lead <strong>{pickedLead.name}</strong>{pickedLead.phone ? ` (${pickedLead.phone})` : ''}. The lead itself is not changed.
+                </small>
+              )}
+            </div>
             <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
             <div className="fr"><div className="fg"><label>Email</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Alternate Phone</label><input className="fi" value={f.alternatePhone} onChange={e => set('alternatePhone', e.target.value)} /></div></div>
             <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
@@ -833,8 +863,8 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
                         <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{po.vendorName}</span>
                       </div>
                       <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                        <button className="btn bsm bo" onClick={() => printBOM(po, linkedLead || c)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
-                        <button className="btn bsm bo" onClick={() => downloadBOM(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => printBOM(po)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => downloadBOM(po)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
                       </div>
                     </div>
                     {(po.items || []).length > 0 && (

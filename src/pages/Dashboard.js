@@ -2,7 +2,8 @@ import React, { useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { formatCurrency, formatDate, toNumber, hasAccess } from '../services/helpers';
+import { canSeeLead } from '../services/permissions';
+import { formatCurrency, formatDate, toNumber, hasAccess, thisMonthStr } from '../services/helpers';
 import { StatusBadge, ProgressBar } from '../components/SharedUI';
 
 const COLORS = ['#6366f1','#3b82f6','#22c55e','#f59e0b','#ef4444','#ec4899','#8b5cf6','#14b8a6','#f97316','#06b6d4'];
@@ -75,8 +76,13 @@ function GradientStatCard({ gradient, icon, value, label, onClick, subtext }) {
 
 export default function Dashboard() {
   const navigate = useNavigate();
-  const { role, designation } = useAuth();
-  const { leads, customers, installations, income, expenses, materials, reminders, employeeTasks, team } = useData();
+  const { role, designation, user } = useAuth();
+  const { leads: allLeads, customers, installations, income, expenses, materials, reminders, employeeTasks, team, users, leadPOs } = useData();
+
+  // The dashboard counts only the leads this person is allowed to see, so the
+  // figures match the Leads screen instead of the whole company's book.
+  const leads = useMemo(() => allLeads.filter(l => canSeeLead(l, user, role, users, team, leadPOs)),
+    [allLeads, user, role, users, team]);
 
   const stats = useMemo(() => {
     const tl = leads.length;
@@ -137,11 +143,11 @@ export default function Dashboard() {
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       const label = d.toLocaleDateString('en-IN', { month: 'short' });
       const mIncome = income.filter(r => {
-        const rd = r.date ? (typeof r.date === 'string' ? r.date : (r.date.toDate ? r.date.toDate().toISOString().slice(0, 7) : '')) : '';
+        const rd = r.date ? (typeof r.date === 'string' ? r.date : (r.date.toDate ? thisMonthStr(r.date.toDate()) : '')) : '';
         return typeof rd === 'string' && rd.startsWith(key);
       }).reduce((s, r) => s + toNumber(r.amount), 0);
       const mExpense = expenses.filter(r => {
-        const rd = r.date ? (typeof r.date === 'string' ? r.date : (r.date.toDate ? r.date.toDate().toISOString().slice(0, 7) : '')) : '';
+        const rd = r.date ? (typeof r.date === 'string' ? r.date : (r.date.toDate ? thisMonthStr(r.date.toDate()) : '')) : '';
         return typeof rd === 'string' && rd.startsWith(key);
       }).reduce((s, r) => s + toNumber(r.amount), 0);
       const mLeads = leads.filter(l => {

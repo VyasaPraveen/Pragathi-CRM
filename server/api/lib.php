@@ -1,0 +1,290 @@
+<?php
+// ============================================================================
+// Pragathi CRM API — shared library (no external dependencies).
+// PDO/MySQL, JSON+CORS helpers, HS256 JWT, password auth, RBAC matrix,
+// and the collection→table allowlist.
+// ============================================================================
+
+declare(strict_types=1);
+mb_internal_encoding('UTF-8');
+
+function cfg(): array {
+  static $c = null;
+  if ($c === null) {
+    $path = __DIR__ . '/config.php';
+    if (!file_exists($path)) { http_response_code(500); echo json_encode(['error' => 'Server not configured']); exit; }
+    $c = require $path;
+  }
+  return $c;
+}
+
+// ── Database ────────────────────────────────────────────────────────────────
+function db(): PDO {
+  static $pdo = null;
+  if ($pdo === null) {
+    $d = cfg()['db'];
+    $dsn = "mysql:host={$d['host']};dbname={$d['name']};charset={$d['charset']}";
+    $opts = [
+      PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+      PDO::ATTR_EMULATE_PREPARES   => false,
+    ];
+    // Retry briefly: on shared hosting a burst can momentarily hit
+    // max_user_connections. Connections are short-lived, so a short backoff
+    // usually succeeds. Return 503 (not 500/401) so the client shows a transient
+    // error and never mistakes it for a dead session.
+    $attempts = 0;
+    while (true) {
+      try { $pdo = new PDO($dsn, $d['user'], $d['pass'], $opts); break; }
+      catch (Throwable $e) {
+        if (++$attempts >= 3) { error_log('DB connect failed: ' . $e->getMessage()); fail(503, 'Database busy, please retry'); }
+        usleep(200000); // 200ms
+      }
+    }
+  }
+  return $pdo;
+}
+
+// ── HTTP / JSON helpers ──────────────────────────────────────────────────────
+function send_cors(): void {
+  $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+  $allowed = cfg()['allowed_origins'] ?? [];
+  if ($origin && in_array($origin, $allowed, true)) {
+    header("Access-Control-Allow-Origin: $origin");
+    header('Vary: Origin');
+    header('Access-Control-Allow-Credentials: true');
+  }
+  header('Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,OPTIONS');
+  header('Access-Control-Allow-Headers: Content-Type, Authorization');
+  if (($_SERVER['REQUEST_METHOD'] ?? '') === 'OPTIONS') { http_response_code(204); exit; }
+}
+
+function json_out($data, int $code = 200): void {
+  http_response_code($code);
+  header('Content-Type: application/json; charset=utf-8');
+  echo json_encode($data, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+  exit;
+}
+
+function fail(int $code, string $msg): void { json_out(['error' => $msg], $code); }
+
+function body(): array {
+  $raw = file_get_contents('php://input');
+  if ($raw === '' || $raw === false) return [];
+  $d = json_decode($raw, true);
+  return is_array($d) ? $d : [];
+}
+
+function gen_id(): string {
+  // Firestore-like 20-char id
+  $alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  $s = '';
+  for ($i = 0; $i < 20; $i++) $s .= $alphabet[random_int(0, 61)];
+  return $s;
+}
+
+// ── JWT (HS256, dependency-free) ─────────────────────────────────────────────
+function b64url(string $s): string { return rtrim(strtr(base64_encode($s), '+/', '-_'), '='); }
+function b64url_decode(string $s): string { return base64_decode(strtr($s, '-_', '+/')); }
+
+function jwt_issue(array $claims): string {
+  $header = ['alg' => 'HS256', 'typ' => 'JWT'];
+  $ttl = (int)(cfg()['jwt_ttl_days'] ?? 30) * 86400;
+  $claims = array_merge(['iat' => time(), 'exp' => time() + $ttl], $claims);
+  $seg = b64url(json_encode($header)) . '.' . b64url(json_encode($claims));
+  $sig = hash_hmac('sha256', $seg, cfg()['jwt_secret'], true);
+  return $seg . '.' . b64url($sig);
+}
+
+function jwt_verify(string $token): ?array {
+  $parts = explode('.', $token);
+  if (count($parts) !== 3) return null;
+  [$h, $p, $s] = $parts;
+  $expected = b64url(hash_hmac('sha256', "$h.$p", cfg()['jwt_secret'], true));
+  if (!hash_equals($expected, $s)) return null;
+  $claims = json_decode(b64url_decode($p), true);
+  if (!is_array($claims) || ($claims['exp'] ?? 0) < time()) return null;
+  return $claims;
+}
+
+// Return the authenticated user's claims, or null. Enforces via Authorization: Bearer.
+function current_user(): ?array {
+  $hdr = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
+  if (!$hdr && function_exists('apache_request_headers')) {
+    $h = apache_request_headers();
+    $hdr = $h['Authorization'] ?? ($h['authorization'] ?? '');
+  }
+  if (stripos($hdr, 'Bearer ') !== 0) return null;
+  return jwt_verify(trim(substr($hdr, 7)));
+}
+
+function require_auth(): array {
+  $u = current_user();
+  if (!$u) fail(401, 'Not authenticated');
+  return $u;
+}
+
+// ── RBAC (server-side mirror of src/services/permissions.js) ─────────────────
+const ALL_ROLES = ['executive','technical_manager','operation_manager','accountant','admin','management','bco','technician','team_leader','sales_manager','warehouse_admin'];
+const ACTION_ROLES = [
+  'lead_entry'                 => ALL_ROLES,
+  'site_visit'                 => ['executive','technical_manager'],
+  'po_record'                  => ['operation_manager','admin','warehouse_admin','sales_manager'],
+  'po_recommendation'          => ['operation_manager','admin'],
+  'po_management_approval'     => ['management'],
+  'po_approval'                => ['admin','management'],
+  'expenditure_request'        => ALL_ROLES,
+  'expenditure_recommendation' => ['technical_manager','operation_manager','sales_manager'],
+  'expenditure_verified'       => ['accountant'],   // Accountant review (req #12)
+  'expenditure_approve'        => ['management'],    // Management/Owner final approval
+  'payment_release'            => ['accountant'],    // Accountant releases payment
+  // Payment Request chain: Team Member → Team Leader → Admin/Management/
+  // Operation Manager → Accountant → Work Proposal / Pre-PO → Admin/Mgmt/OM
+  'pr_create'                  => ALL_ROLES,
+  'pr_recommend'               => ['team_leader','technical_manager','operation_manager','sales_manager'],
+  'pr_approve'                 => ['admin','management','operation_manager'],
+  'pr_transfer'                => ['accountant'],
+  'pr_proposal'                => ['accountant'],
+  'pr_proposal_approve'        => ['admin','management','operation_manager'],
+  // Quotation approval: any ONE of Admin / Operation Manager / Management /
+  // Owner. A revision beyond R3 needs an Admin.
+  'quotation_approve'          => ['admin','operation_manager','management'],
+  'quotation_revision_override'=> ['admin'],
+];
+const LEGACY_ROLE_MAP = ['manager'=>'operation_manager','coordinator'=>'bco','engineer'=>'technician','staff'=>'executive'];
+
+function normalize_role(?string $role): string {
+  $role = $role ?? '';
+  return LEGACY_ROLE_MAP[$role] ?? $role;
+}
+function can(?string $role, string $action): bool {
+  if ($role === 'super_admin') return true;
+  $r = normalize_role($role);
+  $allowed = ACTION_ROLES[$action] ?? null;
+  return is_array($allowed) && in_array($r, $allowed, true);
+}
+const ROLE_LEVELS = [
+  'super_admin'=>7,'management'=>6,'admin'=>5,
+  'manager'=>4,'operation_manager'=>4,'technical_manager'=>4,'sales_manager'=>4,'warehouse_admin'=>4,
+  'coordinator'=>3,'accountant'=>3,'bco'=>3,'team_leader'=>3,
+  'engineer'=>2,'executive'=>2,'technician'=>2,'staff'=>1,
+];
+function has_access(?string $role, string $min): bool {
+  return (ROLE_LEVELS[$role] ?? 0) >= (ROLE_LEVELS[$min] ?? 0);
+}
+
+// Per-user module/action permission set by an Admin in Settings → Permission
+// Management. Returns true/false when the Admin has set that key explicitly for
+// the user, or null when they have not (caller then applies the role default).
+// Mirrors hasModule() in src/services/permissions.js.
+function user_perm(?string $uid, string $key): ?bool {
+  static $cache = [];
+  if (!$uid) return null;
+  if (!array_key_exists($uid, $cache)) {
+    $st = db()->prepare('SELECT permissions FROM users WHERE id = ? LIMIT 1');
+    $st->execute([$uid]);
+    $r = $st->fetch();
+    $p = ($r && $r['permissions']) ? json_decode($r['permissions'], true) : null;
+    $cache[$uid] = is_array($p) ? $p : [];
+  }
+  $p = $cache[$uid];
+  if (!array_key_exists($key, $p) || $p[$key] === null) return null;
+  return (bool)$p[$key];
+}
+
+// A Technician login is limited to the options their work needs; everything else
+// is off until an Admin switches it on for them. Mirrors
+// TECHNICIAN_DEFAULT_MODULES in src/services/permissions.js.
+const TECHNICIAN_DEFAULT_MODULES = ['dashboard','tasks','my_reports','installations','ongoing_work','materials','assigned_materials','attendance','tracking','leave','reminders','gallery','about'];
+
+// A Team Leader starts with a Technician's options plus the Team section and
+// payment requests. Mirrors TEAM_LEADER_DEFAULT_MODULES in permissions.js.
+const TEAM_LEADER_EXTRA_MODULES = ['team','team_members','team_attendance','team_tracking','team_tasks','team_leave','payment_requests'];
+
+function default_module_allowed(?string $role, string $key): bool {
+  $r = normalize_role($role);
+  if ($key === 'new_po') return can($r, 'po_record');
+  // Adding / editing installations (R6.3, 8-Oct): manager level by default,
+  // granted to an individual by an Admin. Mirrors defaultModuleAllowed() in
+  // permissions.js.
+  if ($key === 'installations_manage') return has_access($r, 'manager');
+  if ($r === 'technician') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true);
+  if ($r === 'team_leader') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true) || in_array($key, TEAM_LEADER_EXTRA_MODULES, true);
+  return true;
+}
+
+// Is a module/action available to this user? The Admin's explicit per-user value
+// wins, then the role default. Admin and above always keep full access.
+// Mirrors hasModule() in src/services/permissions.js.
+function may_module(array $claims, string $key): bool {
+  $role = $claims['role'] ?? '';
+  if ($role === 'super_admin' || has_access($role, 'admin')) return true;
+  $explicit = user_perm($claims['sub'] ?? null, $key);
+  if ($explicit !== null) return $explicit;
+  return default_module_allowed($role, $key);
+}
+
+// The Team Leader a user reports to (their leader's email), or '' when none is
+// assigned. Stored on the user's data JSON by an Admin; this is the server's
+// authority for routing a payment request to the right Team Leader.
+function team_leader_of(string $email): string {
+  if (trim($email) === '') return '';
+  $st = db()->prepare('SELECT data FROM users WHERE email = ? LIMIT 1');
+  $st->execute([strtolower(trim($email))]);
+  $r = $st->fetch();
+  if (!$r || !$r['data']) return '';
+  $d = json_decode($r['data'], true);
+  return is_array($d) && !empty($d['teamLeader']) ? strtolower(trim((string)$d['teamLeader'])) : '';
+}
+
+// The display name on a user's account, or '' — records such as a dispatch
+// assignment name people by display name, so a rule that asks "is this the
+// person named?" needs it.
+function display_name_of(string $email): string {
+  if (trim($email) === '') return '';
+  $st = db()->prepare('SELECT display_name FROM users WHERE LOWER(email) = ? LIMIT 1');
+  $st->execute([strtolower(trim($email))]);
+  $r = $st->fetch();
+  return $r ? trim((string)($r['display_name'] ?? '')) : '';
+}
+
+// ── Collection → table allowlist ─────────────────────────────────────────────
+function collection_table(string $collection): ?string {
+  static $map = [
+    'leads' => 'leads', 'customers' => 'customers', 'installations' => 'installations',
+    'team' => 'team', 'materials' => 'materials', 'ongoingWork' => 'ongoing_work',
+    'income' => 'income', 'expenses' => 'expenses', 'reminders' => 'reminders',
+    'gallery' => 'gallery', 'purchaseOrders' => 'purchase_orders', 'retailers' => 'retailers',
+    'influencers' => 'influencers', 'employeeTasks' => 'employee_tasks', 'leadPOs' => 'lead_pos',
+    'expenditures' => 'expenditures', 'paymentRequests' => 'payment_requests',
+    'bomTemplates' => 'bom_templates', 'quotations' => 'quotations',
+    'activityLog' => 'activity_log', 'notifications' => 'notifications',
+    'leaveRequests' => 'leave_requests', 'attendance' => 'attendance', 'tracking' => 'tracking',
+    'bcoOps' => 'bco_ops',
+    // The stock ledger (10-Oct). Read like any collection; written only by
+    // routes/stock.php — see enforce_materials_write() in collections.php.
+    'stockTransactions' => 'stock_transactions',
+  ];
+  return $map[$collection] ?? null;
+}
+
+// Convert a stored (UTC) MySQL DATETIME to ISO-8601 with Z, so JS `new Date()`
+// parses it reliably in every browser (Safari rejects "YYYY-MM-DD HH:MM:SS").
+function to_iso(?string $dt): ?string {
+  if (!$dt) return null;
+  $t = strtotime($dt . ' UTC');
+  return $t ? gmdate('Y-m-d\TH:i:s\Z', $t) : $dt;
+}
+
+// Assemble a stored document row into the {id, ...data} shape the frontend expects.
+function row_to_doc(array $row): array {
+  $data = $row['data'] ? json_decode($row['data'], true) : [];
+  if (!is_array($data)) $data = [];
+  $data['id'] = $row['id'];
+  if (isset($row['created_at'])) $data['createdAt'] = to_iso($row['created_at']);
+  if (isset($row['updated_at'])) $data['updatedAt'] = to_iso($row['updated_at']);
+  // Surface audit columns as fields (parity with the old Firestore docs).
+  if (!empty($row['created_by'])) $data['createdBy'] = $data['createdBy'] ?? $row['created_by'];
+  if (!empty($row['updated_by'])) $data['updatedBy'] = $data['updatedBy'] ?? $row['updated_by'];
+  return $data;
+}

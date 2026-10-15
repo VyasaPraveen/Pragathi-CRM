@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, moduleRoute, isSameUser, formatDateTime } from '../services/helpers';
 import { updateDocument } from '../services/firestore';
 
 const titles = {
@@ -10,8 +10,10 @@ const titles = {
   '/installations': 'Installations', '/ongoing': 'Ongoing Work', '/materials': 'Materials & Inventory',
   '/revenue': 'Revenue', '/reports': 'Reports', '/team': 'Team Management',
   '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings',
-  '/purchase-orders': 'Purchase Orders', '/retailers': 'Retailers', '/influencers': 'Influencers',
-  '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log'
+  '/purchase-orders': 'Purchase Orders', '/assigned-materials': 'Assigned Materials', '/retailers': 'Retailers', '/influencers': 'Influencers',
+  '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log',
+  '/leave': 'Leave Management', '/attendance': 'Staff Attendance', '/tracking': 'Work Tracking',
+  '/my-reports': 'My Reports & Planning'
 };
 
 const typeIcons = {
@@ -42,16 +44,17 @@ export default function Topbar({ onMenuClick }) {
   const [showPanel, setShowPanel] = useState(false);
   const panelRef = useRef(null);
 
-  // Get current user's display name for matching notifications
-  const myName = user?.displayName || '';
+  // Notifications target a user by display name (assignment flows) or by email
+  // (workflow flows like expenditure requestedBy / PO createdBy), so isSameUser
+  // accepts either, and ignores casing and stray spaces so a notification is
+  // never written to somebody who can then never see it.
 
-  // Filter notifications for current user (match by displayName)
   const myNotifications = notifications
-    .filter(n => n.forUser === myName)
+    .filter(n => isSameUser(n.forUser, user))
     .sort((a, b) => {
-      const at = a.createdAt?.toDate ? a.createdAt.toDate().getTime() : 0;
-      const bt = b.createdAt?.toDate ? b.createdAt.toDate().getTime() : 0;
-      return bt - at;
+      const at = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const bt = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return (isNaN(bt) ? 0 : bt) - (isNaN(at) ? 0 : at);
     });
 
   const unreadCount = myNotifications.filter(n => !n.read).length;
@@ -69,6 +72,14 @@ export default function Topbar({ onMenuClick }) {
 
   const markAsRead = async (id) => {
     try { await updateDocument('notifications', id, { read: true }); } catch (e) { console.warn('Failed to mark notification read:', e.message); }
+  };
+
+  // Open the screen a notification is about, and mark it read on the way.
+  const openNotification = (n) => {
+    if (!n.read) markAsRead(n.id);
+    setShowPanel(false);
+    const to = moduleRoute(n.module);
+    if (to !== '/') navigate(to);
   };
 
   const markAllRead = async () => {
@@ -120,7 +131,7 @@ export default function Topbar({ onMenuClick }) {
                   </div>
                 ) : (
                   myNotifications.slice(0, 50).map(n => (
-                    <div key={n.id} onClick={() => { if (!n.read) markAsRead(n.id); }}
+                    <div key={n.id} onClick={() => openNotification(n)}
                       style={{
                         padding: '12px 16px', borderBottom: '1px solid #f3f4f6', cursor: 'pointer',
                         background: n.read ? '#fff' : 'rgba(59,130,246,.04)',
@@ -145,7 +156,10 @@ export default function Topbar({ onMenuClick }) {
                           <p style={{ margin: '2px 0 0', fontSize: '.78rem', color: '#6b7280', lineHeight: 1.4 }}>{n.message}</p>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
                             <span style={{ fontSize: '.72rem', color: '#9ca3af' }}>{n.fromUser}</span>
-                            <span style={{ fontSize: '.72rem', color: '#9ca3af' }}>{timeAgo(n.createdAt)}</span>
+                            {/* How long ago, and the exact date and IST time. */}
+                            <span style={{ fontSize: '.72rem', color: '#9ca3af', whiteSpace: 'nowrap' }} title={formatDateTime(n.createdAt)}>
+                              {timeAgo(n.createdAt)}{n.createdAt ? ' · ' + formatDateTime(n.createdAt) : ''}
+                            </span>
                           </div>
                         </div>
                       </div>

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useData } from '../context/DataContext';
-import { formatCurrency, toNumber } from '../services/helpers';
+import { formatCurrency, toNumber, todayStr } from '../services/helpers';
 import { StatCard, ProgressBar } from '../components/SharedUI';
 
 function downloadCSV(filename, headers, rows) {
@@ -25,38 +25,38 @@ export default function Reports() {
   const exportLeads = () => {
     const headers = ['Name', 'Phone', 'Email', 'Address', 'City', 'District', 'Pincode', 'Status', 'Priority', 'kW Required', 'Monthly Bill', 'Expected Value', 'Lead Source', 'Assigned To', 'Sales Executive', 'Site Visit', 'Quotation Sent', 'Advance Paid', 'Existing Connection', 'Follow-up Status', 'Next Follow-up', 'Date Generated', 'Notes'];
     const rows = leads.map(l => [l.name, l.phone, l.email, l.address, l.city, l.district, l.pincode, l.status, l.priority, l.kwRequired, l.monthlyBill, l.expectedValue, l.leadReference, l.assignedTo, l.salesExecutive, l.siteVisit, l.quotationSent, l.advancePaid, l.existingConnection, l.followUpStatus, l.nextFollowUpDate, l.dateGenerated, l.notes]);
-    downloadCSV('PPS_Leads_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Leads_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportCustomers = () => {
     const headers = ['Name', 'Phone', 'Email', 'Address', 'City', 'kW', 'Total Price', 'Payment Type', 'Advance Amount', 'Status'];
     const rows = customers.map(c => [c.name, c.phone, c.email, c.address, c.city, c.kw, c.totalPrice, c.paymentType, c.advanceAmount, c.status]);
-    downloadCSV('PPS_Customers_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Customers_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportTeam = () => {
     const headers = ['Name', 'Phone', 'Email', 'Role', 'Status', 'Age', 'Salary', 'Attendance', 'Joining Date', 'Bank Name', 'Account Number', 'IFSC Code', 'Aadhar', 'PAN', 'Address', 'Emergency Contact', 'Qualification'];
     const rows = team.map(t => [t.name, t.phone, t.email, t.role, t.status, t.age, t.salary, t.attendance, t.joiningDate, t.bankName, t.accountNumber, t.ifscCode, t.aadharNumber, t.panNumber, t.address, t.emergencyContactName, t.qualification]);
-    downloadCSV('PPS_Team_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Team_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportRevenue = () => {
     const headers = ['Date', 'Type', 'Category', 'Amount', 'Description', 'Customer'];
     const incRows = income.map(i => [i.date, 'Income', i.category || '', i.amount, i.desc || i.description || '', i.customer || '']);
     const expRows = expenses.map(e => [e.date, 'Expense', e.category || '', e.amount, e.desc || e.description || '', e.vendor || '']);
-    downloadCSV('PPS_Revenue_' + new Date().toISOString().slice(0, 10) + '.csv', headers, [...incRows, ...expRows]);
+    downloadCSV('PPS_Revenue_' + todayStr() + '.csv', headers, [...incRows, ...expRows]);
   };
 
   const exportInstallations = () => {
     const headers = ['Customer', 'Phone', 'Address', 'kW', 'Progress', 'Status', 'Start Date', 'Completion Date', 'Notes'];
     const rows = installations.map(i => [i.customerName, i.phone, i.address, i.kw, i.progress, i.status, i.startDate, i.completionDate, i.notes]);
-    downloadCSV('PPS_Installations_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Installations_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportPOs = () => {
     const headers = ['PO Number', 'Date', 'Customer', 'Vendor', 'kW', 'Agreed Price', 'Status'];
     const rows = leadPOs.map(p => [p.poNumber, p.poDate, p.customerName, p.vendorName, p.kwRequired, p.agreedPrice || p.totalValue, p.status]);
-    downloadCSV('PPS_PurchaseOrders_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_PurchaseOrders_' + todayStr() + '.csv', headers, rows);
   };
 
   return (
