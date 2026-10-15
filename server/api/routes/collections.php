@@ -110,6 +110,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     $patch = body();
     unset($patch['id'], $patch['createdAt'], $patch['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('PATCH', $claims, $patch, $existing);
+    if ($collection === 'leads') enforce_lead_edit($claims, $patch, $existing + ['createdBy' => $existing['createdBy'] ?? (string)($row['created_by'] ?? '')]);
     enforce_status_transition($collection, $role, $patch, $existing, $email);
 
     $merged = array_merge($existing, $patch);
@@ -357,6 +358,50 @@ function material_has_ledger(string $materialId): bool {
   return false;
 }
 
+// ── Leads: who may change one (Req 2 and Req 4, 15-Oct) ────────────────────
+//
+// Seeing a lead and editing it are two different things. The details may be
+// changed by the authorities (Owner, Management, Operation Manager, Admin),
+// by the person the lead is assigned to, by whoever created it, and by its
+// Team Leader (named on the lead, or the leader of the assignee in the team
+// structure). The BCO and the Warehouse Admin only look; a Technician may
+// create a lead but never edit one, their own included. The stamps the
+// quotation and follow-up flows write onto a lead are not detail edits and
+// stay open to anyone who may work those flows. Mirrors canEditLead() in
+// src/services/permissions.js.
+const LEAD_EDIT_AUTHORITIES = ['management', 'admin', 'operation_manager'];
+const LEAD_VIEW_ONLY_ROLES = ['bco', 'warehouse_admin', 'technician'];
+const LEAD_FLOW_KEYS = ['quotationSent', 'quotationAccepted', 'pendingFollowUp', 'followUpStatus', 'notAcceptedReason', 'nextFollowUpDate'];
+
+function lead_editor(array $claims, array $lead): bool {
+  $role = (string)($claims['role'] ?? '');
+  if ($role === 'super_admin') return true;
+  $r = normalize_role($role);
+  if (in_array($r, LEAD_EDIT_AUTHORITIES, true)) return true;
+  if (in_array($r, LEAD_VIEW_ONLY_ROLES, true)) return false;
+  $me = strtolower(trim((string)($claims['email'] ?? '')));
+  if ($me === '') return false;
+  $myName = strtolower(trim((string)($claims['name'] ?? '')));
+  if ($myName === '') $myName = strtolower(display_name_of($me));
+  foreach (['assignedTo', 'salesExecutive', 'teamLeader', 'createdBy', 'assignedToEmail'] as $k) {
+    $v = strtolower(trim((string)($lead[$k] ?? '')));
+    if ($v !== '' && ($v === $me || ($myName !== '' && $v === $myName))) return true;
+  }
+  $tl = lead_team_leader_from($lead);
+  return $tl !== '' && $tl === $me;
+}
+function lead_flow_patch(array $patch): bool {
+  return count($patch) > 0 && count(array_diff(array_keys($patch), LEAD_FLOW_KEYS)) === 0;
+}
+function enforce_lead_edit(array $claims, array $patch, array $lead): void {
+  if (!$patch || lead_editor($claims, $lead)) return;
+  $r = normalize_role((string)($claims['role'] ?? ''));
+  if ($r === 'technician') fail(403, 'A Technician can submit a lead but cannot edit it afterwards; the Team Leader or the assigned person takes it from there.');
+  if (in_array($r, LEAD_VIEW_ONLY_ROLES, true)) fail(403, 'This lead is view-only for your role. Its details are edited by the assigned person, their Team Leader, the Operation Manager or an Admin.');
+  if (lead_flow_patch($patch)) return;   // a quotation / follow-up stamp by someone working that flow
+  fail(403, 'Only the person this lead is assigned to, its creator, their Team Leader, the Operation Manager or an Admin can edit it.');
+}
+
 // Who may CREATE in a given collection.
 function enforce_create(string $collection, array $claims): void {
   $role = $claims['role'] ?? '';
@@ -444,15 +489,22 @@ const PO_DISPATCH_CONFIRM_FIELDS = ['dispatchConfirmedAt', 'dispatchConfirmedBy'
 // decided by whether it names an assignee.
 const PO_DISPATCH_ASSIGN_FIELDS = [
   'dispatchAssignedTo', 'dispatchAssignedToEmail', 'dispatchAssignedBy', 'dispatchAssignedAt', 'dispatchAssignNote',
-  'dispatchReceivedBy', 'dispatchReceivedAt', 'dispatchReceivedNote',
+  'dispatchReceivedBy', 'dispatchReceivedAt', 'dispatchReceivedNote', 'handoverItems',
 ];
-const PO_DISPATCH_RECEIVE_FIELDS = ['dispatchReceivedBy', 'dispatchReceivedAt', 'dispatchReceivedNote'];
+// Req 3 (15-Oct): the first handover checks every item (Yes / No + note); the
+// second — delivery at the customer's location — checks them again, with
+// photographs as proof. Each is written once, by the assigned person.
+const PO_DISPATCH_RECEIVE_FIELDS = ['dispatchReceivedBy', 'dispatchReceivedAt', 'dispatchReceivedNote', 'handoverItems'];
+const PO_DELIVERY_FIELDS = ['deliveryItems', 'deliveryPhotos', 'deliveredBy', 'deliveredByEmail', 'deliveredAt', 'deliveryNote', 'deliveryLocation'];
+function po_dispatch_delivering(array $patch): bool {
+  return count($patch) > 0 && count(array_diff(array_keys($patch), PO_DELIVERY_FIELDS)) === 0;
+}
 
 function po_dispatch_patch(array $patch): bool {
   if (!$patch) return false;
   foreach (array_keys($patch) as $k) {
     if (!in_array($k, PO_DISPATCH_FIELDS, true) && !in_array($k, PO_DISPATCH_CONFIRM_FIELDS, true)
-        && !in_array($k, PO_DISPATCH_ASSIGN_FIELDS, true)) return false;
+        && !in_array($k, PO_DISPATCH_ASSIGN_FIELDS, true) && !in_array($k, PO_DELIVERY_FIELDS, true)) return false;
   }
   return true;
 }
@@ -482,6 +534,13 @@ function lead_team_leader(string $leadId): string {
     if (!$row) return '';
     $lead = json_decode((string)$row['data'], true);
     if (!is_array($lead)) return '';
+    return lead_team_leader_from($lead);
+  } catch (Throwable $e) {
+    return '';
+  }
+}
+function lead_team_leader_from(array $lead): string {
+  try {
     $owner = trim((string)($lead['assignedTo'] ?? ($lead['salesExecutive'] ?? '')));
     if ($owner === '') return '';
     // The lead stores a display name; the team structure is keyed by email.
@@ -604,6 +663,26 @@ function enforce_status_transition(string $collection, string $role, array &$pat
         if (count(array_diff(array_keys($patch), PO_DISPATCH_ASSIGN_FIELDS)) > 0) fail(403, 'An assignment may only set the assignment fields.');
         return;
       }
+      if (po_dispatch_delivering($patch)) {
+        if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not sent this dispatch yet.');
+        if (empty($existing['dispatchAssignedTo'])) fail(409, 'These items have not been assigned to anyone yet.');
+        if (empty($existing['dispatchReceivedAt'])) fail(409, 'Confirm the handover from the warehouse ("Handover Received") before recording the delivery.');
+        $me = strtolower(trim($email));
+        $assignedEmail = strtolower(trim((string)($existing['dispatchAssignedToEmail'] ?? '')));
+        $assignedName = strtolower(trim((string)($existing['dispatchAssignedTo'] ?? '')));
+        $isAssignee = ($assignedEmail !== '' && $assignedEmail === $me)
+          || ($assignedName !== '' && $me !== '' && $assignedName === strtolower(display_name_of($email)));
+        if (!$isAssignee && !$isAdmin) fail(403, 'Only the person the items were assigned to can confirm the delivery at the customer location.');
+        if (!empty($existing['deliveredAt']) && !$isAdmin) fail(409, 'The delivery has already been confirmed for this purchase order.');
+        if (array_key_exists('deliveredAt', $patch) && !empty($patch['deliveredAt'])) {
+          $photos = $patch['deliveryPhotos'] ?? ($existing['deliveryPhotos'] ?? []);
+          $photos = is_array($photos) ? array_filter($photos, fn($p) => is_array($p) && trim((string)($p['url'] ?? '')) !== '') : [];
+          if (!$photos) fail(422, 'Upload at least one photograph of the delivered material as proof before confirming the delivery.');
+          $items = $patch['deliveryItems'] ?? ($existing['deliveryItems'] ?? null);
+          if (!is_array($items) || !$items) fail(422, 'Mark each delivered item Yes or No before confirming the delivery.');
+        }
+        return;
+      }
       if (po_dispatch_receiving($patch)) {
         if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not sent this dispatch yet.');
         if (empty($existing['dispatchAssignedTo'])) fail(409, 'These items have not been assigned to anyone yet.');
@@ -623,6 +702,11 @@ function enforce_status_transition(string $collection, string $role, array &$pat
         if (!po_dispatch_editor($role)) fail(403, 'Only the warehouse can record a dispatch.');
         if (!empty($existing['dispatchConfirmedAt']) && $role !== 'super_admin' && !has_access($role, 'admin')) {
           fail(409, 'This dispatch has been confirmed and can no longer be changed.');
+        }
+        // Req 3 (15-Oct): "Stock OK" locks the warehouse's own entry. Until the
+        // confirmation only the Operation Manager (or an Admin) may correct it.
+        if (($existing['dispatchStatus'] ?? '') === 'Completed' && !po_dispatch_confirmer($role)) {
+          fail(409, 'Stock OK has been submitted for this purchase order; the warehouse can no longer change the material verification. The Operation Manager can correct it if needed.');
         }
       }
       return;
@@ -838,7 +922,7 @@ function module_link(string $module): string {
   static $routes = [
     'leads' => '/leads', 'quotations' => '/leads', 'customers' => '/customers', 'employeeTasks' => '/tasks',
     'tasks' => '/tasks', 'installations' => '/installations', 'ongoingWork' => '/ongoing',
-    'materials' => '/materials', 'purchaseOrders' => '/purchase-orders', 'leadPOs' => '/purchase-orders',
+    'materials' => '/materials', 'purchaseOrders' => '/purchase-orders', 'leadPOs' => '/purchase-orders', 'assignedMaterials' => '/assigned-materials',
     'revenue' => '/revenue', 'expenditure' => '/expenditure', 'expenditures' => '/expenditure',
     'paymentRequests' => '/payment-requests', 'reports' => '/reports', 'team' => '/team',
     'attendance' => '/attendance', 'tracking' => '/tracking', 'leaveRequests' => '/leave',

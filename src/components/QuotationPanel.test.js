@@ -110,8 +110,8 @@ describe('DispatchPanel', () => {
       asUser(email, role);
       expect(render(<DispatchPanel po={po('Recommended')} lead={lead} />)).toBe('');
       expect(render(<DispatchPanel po={po('Approved')} lead={lead} />)).toContain('Material Dispatch');
-      expect(render(<DispatchPanel po={po('Approved', { dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-03T10:00:00Z', dispatchItems: [{ dispatched: true }] })} lead={lead} />)).toContain('Completed');
-      expect(render(<DispatchPanel po={po('Approved', { dispatchConfirmedAt: '2026-10-03T10:00:00Z', dispatchConfirmedBy: 'OM', dispatchStatus: 'Completed' })} lead={lead} />)).toContain('confirmed');
+      expect(render(<DispatchPanel po={po('Approved', { dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-03T10:00:00Z', dispatchItems: [{ dispatched: true }] })} lead={lead} />)).toContain('Stock OK');
+      expect(render(<DispatchPanel po={po('Approved', { dispatchConfirmedAt: '2026-10-03T10:00:00Z', dispatchConfirmedBy: 'OM', dispatchStatus: 'Completed' })} lead={lead} />)).toContain('Approved for dispatch');
     }
   });
   test('survives a PO with no items and no lead', () => {
@@ -120,15 +120,15 @@ describe('DispatchPanel', () => {
     expect(() => render(<DispatchPanel po={{ id: 'P2', status: 'Approved' }} lead={null} />)).not.toThrow();
   });
 
-  // 8-Oct R6: the handover after "OK & Send".
-  test('the warehouse sees "OK & Send"; the OM sees the assignment once sent; the person sees the receipt button', () => {
+  // 8-Oct R6: the handover after "Stock OK" (which was "OK & Send" until 15-Oct).
+  test('the warehouse sees "Stock OK"; the OM sees the assignment once sent; the person sees the handover table', () => {
     mockData = { users };
     asUser('wh@x.com', 'warehouse_admin');
-    expect(render(<DispatchPanel po={po('Approved')} lead={lead} />)).toContain('OK & Send');
+    expect(render(<DispatchPanel po={po('Approved')} lead={lead} />)).toContain('Stock OK');
     const sent = po('Approved', { dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-08T05:00:00Z', dispatchItems: [{ dispatched: true }] });
     asUser('om@x.com', 'operation_manager');
     let text = render(<DispatchPanel po={sent} lead={lead} />);
-    expect(text).toContain('Items Handover');
+    expect(text).toContain('Assigned Person for Dispatch');
     expect(text).toContain('Assign Person');
     expect(text).toContain('Solar PV Module (6 Nos)');
     // The warehouse does not get the assignment control.
@@ -138,16 +138,18 @@ describe('DispatchPanel', () => {
     asUser('revanth@x.com', 'executive');
     // The button renders as its icon name followed by its label; the status
     // line quotes the label too, so the icon is what tells the two apart.
-    const RECEIVE_BUTTON = 'how_to_reg I have received these items';
+    const RECEIVE_BUTTON = 'how_to_reg Handover Received';
     text = render(<DispatchPanel po={assigned} lead={lead} />);
     expect(text).toContain(RECEIVE_BUTTON);
+    // Req 3 (15-Oct): the handover is item by item.
+    expect(text).toContain('Received / Missing');
     asUser('yogendra@x.com', 'team_leader');
     expect(render(<DispatchPanel po={assigned} lead={lead} />)).not.toContain(RECEIVE_BUTTON);
     asUser('om@x.com', 'operation_manager');
     text = render(<DispatchPanel po={assigned} lead={lead} />);
     expect(text).toContain('Re-assign');
     expect(text).toContain('Awaiting their');
-    const received = { ...assigned, dispatchReceivedBy: 'Revanth Reddy', dispatchReceivedAt: '2026-10-08T07:00:00Z' };
+    const received = { ...assigned, dispatchReceivedBy: 'Revanth Reddy', dispatchReceivedAt: '2026-10-08T07:00:00Z', handoverItems: [{ ok: true, note: '' }] };
     text = render(<DispatchPanel po={received} lead={lead} />);
     expect(text).toContain('Received by Revanth Reddy');
     expect(text).not.toContain('Re-assign');
@@ -319,5 +321,76 @@ describe('DispatchPanel — final dispatch', () => {
     mockData = { users, materials: undefined };
     asUser('revanth@x.com', 'executive');
     expect(() => render(<DispatchPanel po={received} lead={lead} />)).not.toThrow();
+  });
+});
+
+
+// 15-Oct Req 3: Stock OK locks the warehouse; the delivery at the customer
+// location with photo proof; the Assigned Materials page.
+describe('DispatchPanel — Stock OK lock, delivery and history', () => {
+  const sent = { id: 'P1', poNumber: 'PO-1', leadId: 'L1', status: 'Approved', dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-15T05:00:00Z',
+    items: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos' }, { materialName: 'Inverter', quantity: 1, unit: 'Nos' }], dispatchItems: [{ dispatched: true, at: 'x', by: 'W' }, { dispatched: false, note: 'later', at: 'x', by: 'W' }] };
+  const received = { ...sent, dispatchConfirmedAt: '2026-10-15T06:00:00Z', dispatchConfirmedBy: 'OM', dispatchAssignedTo: 'Revanth Reddy', dispatchAssignedToEmail: 'revanth@x.com', dispatchAssignedBy: 'OM', dispatchAssignedAt: '2026-10-15T07:00:00Z',
+    dispatchReceivedBy: 'Revanth Reddy', dispatchReceivedAt: '2026-10-15T08:00:00Z', handoverItems: [{ ok: true, note: '' }, null] };
+  test('after Stock OK the warehouse sees the lock and no Save; the OM still can; the heading reads as verification', () => {
+    mockData = { users, materials: [] };
+    asUser('wh@x.com', 'warehouse_admin');
+    let text = render(<DispatchPanel po={sent} lead={lead} />);
+    expect(text).toContain('Warehouse Verification');
+    expect(text).toContain('Stock OK has been submitted');
+    expect(text).not.toContain('Save Verification');
+    asUser('om@x.com', 'operation_manager');
+    text = render(<DispatchPanel po={sent} lead={lead} />);
+    expect(text).toContain('Save Verification');
+    expect(text).toContain('Approval for Dispatch');
+    expect(text).not.toContain('Stock OK has been submitted');
+  });
+  test('the assignee gets the delivery table and photo button; others wait; once delivered the proof is shown', () => {
+    mockData = { users, materials: [] };
+    asUser('revanth@x.com', 'executive');
+    let text = render(<DispatchPanel po={received} lead={lead} />);
+    expect(text).toContain('Delivery at the Customer Location');
+    expect(text).toContain('Delivered / Not delivered');
+    expect(text).toContain('Add delivery photo');
+    expect(text).toContain('Delivery Confirmed');
+    expect(text).toContain('At least one photo is required');
+    asUser('wh@x.com', 'warehouse_admin');
+    text = render(<DispatchPanel po={received} lead={lead} />);
+    expect(text).toContain('Awaiting the delivery confirmation');
+    expect(text).not.toContain('Add delivery photo');
+    const delivered = { ...received, deliveredBy: 'Revanth Reddy', deliveredAt: '2026-10-15T10:00:00Z', deliveryLocation: 'Nellore site', deliveryItems: [{ ok: true, note: '' }, null], deliveryPhotos: [{ url: 'https://x/d1.jpg', name: 'd1.jpg' }] };
+    asUser('om@x.com', 'operation_manager');
+    text = render(<DispatchPanel po={delivered} lead={lead} />);
+    expect(text).toContain('Delivered by Revanth Reddy');
+    expect(text).toContain('Nellore site');
+    expect(text).not.toContain('Add delivery photo');
+    expect(text).toContain('Material movement history (7 of 8 stages)');
+  });
+});
+
+describe('Assigned Materials page', () => {
+  const AssignedMaterials = require('../pages/AssignedMaterials').default;
+  const base = { id: 'P1', poNumber: 'PO-1', leadId: 'L1', status: 'Approved', dispatchStatus: 'Completed', dispatchConfirmedAt: 'x', items: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos' }], dispatchItems: [{ dispatched: true }],
+    dispatchAssignedTo: 'Revanth Reddy', dispatchAssignedToEmail: 'revanth@x.com', dispatchAssignedBy: 'OM', dispatchAssignedAt: '2026-10-15T07:00:00Z', dispatchAssignNote: 'collect by Friday' };
+  const other = { ...base, id: 'P2', poNumber: 'PO-2', dispatchAssignedTo: 'K.J. Yogendra reddy', dispatchAssignedToEmail: 'yogendra@x.com' };
+  test('the assignee sees only their own; the OM sees all; it shows who, when, what and the stage', () => {
+    mockData = { leadPOs: [base, other], leads: [lead], users, materials: [] };
+    asUser('revanth@x.com', 'executive');
+    let text = render(<AssignedMaterials />);
+    expect(text).toContain('PO PO-1');
+    expect(text).not.toContain('PO PO-2');
+    expect(text).toContain('Solar PV Module (6 Nos)');
+    expect(text).toContain('collect by Friday');
+    expect(text).toContain('Assigned — awaiting handover');
+    expect(text).toContain('To deliver (1)');
+    asUser('om@x.com', 'operation_manager');
+    text = render(<AssignedMaterials />);
+    expect(text).toContain('PO PO-1');
+    expect(text).toContain('PO PO-2');
+  });
+  test('renders with nothing assigned', () => {
+    mockData = { leadPOs: [], leads: [], users, materials: [] };
+    asUser('revanth@x.com', 'executive');
+    expect(render(<AssignedMaterials />)).toContain('No materials assigned to you');
   });
 });

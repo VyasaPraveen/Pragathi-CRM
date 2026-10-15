@@ -7,7 +7,7 @@ import { apiUpload } from '../services/api';
 import { formatDate, safeStr, hasAccess, isSafeUrl, compressImage, todayStr } from '../services/helpers';
 import { Modal, EmptyState, MarkLocation, DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter, thisMonthFilter, isDateFiltered } from '../services/dateFilter';
-import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser } from '../services/attendance';
+import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser, attendanceRulesFrom, FULL_DAY, HALF_DAY } from '../services/attendance';
 import TeamAttendancePanel from '../components/TeamAttendancePanel';
 import { isTeamLeader, seesAllAttendance } from '../services/permissions';
 
@@ -38,10 +38,12 @@ const clearDraft = () => {
 };
 
 export default function Attendance() {
-  const { attendance, users } = useData();
+  const { attendance, users, settings } = useData();
   const { user, role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(false);
+  // Full Day / Half Day thresholds (Req 5), as the Owner / Admin set them in Settings.
+  const rules = attendanceRulesFrom(settings);
   const [search, setSearch] = useState('');
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [view, setView] = useState('mine');   // 'mine' = My Attendance
@@ -87,7 +89,7 @@ export default function Attendance() {
   // My Attendance — every mark of mine, folded into one row per day with the
   // first check-in, the last check-out and the hours between them.
   const myDays = useMemo(
-    () => foldAttendanceDays(attendance, { email: myEmail, name: myName }),
+    () => foldAttendanceDays(attendance, { email: myEmail, name: myName }, rules),
     [attendance, myEmail, myName]);
 
   const monthDays = applyDateFilter(myDays, myFilter, ATTENDANCE_DATE_FIELDS);
@@ -216,6 +218,10 @@ export default function Attendance() {
               ['Total Hours', mySummary.totalHours, 'var(--pri)'],
               ['Avg Hours / Day', mySummary.avgHours, '#6c5ce7'],
               ['Days Without Check-Out', mySummary.incomplete, mySummary.incomplete ? '#e67e22' : 'var(--muted)'],
+              [`Full Days (${rules.fullDayHours} h+)`, mySummary.fullDays, '#1e8449'],
+              [`Half Days (${rules.halfDayHours} h+)`, mySummary.halfDays, '#d68910'],
+              ['Short Days', mySummary.shortDays, mySummary.shortDays ? '#c0392b' : 'var(--muted)'],
+              ['Leave Counter (days)', mySummary.leaveCounter, mySummary.leaveCounter ? '#c0392b' : 'var(--muted)'],
             ].map(([label, val, color]) => (
               <div key={label} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: '10px 12px', textAlign: 'center' }}>
                 <div style={{ fontSize: '1.15rem', fontWeight: 700, color }}>{val}</div>
@@ -230,7 +236,8 @@ export default function Attendance() {
               {monthDays.map(d => (
                 <tr key={d.date}>
                   <td style={{ whiteSpace: 'nowrap', fontSize: '.82rem' }}>{formatDate(d.date)}</td>
-                  <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }}>{d.status}</span></td>
+                  <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }}>{d.status}</span>
+                    {d.standing && <span className={`st ${d.standing === FULL_DAY ? 'st-g' : d.standing === HALF_DAY ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.7rem', marginLeft: 4 }} title={`${d.hours} h worked — ${d.standing}${d.leaveCost ? ` (${d.leaveCost} day leave)` : ''}`}>{d.standing}</span>}</td>
                   <td style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
                   <td style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
                   <td style={{ fontSize: '.82rem', fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>

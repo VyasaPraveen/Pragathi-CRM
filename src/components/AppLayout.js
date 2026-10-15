@@ -34,6 +34,7 @@ import Leave from '../pages/Leave';
 import Attendance from '../pages/Attendance';
 import Tracking from '../pages/Tracking';
 import MyReports from '../pages/MyReports';
+import AssignedMaterials from '../pages/AssignedMaterials';
 
 // Blocks a page when the role floor (`minRole`) or the user's own Admin-managed
 // permission (`perm`) does not allow it — the same rules the sidebar uses, so a
@@ -93,6 +94,7 @@ export default function AppLayout() {
             <Route path="/gallery" element={<GuardedRoute perm="gallery"><Gallery /></GuardedRoute>} />
             <Route path="/settings" element={<GuardedRoute minRole="coordinator"><Settings /></GuardedRoute>} />
             <Route path="/purchase-orders" element={<GuardedRoute perm="purchase_orders"><PurchaseOrders /></GuardedRoute>} />
+            <Route path="/assigned-materials" element={<GuardedRoute perm="assigned_materials"><AssignedMaterials /></GuardedRoute>} />
             <Route path="/retailers" element={<GuardedRoute perm="retailers"><Retailers /></GuardedRoute>} />
             <Route path="/influencers" element={<GuardedRoute perm="influencers"><Influencers /></GuardedRoute>} />
             <Route path="/tasks" element={<GuardedRoute perm="tasks"><EmployeeTasks /></GuardedRoute>} />

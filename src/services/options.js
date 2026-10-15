@@ -55,7 +55,7 @@ export const OPTION_LISTS = [
   },
   {
     key: 'structureType',
-    label: 'Tilt',
+    label: 'Type of Installation',
     where: 'Site Visit details',
     defaults: ['Flat', 'Sloped'],
     locked: [],

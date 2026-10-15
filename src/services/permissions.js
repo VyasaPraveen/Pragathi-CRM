@@ -301,10 +301,15 @@ export function leadHasKnownOwner(lead, users, team) {
     (team || []).some(t => lc(t.name) === n && (users || []).some(u => lc(u.email) === lc(t.email))));
 }
 
-export function canSeeLead(lead, user, role, users, team) {
+export function canSeeLead(lead, user, role, users, team, leadPOs) {
   if (!lead) return false;
   const r = normalizeRole(role);
   if (r === 'super_admin' || hasAccess(r, 'manager')) return true; // manager tier and above
+  // Req 2 (15-Oct): once a purchase order on the lead is approved (its status
+  // turns green) the material work begins, and the BCO - and the warehouse,
+  // who sit at manager level anyway - must be able to open the lead to do it.
+  // They see it; canEditLead() keeps them from changing it.
+  if (r === 'bco' && leadHasApprovedPO(lead, leadPOs)) return true;
   const email = lc(user?.email);
   const name = lc(user?.displayName);
   const mine = (v) => {
@@ -324,6 +329,36 @@ export function canSeeLead(lead, user, role, users, team) {
   }
   // Nobody with a login is down as working it — leave it where it was.
   return !leadHasKnownOwner(lead, users, team);
+}
+
+// Has a purchase order on this lead reached final approval?
+export const leadHasApprovedPO = (lead, leadPOs) =>
+  !!lead && (leadPOs || []).some(po => po && po.leadId === lead.id && po.status === PO_STATUS.APPROVED);
+
+// ── Who may EDIT a lead (Req 2 and Req 4, 15-Oct) ─────────────────────────
+//
+// Seeing a lead and changing it are now two different things. The lead's
+// details may be changed by the authorities - Owner, Management, Operation
+// Manager, Admin - by the person it is assigned to, by whoever created it,
+// and by its Team Leader (named on the lead, or the leader of the assignee in
+// the team structure). The BCO and the Warehouse Admin only ever look. A
+// Technician may create a lead but never edit one, their own included - once
+// submitted it belongs to the hierarchy. Mirrors lead_editor() in
+// routes/collections.php, which is the enforcement.
+export const LEAD_EDIT_AUTHORITIES = ['super_admin', 'management', 'admin', 'operation_manager'];
+export const LEAD_VIEW_ONLY_ROLES = ['bco', 'warehouse_admin', 'technician'];
+
+export function canEditLead(lead, user, role, users) {
+  if (!lead) return false;
+  const r = normalizeRole(role);
+  if (r === 'super_admin' || LEAD_EDIT_AUTHORITIES.includes(r)) return true;
+  if (LEAD_VIEW_ONLY_ROLES.includes(r)) return false;
+  if (isLeadOwner(lead, user)) return true;
+  const me = lc(user && user.email), myName = lc(user && user.displayName);
+  const creator = lc(lead.createdBy);
+  if (creator && (creator === me || creator === myName)) return true;
+  if (lc(lead.assignedToEmail) && lc(lead.assignedToEmail) === me) return true;
+  return isLeadLeader(lead, user, users);
 }
 
 // Nobody may recommend or approve their own payment request.
@@ -467,6 +502,7 @@ export const PERMISSION_MODULES = [
   { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long', group: 'Operations' },
   { key: 'new_po', label: 'New PO (create a PO)', icon: 'post_add', group: 'Operations', action: true },
   { key: 'installations_manage', label: 'Add / edit installations', icon: 'edit_note', group: 'Operations', action: true },
+  { key: 'assigned_materials', label: 'Assigned Materials', icon: 'assignment_turned_in', group: 'Operations' },
 
   { key: 'revenue', label: 'Revenue', icon: 'account_balance_wallet', group: 'Finance' },
   { key: 'expenditure', label: 'Expenditure', icon: 'payments', group: 'Finance' },
@@ -499,7 +535,7 @@ export const PERMISSION_GROUPS = PERMISSION_MODULES
 // Admin switches it on for that individual in Settings → Permission Management.
 export const TECHNICIAN_DEFAULT_MODULES = [
   'dashboard', 'tasks', 'my_reports', 'installations', 'ongoing_work',
-  'materials', 'attendance', 'tracking', 'leave', 'reminders', 'gallery', 'about',
+  'materials', 'assigned_materials', 'attendance', 'tracking', 'leave', 'reminders', 'gallery', 'about',
 ];
 
 // The default state of a permission for a role, used when the Admin has not set
@@ -770,8 +806,12 @@ const roleIn = (role, list) => list.includes(normalizeRole(role)) || role === 's
 export const dispatchOpen = (po) => !!po && po.status === PO_STATUS.APPROVED;
 
 // Items may be marked until the Operation Manager has confirmed the dispatch.
+// Req 3 (15-Oct): once the warehouse has pressed "Stock OK" its own editing
+// is locked; from then until the confirmation only the Operation Manager (or
+// an Admin) may still correct the marks.
 export function canUpdateDispatch(po, role) {
   if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  if (po.dispatchStatus === DISPATCH_STATUS.COMPLETED) return roleIn(role, DISPATCH_CONFIRM_ROLES);
   return roleIn(role, DISPATCH_EDITOR_ROLES);
 }
 

@@ -195,7 +195,7 @@ function user_perm(?string $uid, string $key): ?bool {
 // A Technician login is limited to the options their work needs; everything else
 // is off until an Admin switches it on for them. Mirrors
 // TECHNICIAN_DEFAULT_MODULES in src/services/permissions.js.
-const TECHNICIAN_DEFAULT_MODULES = ['dashboard','tasks','my_reports','installations','ongoing_work','materials','attendance','tracking','leave','reminders','gallery','about'];
+const TECHNICIAN_DEFAULT_MODULES = ['dashboard','tasks','my_reports','installations','ongoing_work','materials','assigned_materials','attendance','tracking','leave','reminders','gallery','about'];
 
 // A Team Leader starts with a Technician's options plus the Team section and
 // payment requests. Mirrors TEAM_LEADER_DEFAULT_MODULES in permissions.js.

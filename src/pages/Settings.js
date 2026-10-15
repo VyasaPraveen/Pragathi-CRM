@@ -5,6 +5,7 @@ import { hasAccess, todayStr } from '../services/helpers';
 import { apiGet, apiPatch } from '../services/api';
 import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../services/permissions';
 import { DEFAULT_TARIFF } from '../services/quotation';
+import { attendanceRulesFrom, DEFAULT_ATTENDANCE_RULES } from '../services/attendance';
 import OptionListsEditor from '../components/OptionListsEditor';
 
 const NEW_BOM_MATERIALS = [
@@ -64,6 +65,8 @@ export default function Settings() {
         setCompanySettings(s);
         setGatingEnabled(s.workflowGatingEnabled !== false);
         setEbTariff(String(s.ebTariff || DEFAULT_TARIFF));
+        const r = attendanceRulesFrom(s);
+        setAttRules({ halfDayHours: String(r.halfDayHours), fullDayHours: String(r.fullDayHours) });
       })
       .catch(() => {});
   }, [isAdmin]);
@@ -82,6 +85,23 @@ export default function Settings() {
       toast(`Electricity tariff saved — ₹${val} per unit`);
     } catch (err) { toast('Failed: ' + err.message, 'er'); }
     setTariffSaving(false);
+  };
+
+  // Attendance duration rules (Req 5, 15-Oct): the hours that make a Half Day
+  // and a Full Day. Read by the Attendance screens through company settings.
+  const [attRules, setAttRules] = useState({ halfDayHours: String(DEFAULT_ATTENDANCE_RULES.halfDayHours), fullDayHours: String(DEFAULT_ATTENDANCE_RULES.fullDayHours) });
+  const [attSaving, setAttSaving] = useState(false);
+  const saveAttendanceRules = async () => {
+    const half = Number(attRules.halfDayHours), full = Number(attRules.fullDayHours);
+    if (!(half > 0) || !(full > 0)) { toast('Both thresholds must be more than zero hours', 'er'); return; }
+    if (half > full) { toast('The Half Day threshold cannot be more than the Full Day threshold', 'er'); return; }
+    if (full > 24) { toast('A day has 24 hours', 'er'); return; }
+    setAttSaving(true);
+    try {
+      await apiPatch('/settings', { attendanceRules: { halfDayHours: half, fullDayHours: full } });
+      toast(`Attendance rules saved — Half Day from ${half} h, Full Day from ${full} h`);
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setAttSaving(false);
   };
 
   const toggleGating = async (val) => {
@@ -513,6 +533,27 @@ export default function Settings() {
           <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>tune</span>Manage Options</h3></div>
           <div className="cb">
             <OptionListsEditor settings={companySettings} onSaved={setCompanySettings} />
+          </div>
+        </div>
+      )}
+
+      {/* Attendance duration rules — admin / owner only (Req 5, 15-Oct) */}
+      {isAdmin && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>schedule</span>Attendance Rules</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              The hours between an employee's check-in and check-out decide the day: a <strong>Full Day</strong> from the first threshold, a <strong>Half Day</strong> from the second, a <strong>Short Day</strong> below it. A Short Day counts one day on the leave counter and a Half Day half a day. The counter is worked out from the marks each time it is shown, so a day is never deducted twice.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap' }}>
+              <div className="fg" style={{ marginBottom: 0 }}><label>Half Day from (hours)</label>
+                <input type="number" className="fi" step="0.5" min="0.5" max="24" style={{ width: 140 }} value={attRules.halfDayHours} onChange={e => setAttRules(r => ({ ...r, halfDayHours: e.target.value }))} /></div>
+              <div className="fg" style={{ marginBottom: 0 }}><label>Full Day from (hours)</label>
+                <input type="number" className="fi" step="0.5" min="0.5" max="24" style={{ width: 140 }} value={attRules.fullDayHours} onChange={e => setAttRules(r => ({ ...r, fullDayHours: e.target.value }))} /></div>
+              <button className="btn bp" onClick={saveAttendanceRules} disabled={attSaving} style={{ padding: '8px 20px', fontSize: '.86rem' }}>
+                {attSaving ? <><span className="ssm"></span> Saving...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save rules</>}
+              </button>
+            </div>
           </div>
         </div>
       )}

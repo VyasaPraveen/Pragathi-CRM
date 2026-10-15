@@ -5,7 +5,7 @@ import { formatDate, isSafeUrl, todayStr } from '../services/helpers';
 import { teamMembersOf, seesAllAttendance } from '../services/permissions';
 import { EmptyState, DateInput, MarkLocation } from './SharedUI';
 import {
-  teamMonthReport, teamToday, attendanceMonths, previousMonth, monthLabel,
+  teamMonthReport, teamToday, attendanceMonths, previousMonth, monthLabel, attendanceRulesFrom, FULL_DAY, HALF_DAY,
 } from '../services/attendance';
 
 // ============================================================================
@@ -28,9 +28,10 @@ const STATE_TONE = {
 };
 
 export default function TeamAttendancePanel() {
-  const { attendance, users } = useData();
+  const { attendance, users, settings } = useData();
   const { user, role } = useAuth();
   const today = todayStr();
+  const rules = attendanceRulesFrom(settings);
   const [month, setMonth] = useState(today.slice(0, 7));
   const [openMember, setOpenMember] = useState('');
   // The date the calendar card is looking at. It opens on today, so the
@@ -53,7 +54,7 @@ export default function TeamAttendancePanel() {
   const roll = useMemo(() => teamToday(attendance, members, today), [attendance, members, today]);
   // The same roll-call, for whichever day was chosen.
   const picked = useMemo(() => teamToday(attendance, members, pickedDate), [attendance, members, pickedDate]);
-  const report = useMemo(() => teamMonthReport(attendance, members, month), [attendance, members, month]);
+  const report = useMemo(() => teamMonthReport(attendance, members, month, rules), [attendance, members, month, rules]);
   const lastMonth = previousMonth(today.slice(0, 7));
 
   if (!members.length) {
@@ -198,6 +199,10 @@ export default function TeamAttendancePanel() {
             ['Total Days Present', report.totalDays, '#6c5ce7'],
             ['Total Hours', report.totalHours, '#e8830c'],
             ['Days Without Check-Out', report.incomplete, report.incomplete ? '#e67e22' : 'var(--muted)'],
+            [`Full Days (${rules.fullDayHours} h+)`, report.fullDays, '#1e8449'],
+            [`Half Days (${rules.halfDayHours} h+)`, report.halfDays, '#d68910'],
+            ['Short Days', report.shortDays, report.shortDays ? '#c0392b' : 'var(--muted)'],
+            ['Leave Counter (days)', report.leaveCounter, report.leaveCounter ? '#c0392b' : 'var(--muted)'],
           ].map(([label, val, color]) => (
             <div key={label} style={{ border: '1px solid var(--bor)', borderRadius: 10, padding: '10px 12px', textAlign: 'center' }}>
               <div style={{ fontSize: '1.15rem', fontWeight: 700, color }}>{val}</div>
@@ -207,7 +212,7 @@ export default function TeamAttendancePanel() {
         </div>
 
         <div className="tw"><table><thead><tr>
-          <th>Team Member</th><th>Days Present</th><th>Total Hours</th><th>Avg Hours / Day</th>
+          <th>Team Member</th><th>Days Present</th><th>Full / Half / Short</th><th>Leave Counter</th><th>Total Hours</th><th>Avg Hours / Day</th>
           <th>No Check-Out</th><th>Last Marked</th><th style={{ textAlign: 'right' }}>Detail</th>
         </tr></thead><tbody>
           {report.rows.map(r => (
@@ -215,6 +220,8 @@ export default function TeamAttendancePanel() {
               <tr>
                 <td><strong>{r.name}</strong></td>
                 <td style={{ fontWeight: 700, color: r.present ? '#1e8449' : '#c0392b' }}>{r.present}</td>
+                <td style={{ fontSize: '.82rem' }}><span style={{ color: '#1e8449' }}>{r.fullDays}</span> / <span style={{ color: '#d68910' }}>{r.halfDays}</span> / <span style={{ color: r.shortDays ? '#c0392b' : 'var(--muted)' }}>{r.shortDays}</span></td>
+                <td style={{ fontWeight: 600, color: r.leaveCounter ? '#c0392b' : 'var(--muted)' }}>{r.leaveCounter || '-'}</td>
                 <td>{r.totalHours || '-'}</td>
                 <td>{r.avgHours || '-'}</td>
                 <td style={{ color: r.incomplete ? '#e67e22' : 'var(--muted)' }}>{r.incomplete || '-'}</td>
@@ -227,7 +234,7 @@ export default function TeamAttendancePanel() {
               </tr>
               {openMember === (r.email || r.name) && (
                 <tr>
-                  <td colSpan={7} style={{ background: 'rgba(26,58,122,.03)', padding: 10 }}>
+                  <td colSpan={9} style={{ background: 'rgba(26,58,122,.03)', padding: 10 }}>
                     {r.days.length ? (
                       <table style={{ fontSize: '.82rem' }}><thead><tr>
                         <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Check-In Location</th><th>Check-Out Location</th>
@@ -235,7 +242,8 @@ export default function TeamAttendancePanel() {
                         {r.days.map(d => (
                           <tr key={d.date}>
                             <td style={{ whiteSpace: 'nowrap' }}>{formatDate(d.date)}</td>
-                            <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 7px', fontSize: '.68rem' }}>{d.status}</span></td>
+                            <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 7px', fontSize: '.68rem' }}>{d.status}</span>
+                              {d.standing && <span className={`st ${d.standing === FULL_DAY ? 'st-g' : d.standing === HALF_DAY ? 'st-o' : 'st-r'}`} style={{ padding: '2px 7px', fontSize: '.68rem', marginLeft: 4 }}>{d.standing}</span>}</td>
                             <td>{d.in?.time || '-'}</td>
                             <td>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
                             <td style={{ fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>

@@ -39,16 +39,19 @@ const QPDF_COMPANY_MOBILE = '9701461156';
 //            the company signatory's number
 //   pps    — the person's PPS employee number (executiveId, e.g. PPS-114),
 //            else the company's number
+//   role   — the person's role on their account (Req 6, 15-Oct: "Executive",
+//            "Sales Manager", ...), filled by the route; '' prints nothing
 function qpdf_signatory(array $q): array {
   $name = qpdf_str($q, 'executiveName', '');
   $mobile = preg_replace('/[^0-9+ ]/', '', qpdf_str($q, 'executivePhone', ''));
   $pps = qpdf_str($q, 'executiveId', '');
   if ($name === '') {
-    return ['name' => QPDF_AUTHORISED_SIGNATORY, 'mobile' => $mobile !== '' ? $mobile : QPDF_SIGNATORY_MOBILE,
+    return ['name' => QPDF_AUTHORISED_SIGNATORY, 'role' => '', 'mobile' => $mobile !== '' ? $mobile : QPDF_SIGNATORY_MOBILE,
             'pps' => QPDF_COMPANY_MOBILE, 'ppsLabel' => 'PPS'];
   }
   return [
     'name' => $name,
+    'role' => qpdf_str($q, 'executiveRole', ''),
     'mobile' => $mobile !== '' ? $mobile : QPDF_SIGNATORY_MOBILE,
     'pps' => $pps !== '' ? $pps : QPDF_COMPANY_MOBILE,
     'ppsLabel' => $pps !== '' ? 'PPS No' : 'PPS',
@@ -342,6 +345,12 @@ function pps_quotation_pdf(array $q, string $assetDir): string {
   $pdf->setFont('B', 10);
   $pdf->text($L, $y, $sign['name']);
   $pdf->setFont('', 10);
+  // Req 6 (15-Oct): the person's role, from their account, straight under the
+  // name. Nothing else in the block moves.
+  if ($sign['role'] !== '') {
+    $y += 13;
+    $pdf->text($L, $y, $sign['role']);
+  }
   $y += 15;
   $pdf->text($L, $y, 'Mobile : ' . $sign['mobile']);
   $y += 15;

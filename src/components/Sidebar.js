@@ -21,6 +21,7 @@ const sections = [
     { to: '/ongoing', icon: 'construction', label: 'Ongoing Work', perm: 'ongoing_work' },
     { to: '/materials', icon: 'inventory_2', label: 'Materials', perm: 'materials' },
     { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders', badgeKey: 'purchase_orders', perm: 'purchase_orders' },
+    { to: '/assigned-materials', icon: 'assignment_turned_in', label: 'Assigned Materials', badgeKey: 'assigned_materials', perm: 'assigned_materials' },
   ]},
   { title: 'Finance', items: [
     { to: '/revenue', icon: 'account_balance_wallet', label: 'Revenue', perm: 'revenue' },

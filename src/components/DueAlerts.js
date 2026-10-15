@@ -21,7 +21,7 @@ const hoursLeft = (at) => at ? Math.round(((new Date(at) - new Date()) / 3600000
    a quotation waiting for approval, an approved quotation still to be shared,
    a customer whose 3 days are running out, and a follow-up date 2 days away. */
 export default function DueAlerts() {
-  const { quotations, leads, users, team } = useData();
+  const { quotations, leads, users, team, leadPOs } = useData();
   const { user, role } = useAuth();
   const navigate = useNavigate();
   const [dismissed, setDismissed] = useState(false);
@@ -43,7 +43,7 @@ export default function DueAlerts() {
     (quotations || []).forEach(q => {
       const lead = leadById.get(q.leadId);
       // Only ever talk to someone about a lead they are allowed to see.
-      if (lead && !canSeeLead(lead, user, role, users, team)) return;
+      if (lead && !canSeeLead(lead, user, role, users, team, leadPOs)) return;
       const concerned = mine(q.executiveName) || mine(q.executiveEmail) ||
         (lead && (mine(lead.assignedTo) || mine(lead.salesExecutive)));
       const due = quotationDue(q);
@@ -84,7 +84,7 @@ export default function DueAlerts() {
     // Follow-up reminders — 2 days before the date that was agreed.
     (leads || []).forEach(l => {
       if (!l.nextFollowUpDate || l.status === 'Converted') return;
-      if (!canSeeLead(l, user, role, users, team)) return;
+      if (!canSeeLead(l, user, role, users, team, leadPOs)) return;
       const concerned = mine(l.assignedTo) || mine(l.salesExecutive);
       if (!concerned && !isApprover) return;
       const d = daysUntil(l.nextFollowUpDate);

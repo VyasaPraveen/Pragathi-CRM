@@ -212,7 +212,7 @@ export function getRoleFromDesignation(designation) {
 export const MODULE_ROUTES = {
   leads: '/leads', quotations: '/leads', customers: '/customers', employeeTasks: '/tasks',
   tasks: '/tasks', installations: '/installations', ongoingWork: '/ongoing',
-  materials: '/materials', purchaseOrders: '/purchase-orders', leadPOs: '/purchase-orders',
+  materials: '/materials', purchaseOrders: '/purchase-orders', leadPOs: '/purchase-orders', assignedMaterials: '/assigned-materials',
   revenue: '/revenue', expenditure: '/expenditure', expenditures: '/expenditure',
   paymentRequests: '/payment-requests', reports: '/reports', team: '/team',
   attendance: '/attendance', tracking: '/tracking', leaveRequests: '/leave',

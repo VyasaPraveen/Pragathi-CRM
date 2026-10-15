@@ -10,7 +10,7 @@ import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import { sharePOWhatsApp } from '../services/poUtils';
 import { openPoPdf, downloadPoPdf, poTerm } from '../services/poShare';
 import {
-  can, ACTIONS, PO_STATUS, advanceGate, canSeeLead, salesMembersOf, teamLeaders,
+  can, ACTIONS, PO_STATUS, advanceGate, canSeeLead, canEditLead, salesMembersOf, teamLeaders, normalizeRole,
   quotationApprovers, canAddLeadPO, canEditLeadPO, canRecommendLeadPO, warehouseUsers,
 } from '../services/permissions';
 import QuotationPanel from '../components/QuotationPanel';
@@ -100,7 +100,7 @@ export default function Leads() {
 
   // A lead belongs to the person it is assigned to: they, the people working it
   // and the hierarchy above them see it — nobody else (19-Sep requirement 6).
-  const myLeads = leads.filter(l => canSeeLead(l, user, role, users, team));
+  const myLeads = leads.filter(l => canSeeLead(l, user, role, users, team, leadPOs));
 
   // When 'all', exclude Converted leads (they move to Customers); Converted tab
   // shows only converted; "Pending Follow-up" holds the leads whose quotation
@@ -344,7 +344,8 @@ export default function Leads() {
               <button className="btn bsm bo" onClick={() => setDetailId(l.id)} title="View Details" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>visibility</span></button>
               <button className="btn bsm bo" onClick={() => { setDetailTab('quotation'); setDetailId(l.id); }} title="Quotation" style={{ padding: '5px 8px', color: 'var(--pri)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>description</span></button>
               <button className="btn bsm bo" onClick={() => { setDetailTab('pos'); setDetailId(l.id); }} title="PO & BOM" style={{ padding: '5px 8px', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>receipt_long</span></button>
-              <button className="btn bsm bo" onClick={() => setModal({ data: l, id: l.id })} title="Edit" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>
+              {/* Req 2 / Req 4 (15-Oct): the BCO, the warehouse and a Technician look but do not edit. */}
+              {canEditLead(l, user, role, users) && <button className="btn bsm bo" onClick={() => setModal({ data: l, id: l.id })} title="Edit" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>}
               {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(l.id)} title="Delete" style={{ padding: '5px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
             </div></td>
           </tr>
@@ -665,7 +666,7 @@ function LeadModal({ data, id, onSave, onClose }) {
               {form.roofType === 'Elevated' && (
                 <div className="fr"><div className="fg"><label>North Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedNorthHeight} onChange={e => set('elevatedNorthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div><div className="fg"><label>South Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedSouthHeight} onChange={e => set('elevatedSouthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div></div>
               )}
-              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option>{opt('structureType', form.structureType).map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option>{opt('existingConnection', form.existingConnection).map(o => <option key={o}>{o}</option>)}</select></div></div>
+              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Type of Installation</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option>{opt('structureType', form.structureType).map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option>{opt('existingConnection', form.existingConnection).map(o => <option key={o}>{o}</option>)}</select></div></div>
               <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft)</label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder="e.g. 200" /></div></div>
               <div className="fg"><label>Customer Service Number</label><input className="fi" value={form.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} placeholder="Service number from electricity bill" /></div>
               <div className="fg"><label>Site Visit Notes</label><textarea className="fi" value={form.siteVisitNotes} onChange={e => set('siteVisitNotes', e.target.value)} rows="2" placeholder="Observations from site visit..." /></div>
@@ -838,8 +839,16 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
       warehouseUsers(users).forEach(u => createNotification({
         forUser: u.displayName || u.email,
         title: 'PO Approved \u2014 ready for dispatch',
-        message: `PO ${po.poNumber || ''} for "${lead.name}" is approved. Please proceed with material dispatch.`,
+        message: `PO ${po.poNumber || ''} for "${lead.name}" is approved. Please verify each material (Yes / No) and submit Stock OK.`,
         type: 'status_update', module: 'leadPOs', relatedId: po.id,
+      }));
+      // Req 2 / Req 3.1 (15-Oct): the BCO's work starts here too, and the
+      // approved PO is what opens the lead to them.
+      (users || []).filter(u => u.approved !== false && normalizeRole(u.role) === 'bco').forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: 'PO Approved \u2014 BCO work can begin',
+        message: `PO ${po.poNumber || ''} for "${lead.name}" is approved. The lead is now open to you under Leads for the BCO operations.`,
+        type: 'status_update', module: 'leads', relatedId: lead.id,
       }));
       toast('PO approved');
     } catch (e) { toast(e.message, 'er'); }
@@ -940,7 +949,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                     <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl" style={{ fontWeight: 700 }}>Site Visit Details</div><div className="dv">{lead.siteVisitDate ? formatDate(lead.siteVisitDate) : ''}</div></div>
                     {lead.roofType && <div className="di"><div className="dl">Roof Type</div><div className="dv">{lead.roofType}</div></div>}
                     {lead.floors && <div className="di"><div className="dl">Floors</div><div className="dv">{lead.floors}</div></div>}
-                    {lead.structureType && <div className="di"><div className="dl">Tilt</div><div className="dv">{lead.structureType}</div></div>}
+                    {lead.structureType && <div className="di"><div className="dl">Type of Installation</div><div className="dv">{lead.structureType}</div></div>}
                     {lead.roofType === 'Elevated' && (lead.elevatedNorthHeight || lead.elevatedHeight) && <div className="di"><div className="dl">North Pole Height</div><div className="dv">{lead.elevatedNorthHeight || lead.elevatedHeight} ft</div></div>}
                     {lead.roofType === 'Elevated' && lead.elevatedSouthHeight && <div className="di"><div className="dl">South Pole Height</div><div className="dv">{lead.elevatedSouthHeight} ft</div></div>}
                     {lead.existingConnection && <div className="di"><div className="dl">Connection</div><div className="dv">{lead.existingConnection}</div></div>}
@@ -962,10 +971,10 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           {tab === 'followups' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-                <button className="btn bsm bp" onClick={() => setFupForm(!fupForm)}>
+                {canEditLead(lead, user, role, users) ? <button className="btn bsm bp" onClick={() => setFupForm(!fupForm)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>{fupForm ? 'close' : 'add'}</span>
                   {fupForm ? 'Cancel' : 'Log Follow-up'}
-                </button>
+                </button> : <span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>View only — follow-ups are logged by the assigned person or their Team Leader.</span>}
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn bsm bo" onClick={() => shareFollowUpWhatsApp(lead)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp

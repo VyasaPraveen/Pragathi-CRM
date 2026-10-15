@@ -3,42 +3,51 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { updateDocument, createNotification } from '../services/firestore';
-import { formatDate } from '../services/helpers';
+import { apiUpload } from '../services/api';
+import { formatDate, formatDateTime, compressImage, isSafeUrl } from '../services/helpers';
 import {
-  DISPATCH_STATUS, dispatchOpen, canUpdateDispatch, canConfirmDispatch,
+  DISPATCH_STATUS, DISPATCH_CONFIRM_ROLES, dispatchOpen, canUpdateDispatch, canConfirmDispatch,
   dispatchMarks, dispatchSummary, dispatchCompleteIssue, dispatchNotifyUsers, warehouseUsers,
-  canAssignDispatch, canReceiveDispatch, dispatchedItemNames, dispatchHandoverState, dispatchSent,
+  canAssignDispatch, dispatchedItemNames, dispatchHandoverState, dispatchSent, normalizeRole,
 } from '../services/permissions';
 import { directoryPeople } from '../services/people';
 import {
   finalDispatchOpen, canFinalDispatch, finalDispatchLines, finalDispatchIssue, finalDispatchBody, finalDispatchState, stockDispatched, qtyText,
 } from '../services/stock';
 import { confirmFinalDispatch } from '../services/stockApi';
+import {
+  handoverLines, blankHandoverMarks, handoverIssue, handoverMarksForSave, handoverSummary,
+  canConfirmHandover, handoverDone, canConfirmDelivery, deliveryOpen, deliveryDone, deliveryIssue, dispatchTimeline,
+} from '../services/dispatchFlow';
 import { SearchSelect } from './SharedUI';
 
 const nowIso = () => new Date().toISOString();
 const NOT_STOCKED = '— not kept in inventory —';
+const PHOTO_MAX_EDGE = 1600;
+const PHOTO_QUALITY = 0.8;
 
 // ============================================================================
-// Material dispatch on an approved purchase order.
+// Material dispatch on an approved purchase order — the whole movement, on
+// the PO itself, wherever the PO is shown (the lead's Purchase Orders tab,
+// the Purchase Orders page, and Assigned Materials).
 //
-// Shown under the PO wherever the PO is shown — the lead's Purchase Orders
-// tab and the Purchase Orders page the warehouse works from. The warehouse
-// marks each item sent or held back (with a reason), saves as it goes, and
-// sends the list with "OK & Send" (which is the Material Dispatch Completed
-// step); the authorities are told, and the Operation Manager confirms it.
+//   1. Warehouse material verification: each item Yes / No with a note, saved
+//      as it goes, then "Stock OK" — which locks the warehouse's entry and
+//      sends the list to the Operation Manager (Req 3.2–3.3, 15-Oct; this was
+//      "OK & Send" before and is the same step).
+//   2. The Operation Manager reviews (and may still correct the marks) and
+//      gives the "Approval for Dispatch" (Req 3.4; formerly "Confirm Dispatch").
+//   3. The Operation Manager assigns the items to a person, who is notified
+//      and finds them under Assigned Materials (R6, 8-Oct; Req 3.5–3.6).
+//   4. First handover: the person checks each item received from the
+//      warehouse, Yes / No with a note, and presses "Handover Received" (Req 3.7).
+//   5. Second handover: at the customer's location the person checks each
+//      item again, photographs the delivery, and presses "Delivery Confirmed"
+//      (Req 3.8).
+//   6. The stock comes off at "Confirm Final Dispatch" (10-Oct), once.
 //
-// R6 (8-Oct) adds the handover that follows: the Operation Manager assigns
-// the sent items to a named person, that person confirms "I have received
-// these items", and the Operation Manager is told who received what. Each
-// step is a stamp on the same PO. Everyone else sees the same read-only.
-// The PO's own status is never touched here.
-//
-// 10-Oct: none of the above moves the inventory. Marking, sending, assigning
-// and receiving are preparation; the stock comes off only at the last step,
-// "Confirm Final Dispatch", when the assigned person (or the Operation
-// Manager) names the inventory material each sent line is and the server
-// deducts it — once per PO, and only if there is enough of it.
+// Every step is a stamp on the PO, so the history at the bottom is the record
+// itself. The PO's own status is never touched here.
 // ============================================================================
 export default function DispatchPanel({ po, lead }) {
   const { users, materials } = useData();
@@ -51,17 +60,22 @@ export default function DispatchPanel({ po, lead }) {
   const [dirty, setDirty] = useState(false);
   const [assignee, setAssignee] = useState('');
   const [assignNote, setAssignNote] = useState('');
-  // The final dispatch: which inventory material each sent line is. The
-  // suggestion comes from the names; a line can be changed or marked as not
-  // kept in inventory, in which case it is left out of the deduction.
+  // The final dispatch: which inventory material each sent line is.
   const [mapOverride, setMapOverride] = useState({});
   const [destination, setDestination] = useState('');
   const [dispatchNote, setDispatchNote] = useState('');
+  // The two handovers: the person's Yes / No per item, the delivery photos.
+  const [handMarks, setHandMarks] = useState(() => blankHandoverMarks(po));
+  const [delivMarks, setDelivMarks] = useState(() => blankHandoverMarks(po));
+  const [photos, setPhotos] = useState([]);
+  const [uploading, setUploading] = useState(false);
+  const [deliveryLocation, setDeliveryLocation] = useState('');
+  const [deliveryNote, setDeliveryNote] = useState('');
+  const [showHistory, setShowHistory] = useState(false);
+
   // What the server last gave us (or what we last saved), so a refreshed copy
   // of the PO replaces the marks only when it actually differs — and never
-  // while something is half-done here. Without this, saving cleared the ticks
-  // on screen for a moment: the sync ran against the copy from before the
-  // save and put the old marks back until the refresh arrived.
+  // while something is half-done here.
   const [baseline, setBaseline] = useState(() => JSON.stringify(dispatchMarks(po)));
   useEffect(() => {
     const incoming = JSON.stringify(dispatchMarks(po));
@@ -74,7 +88,9 @@ export default function DispatchPanel({ po, lead }) {
   const mayEdit = canUpdateDispatch(po, role);
   const mayConfirm = canConfirmDispatch(po, role);
   const mayAssign = canAssignDispatch(po, role);
-  const mayReceive = canReceiveDispatch(po, user);
+  const mayReceive = canConfirmHandover(po, user);
+  const mayDeliver = canConfirmDelivery(po, user, role);
+  const isConfirmer = role === 'super_admin' || DISPATCH_CONFIRM_ROLES.includes(normalizeRole(role));
   const summary = dispatchSummary({ ...po, dispatchItems: marks });
   const leadName = (lead && lead.name) || po.customerName || po.leadName || '';
   const label = `PO ${po.poNumber || ''}${leadName ? ` for "${leadName}"` : ''}`;
@@ -88,6 +104,8 @@ export default function DispatchPanel({ po, lead }) {
   const finalIssue = finalDispatchIssue(finalLines, stockList);
   const materialName = (id) => { const m = stockList.find(x => x.id === id); return m ? m.name : ''; };
   const defaultDestination = [leadName, po.customerAddress || (lead && lead.address) || ''].filter(Boolean).join(', ');
+  const stockOkLocked = po.dispatchStatus === DISPATCH_STATUS.COMPLETED && !po.dispatchConfirmedAt && !isConfirmer;
+  const timeline = dispatchTimeline(po);
 
   const setMark = (i, patch) => {
     setDirty(true);
@@ -101,7 +119,7 @@ export default function DispatchPanel({ po, lead }) {
     return changed ? { ...m, at: nowIso(), by: meName } : m;
   });
 
-  const save = async (extra = {}, okMsg = 'Dispatch saved') => {
+  const save = async (extra = {}, okMsg = 'Material verification saved') => {
     setBusy(true);
     try {
       const next = stamped();
@@ -126,54 +144,53 @@ export default function DispatchPanel({ po, lead }) {
   };
 
   // Tell a set of people, once each, never the person acting.
-  const tell = (people, title, message) => {
+  const tell = (people, title, message, module = 'leadPOs') => {
     const seen = new Set();
     people.forEach(u => {
-      const key = typeof u === 'string' ? u : (u.displayName || u.email);
+      const key = typeof u === 'string' ? u : (u && (u.displayName || u.email));
       if (!key || seen.has(key) || key === meName) return;
       seen.add(key);
-      createNotification({ forUser: key, title, message, type: 'status_update', module: 'leadPOs', relatedId: po.id });
+      createNotification({ forUser: key, title, message, type: 'status_update', module, relatedId: po.id });
     });
   };
 
-  // "OK & Send" — the warehouse's list goes to the office.
+  // "Stock OK" — the warehouse's verification goes to the office and is locked.
   const complete = async () => {
     const issue = dispatchCompleteIssue(po, marks);
     if (issue) { toast(issue, 'er'); return; }
     const s = dispatchSummary({ ...po, dispatchItems: marks });
     const sent = dispatchedItemNames({ ...po, dispatchItems: marks });
     const pendingText = s.pending.length
-      ? ` Not dispatched: ${s.pending.map(p => `${p.name} (${p.note})`).join('; ')}.`
+      ? ` Not available: ${s.pending.map(p => `${p.name} (${p.note})`).join('; ')}.`
       : '';
-    if (!window.confirm(`OK & Send — mark the material dispatch for ${label} complete and send the list to the Operations Manager?\n${s.dispatched} of ${s.total} items dispatched.${pendingText}`)) return;
+    if (!window.confirm(`Stock OK — submit the material verification for ${label} to the Operations Manager?\n${s.dispatched} of ${s.total} items available.${pendingText}\n\nAfter this the warehouse can no longer change it.`)) return;
     const saved = await save(
       { dispatchStatus: DISPATCH_STATUS.COMPLETED, dispatchCompletedAt: nowIso(), dispatchCompletedBy: meName },
-      'Sent — the Operations Manager has been notified');
+      'Stock OK submitted — the Operations Manager has been notified');
     if (!saved) return;
-    // The Owner, Management, the Operation Manager and Admin are told, with
-    // the full list of what went and what did not.
-    tell(dispatchNotifyUsers(users), 'Material Dispatch Completed — OK & Send',
-      `${meName} sent the material dispatch for ${label}: ${s.dispatched} of ${s.total} items. Items sent: ${sent.join(', ') || 'none'}.${pendingText} Open the PO to assign these items to a person.`);
+    tell(dispatchNotifyUsers(users), 'Stock OK — Material Verification Submitted',
+      `${meName} submitted the warehouse verification for ${label}: ${s.dispatched} of ${s.total} items available. Available: ${sent.join(', ') || 'none'}.${pendingText} Open the PO to review and give the Approval for Dispatch.`);
   };
 
+  // "Approval for Dispatch" — the Operation Manager's review.
   const confirm = async () => {
-    if (!window.confirm(`Confirm the dispatch for ${label} as reviewed and accepted?`)) return;
+    if (!window.confirm(`Approval for Dispatch — accept the verified material for ${label} as reviewed?`)) return;
     setBusy(true);
     try {
       await updateDocument('leadPOs', po.id, { dispatchConfirmedAt: nowIso(), dispatchConfirmedBy: meName });
-      toast('Dispatch confirmed');
-      tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Dispatch Confirmed',
-        `${meName} reviewed and confirmed the material dispatch for ${label}.`);
+      toast('Approved for dispatch — assign the materials to a person below');
+      tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Approval for Dispatch Given',
+        `${meName} reviewed the material verification for ${label} and approved it for dispatch. The next step is to assign the materials to a person.`);
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }
   };
 
-  // The Operation Manager hands the sent items to a person.
+  // The Operation Manager hands the items to a person.
   const assign = async () => {
     const name = String(assignee || '').trim();
     if (!name) { toast('Choose who the items are assigned to', 'er'); return; }
-    if (!sentItems.length) { toast('Nothing has been dispatched yet to assign', 'er'); return; }
-    if (!window.confirm(`Assign the ${sentItems.length} dispatched item(s) for ${label} to ${name}?`)) return;
+    if (!sentItems.length) { toast('Nothing has been verified as available yet to assign', 'er'); return; }
+    if (!window.confirm(`Assign the ${sentItems.length} item(s) for ${label} to ${name}?`)) return;
     setBusy(true);
     try {
       const person = directoryPeople(users).find(p => p.name.toLowerCase() === name.toLowerCase());
@@ -182,27 +199,71 @@ export default function DispatchPanel({ po, lead }) {
         dispatchAssignedToEmail: (person && person.email) || '',
         dispatchAssignedBy: meName, dispatchAssignedAt: nowIso(),
         dispatchAssignNote: assignNote.trim(),
-        // A re-assignment starts the receipt afresh.
-        dispatchReceivedBy: '', dispatchReceivedAt: '', dispatchReceivedNote: '',
+        // A re-assignment starts the handover afresh.
+        dispatchReceivedBy: '', dispatchReceivedAt: '', dispatchReceivedNote: '', handoverItems: [],
       });
       toast(`Items assigned to ${name} — they have been notified`);
-      tell([name], 'Items Assigned to You from the Warehouse',
-        `${meName} assigned you the dispatched material for ${label}. Items received from the warehouse (${sentItems.length}): ${sentItems.join(', ')}.`
-        + `${assignNote.trim() ? ' Note: ' + assignNote.trim() + '.' : ''} Open the PO and press "I have received these items" once they are with you.`);
+      tell([name], 'Materials Assigned to You',
+        `${meName} assigned you the material for ${label}. Items (${sentItems.length}): ${sentItems.join(', ')}.`
+        + `${assignNote.trim() ? ' Note: ' + assignNote.trim() + '.' : ''} Open Assigned Materials, check each item received from the warehouse and press "Handover Received".`, 'assignedMaterials');
+      tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Materials Assigned for Dispatch',
+        `${meName} assigned the material for ${label} to ${name} (${sentItems.length} items).`);
       setAssignee(''); setAssignNote('');
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }
   };
 
-  // The assigned person confirms the items are with them.
+  // First handover: the assigned person confirms what they received, item by item.
   const receive = async () => {
-    if (!window.confirm(`Confirm that you have received these ${sentItems.length} item(s) for ${label}?`)) return;
+    const issue = handoverIssue(po, handMarks);
+    if (issue) { toast(issue, 'er'); return; }
+    const s = handoverSummary(po, handMarks);
+    if (!window.confirm(`Handover Received — confirm you have received the material for ${label}?\n${s.text}`)) return;
     setBusy(true);
     try {
-      await updateDocument('leadPOs', po.id, { dispatchReceivedBy: meName, dispatchReceivedAt: nowIso() });
-      toast('Receipt recorded — the Operations Manager has been notified');
-      tell([po.dispatchAssignedBy, ...dispatchNotifyUsers(users)], 'Dispatched Items Received',
-        `${meName} confirmed receipt of the dispatched material for ${label} (${sentItems.length} items: ${sentItems.join(', ')}). Work / dispatch can proceed.`);
+      await updateDocument('leadPOs', po.id, { dispatchReceivedBy: meName, dispatchReceivedAt: nowIso(), handoverItems: handoverMarksForSave(po, handMarks) });
+      toast('Handover recorded — the Operations Manager and the warehouse have been notified');
+      tell([po.dispatchAssignedBy, ...dispatchNotifyUsers(users), ...warehouseUsers(users)], 'Handover Received',
+        `${meName} confirmed receipt of the material for ${label} from the warehouse: ${s.text}. Next: delivery at the customer location with photo proof.`);
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
+  };
+
+  // Delivery proof photographs.
+  const addPhotos = async (files) => {
+    const list = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!list.length) { toast('Choose a photograph (JPG / PNG)', 'er'); return; }
+    setUploading(true);
+    try {
+      const added = [];
+      for (const f of list) {
+        const small = await compressImage(f, PHOTO_MAX_EDGE, PHOTO_QUALITY);
+        const res = await apiUpload(small, 'deliveries');
+        if (res && res.url) added.push({ url: res.url, name: res.name || f.name, at: nowIso(), by: meName });
+      }
+      setPhotos(p => [...p, ...added]);
+      toast(`${added.length} photo${added.length === 1 ? '' : 's'} uploaded`);
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setUploading(false); }
+  };
+
+  // Second handover: delivered at the customer's location, with proof.
+  const deliver = async () => {
+    const issue = deliveryIssue(po, delivMarks, photos);
+    if (issue) { toast(issue, 'er'); return; }
+    const s = handoverSummary(po, delivMarks);
+    if (!window.confirm(`Delivery Confirmed — record that the material for ${label} was delivered at the customer location?\n${s.text}\n${photos.length} photo(s) attached.`)) return;
+    setBusy(true);
+    try {
+      await updateDocument('leadPOs', po.id, {
+        deliveryItems: handoverMarksForSave(po, delivMarks), deliveryPhotos: photos,
+        deliveredBy: meName, deliveredByEmail: user?.email || '', deliveredAt: nowIso(),
+        deliveryLocation: (deliveryLocation || defaultDestination).trim(), deliveryNote: deliveryNote.trim(),
+      });
+      toast('Delivery confirmed — the Operations Manager and the warehouse have been notified');
+      tell([po.dispatchAssignedBy, ...dispatchNotifyUsers(users), ...warehouseUsers(users)], 'Delivered at the Customer Location',
+        `${meName} delivered the material for ${label}${deliveryLocation.trim() ? ' at ' + deliveryLocation.trim() : ''}: ${s.text}. ${photos.length} photo${photos.length === 1 ? '' : 's'} attached as proof.${deliveryNote.trim() ? ' Note: ' + deliveryNote.trim() : ''}`);
+      setPhotos([]); setDeliveryNote('');
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }
   };
@@ -226,27 +287,75 @@ export default function DispatchPanel({ po, lead }) {
     : po.dispatchStatus === DISPATCH_STATUS.COMPLETED ? '#1e8449'
       : po.dispatchStatus === DISPATCH_STATUS.PARTIAL ? '#d68910' : 'var(--muted)';
   const stateText = po.dispatchConfirmedAt
-    ? `Dispatch confirmed by ${po.dispatchConfirmedBy || '-'} on ${formatDate(po.dispatchConfirmedAt)}`
+    ? `Approved for dispatch by ${po.dispatchConfirmedBy || '-'} on ${formatDate(po.dispatchConfirmedAt)}`
     : po.dispatchStatus === DISPATCH_STATUS.COMPLETED
-      ? `Material Dispatch Completed — sent by ${po.dispatchCompletedBy || '-'} on ${formatDate(po.dispatchCompletedAt)} — awaiting the Operation Manager's confirmation`
+      ? `Stock OK — submitted by ${po.dispatchCompletedBy || '-'} on ${formatDate(po.dispatchCompletedAt)} — awaiting the Operation Manager's Approval for Dispatch`
       : po.dispatchStatus === DISPATCH_STATUS.PARTIAL
-        ? `Partly dispatched — ${summary.dispatched} of ${summary.total} items`
-        : 'Awaiting dispatch from the warehouse';
+        ? `Being verified — ${summary.dispatched} of ${summary.total} items available`
+        : 'Awaiting the warehouse material verification';
+
+  // One Yes / No row set, used for both handovers.
+  const HandoverTable = ({ lines, marksState, setMarksState, yesLabel, noLabel, disabled }) => (
+    <div className="tw">
+      <table style={{ fontSize: '.8rem' }}>
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th style={{ width: 170 }}>{yesLabel} / {noLabel}</th><th>Notes / reason</th></tr></thead>
+        <tbody>
+          {lines.map(l => (
+            <tr key={l.index} style={{ background: l.ok === true ? 'rgba(39,174,96,.06)' : l.ok === false ? 'rgba(231,76,60,.06)' : 'transparent' }}>
+              <td>{l.index + 1}</td>
+              <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
+              <td>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button type="button" className={`btn bsm ${l.ok === true ? 'bp' : 'bo'}`} style={l.ok === true ? { background: '#1e8449' } : {}} disabled={disabled}
+                    onClick={() => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || {}), ok: true }; return n; })}>Yes</button>
+                  <button type="button" className={`btn bsm ${l.ok === false ? 'bp' : 'bo'}`} style={l.ok === false ? { background: '#c0392b' } : {}} disabled={disabled}
+                    onClick={() => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || {}), ok: false }; return n; })}>No</button>
+                </div>
+              </td>
+              <td>
+                <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={l.note} disabled={disabled}
+                  placeholder={l.ok === false ? 'What is wrong? (required)' : 'Optional note'}
+                  onChange={e => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || { ok: null }), note: e.target.value }; return n; })} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+  // The same rows read-only, once recorded.
+  const RecordedTable = ({ lines, yesLabel, noLabel }) => (
+    <div className="tw">
+      <table style={{ fontSize: '.78rem' }}>
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th>{yesLabel} / {noLabel}</th><th>Notes</th></tr></thead>
+        <tbody>
+          {lines.map(l => (
+            <tr key={l.index}>
+              <td>{l.index + 1}</td><td>{l.name}</td><td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
+              <td>{l.ok === true ? <span style={{ color: '#1e8449', fontWeight: 600 }}>{yesLabel}</span> : l.ok === false ? <span style={{ color: '#c0392b', fontWeight: 600 }}>{noLabel}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
+              <td style={{ color: 'var(--muted)' }}>{l.note || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 
   return (
     <div style={{ marginTop: 12, border: '1px solid var(--bor)', borderRadius: 10, padding: '10px 12px', background: '#fff' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <span className="material-icons-round" style={{ fontSize: 18, color: tone }}>local_shipping</span>
-        <strong style={{ fontSize: '.86rem' }}>Material Dispatch</strong>
+        <strong style={{ fontSize: '.86rem' }}>Material Dispatch — Warehouse Verification</strong>
         <span style={{ fontSize: '.78rem', color: tone }}>{stateText}</span>
         <span style={{ flex: 1 }} />
-        <span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{summary.dispatched} / {summary.total} dispatched</span>
+        <span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{summary.dispatched} / {summary.total} available</span>
       </div>
 
       <div className="tw">
         <table style={{ fontSize: '.8rem' }}>
           <thead><tr>
-            <th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th style={{ width: 120 }}>Dispatched</th><th>Note / reason if not dispatched</th><th>Marked</th>
+            <th style={{ width: 34 }}>#</th><th>Material</th><th>Ordered Qty</th><th style={{ width: 130 }}>Available (Yes / No)</th><th>Notes / reason if not available</th><th>Marked</th>
           </tr></thead>
           <tbody>
             {items.map((it, i) => {
@@ -261,17 +370,17 @@ export default function DispatchPanel({ po, lead }) {
                       <label style={{ display: 'inline-flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                         <input type="checkbox" checked={!!m.dispatched} disabled={busy}
                           onChange={e => setMark(i, { dispatched: e.target.checked, note: e.target.checked ? '' : m.note })} />
-                        {m.dispatched ? 'Dispatched' : 'Not yet'}
+                        {m.dispatched ? 'Yes' : 'No'}
                       </label>
                     ) : (
                       m.dispatched
-                        ? <span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 15, verticalAlign: '-3px' }}>check_circle</span> Dispatched</span>
-                        : <span style={{ color: '#c0392b' }}>Not dispatched</span>
+                        ? <span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 15, verticalAlign: '-3px' }}>check_circle</span> Yes</span>
+                        : <span style={{ color: '#c0392b' }}>No</span>
                     )}
                   </td>
                   <td>
                     {mayEdit && !m.dispatched
-                      ? <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={m.note || ''} placeholder="Why was this not dispatched?"
+                      ? <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={m.note || ''} placeholder="Why is this not available?"
                           onChange={e => setMark(i, { note: e.target.value })} disabled={busy} />
                       : <span style={{ color: m.dispatched ? 'var(--muted)' : '#c0392b' }}>{m.note || (m.dispatched ? '—' : '')}</span>}
                   </td>
@@ -284,21 +393,27 @@ export default function DispatchPanel({ po, lead }) {
         </table>
       </div>
 
+      {stockOkLocked && (
+        <div style={{ fontSize: '.76rem', color: 'var(--muted)', marginTop: 6 }}>
+          <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>lock</span> Stock OK has been submitted; the verification is locked for the warehouse. The Operation Manager can correct it.
+        </div>
+      )}
+
       {(mayEdit || mayConfirm) && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
           {mayEdit && (
-            <button className="btn bsm bo" disabled={busy || !dirty} onClick={() => save()} title="Save the marks made so far — partial dispatch is fine">
-              <span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Dispatch Items
+            <button className="btn bsm bo" disabled={busy || !dirty} onClick={() => save()} title="Save the marks made so far">
+              <span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save Verification
             </button>
           )}
           {mayEdit && po.dispatchStatus !== DISPATCH_STATUS.COMPLETED && (
-            <button className="btn bsm bp" disabled={busy} onClick={complete} title="Material Dispatch Completed — sends the list of dispatched items to the Operations Manager">
-              <span className="material-icons-round" style={{ fontSize: 16 }}>send</span> OK &amp; Send
+            <button className="btn bsm bp" disabled={busy} onClick={complete} title="Stock OK — submits the verification to the Operations Manager and locks it for the warehouse">
+              <span className="material-icons-round" style={{ fontSize: 16 }}>send</span> Stock OK
             </button>
           )}
           {mayConfirm && (
-            <button className="btn bsm bp" disabled={busy} onClick={confirm} style={{ background: '#1e8449' }} title="Operation Manager: accept the dispatch as reviewed">
-              <span className="material-icons-round" style={{ fontSize: 16 }}>verified</span> Confirm Dispatch
+            <button className="btn bsm bp" disabled={busy} onClick={confirm} style={{ background: '#1e8449' }} title="Operation Manager: accept the verified material for dispatch">
+              <span className="material-icons-round" style={{ fontSize: 16 }}>verified</span> Approval for Dispatch
             </button>
           )}
           {dirty && <span style={{ fontSize: '.76rem', color: '#d68910', alignSelf: 'center' }}>Unsaved marks</span>}
@@ -312,21 +427,21 @@ export default function DispatchPanel({ po, lead }) {
             <span className="material-icons-round" style={{ fontSize: 18, color: handover.step === 'received' ? '#1e8449' : handover.step === 'assigned' ? '#d68910' : 'var(--pri)' }}>
               {handover.step === 'received' ? 'how_to_reg' : handover.step === 'assigned' ? 'person_pin' : 'assignment_ind'}
             </span>
-            <strong style={{ fontSize: '.84rem' }}>Items Handover</strong>
+            <strong style={{ fontSize: '.84rem' }}>Assigned Person for Dispatch</strong>
             <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{handover.text}</span>
           </div>
 
           <div style={{ fontSize: '.78rem', color: 'var(--dark)', marginBottom: 6 }}>
-            <strong>Items sent by the warehouse ({sentItems.length}):</strong> {sentItems.join(', ') || 'none'}
+            <strong>Items verified by the warehouse ({sentItems.length}):</strong> {sentItems.join(', ') || 'none'}
           </div>
 
           {po.dispatchAssignedTo && (
             <div style={{ fontSize: '.78rem', color: 'var(--muted)', marginBottom: 6 }}>
-              Assigned to <strong style={{ color: 'var(--dark)' }}>{po.dispatchAssignedTo}</strong> by {po.dispatchAssignedBy || '-'} on {formatDate(po.dispatchAssignedAt)}
+              Assigned to <strong style={{ color: 'var(--dark)' }}>{po.dispatchAssignedTo}</strong> by {po.dispatchAssignedBy || '-'} on {formatDateTime(po.dispatchAssignedAt)}
               {po.dispatchAssignNote ? <> · Note: {po.dispatchAssignNote}</> : null}
               {po.dispatchReceivedAt
-                ? <><br /><span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Received by {po.dispatchReceivedBy || po.dispatchAssignedTo} on {formatDate(po.dispatchReceivedAt)}</span> — {stockDispatched(po) ? 'the final dispatch has been confirmed.' : 'the stock is deducted at the final dispatch confirmation below.'}</>
-                : <><br /><span style={{ color: '#d68910' }}>Awaiting their "I have received these items".</span></>}
+                ? <><br /><span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Handover received by {po.dispatchReceivedBy || po.dispatchAssignedTo} on {formatDateTime(po.dispatchReceivedAt)}</span>{Array.isArray(po.handoverItems) && handoverLines(po, po.handoverItems).length ? ` — ${handoverSummary(po, po.handoverItems).text}` : ''}</>
+                : <><br /><span style={{ color: '#d68910' }}>Awaiting their "Handover Received".</span></>}
             </div>
           )}
 
@@ -346,12 +461,88 @@ export default function DispatchPanel({ po, lead }) {
             </div>
           )}
 
+          {/* First handover: item by item, from the warehouse */}
           {mayReceive && (
-            <div style={{ marginTop: 8 }}>
-              <button className="btn bsm bp" disabled={busy} onClick={receive} style={{ background: '#1e8449' }} title="Confirm the dispatched items are with you — the Operations Manager is notified">
-                <span className="material-icons-round" style={{ fontSize: 16 }}>how_to_reg</span> I have received these items
-              </button>
+            <div style={{ marginTop: 10, border: '1px solid var(--bor)', borderRadius: 8, padding: 10 }}>
+              <div style={{ fontSize: '.82rem', fontWeight: 700, marginBottom: 6 }}><span className="material-icons-round" style={{ fontSize: 16, verticalAlign: '-3px', color: 'var(--pri)' }}>fact_check</span> Handover from the warehouse — check each item you received</div>
+              <HandoverTable lines={handoverLines(po, handMarks)} marksState={handMarks} setMarksState={setHandMarks} yesLabel="Received" noLabel="Missing" disabled={busy} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                <button className="btn bsm bp" disabled={busy} onClick={receive} style={{ background: '#1e8449' }} title="Confirm the items are with you — the Operations Manager and the warehouse are notified">
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>how_to_reg</span> Handover Received
+                </button>
+                {handoverIssue(po, handMarks) && <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{handoverIssue(po, handMarks)}</span>}
+              </div>
             </div>
+          )}
+          {handoverDone(po) && Array.isArray(po.handoverItems) && handoverLines(po, po.handoverItems).length > 0 && !mayReceive && (
+            <details style={{ marginTop: 6, fontSize: '.78rem' }}>
+              <summary style={{ cursor: 'pointer', color: 'var(--pri)' }}>Handover details ({handoverSummary(po, po.handoverItems).text})</summary>
+              <RecordedTable lines={handoverLines(po, po.handoverItems)} yesLabel="Received" noLabel="Missing" />
+            </details>
+          )}
+        </div>
+      )}
+
+      {/* ── The delivery at the customer's location ───────────────────────── */}
+      {(deliveryOpen(po) || deliveryDone(po)) && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--bor)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+            <span className="material-icons-round" style={{ fontSize: 18, color: deliveryDone(po) ? '#1e8449' : '#2980b9' }}>{deliveryDone(po) ? 'task_alt' : 'local_shipping'}</span>
+            <strong style={{ fontSize: '.84rem' }}>Delivery at the Customer Location</strong>
+            <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>
+              {deliveryDone(po)
+                ? `Delivered by ${po.deliveredBy || '-'} on ${formatDateTime(po.deliveredAt)}${po.deliveryLocation ? ' at ' + po.deliveryLocation : ''}`
+                : `${po.dispatchAssignedTo} transports the material to ${defaultDestination || 'the customer'} and confirms each item with photo proof`}
+            </span>
+          </div>
+
+          {deliveryDone(po) ? (
+            <>
+              {Array.isArray(po.deliveryItems) && <RecordedTable lines={handoverLines(po, po.deliveryItems)} yesLabel="Delivered" noLabel="Not delivered" />}
+              {po.deliveryNote ? <div style={{ fontSize: '.78rem', color: 'var(--muted)', marginTop: 4 }}>Note: {po.deliveryNote}</div> : null}
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 6 }}>
+                {(po.deliveryPhotos || []).filter(p => isSafeUrl(p.url)).map((p, i) => (
+                  <a key={i} href={p.url} target="_blank" rel="noreferrer" title={`Delivery proof ${i + 1}${p.at ? ' · ' + formatDateTime(p.at) : ''}`}>
+                    <img src={p.url} alt={`Delivery proof ${i + 1}`} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} />
+                  </a>
+                ))}
+              </div>
+            </>
+          ) : mayDeliver ? (
+            <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: 10 }}>
+              <HandoverTable lines={handoverLines(po, delivMarks)} marksState={delivMarks} setMarksState={setDelivMarks} yesLabel="Delivered" noLabel="Not delivered" disabled={busy} />
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
+                <div style={{ minWidth: 220, flex: 2 }}>
+                  <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Delivered at (location)</label>
+                  <input className="fi" value={deliveryLocation} onChange={e => setDeliveryLocation(e.target.value)} placeholder={defaultDestination || 'Customer / project location'} disabled={busy} />
+                </div>
+                <div style={{ minWidth: 180, flex: 1 }}>
+                  <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Note (optional)</label>
+                  <input className="fi" value={deliveryNote} onChange={e => setDeliveryNote(e.target.value)} placeholder="Received by, vehicle, …" disabled={busy} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label className="btn bsm bo" style={{ cursor: uploading ? 'wait' : 'pointer' }} title="Photograph the delivered material at the location">
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>add_a_photo</span> {uploading ? 'Uploading…' : 'Add delivery photo'}
+                  <input type="file" accept="image/*" capture="environment" multiple style={{ display: 'none' }} disabled={uploading || busy} onChange={e => { addPhotos(e.target.files); e.target.value = ''; }} />
+                </label>
+                {photos.map((p, i) => (
+                  <span key={i} style={{ position: 'relative', display: 'inline-block' }}>
+                    <img src={p.url} alt={`Proof ${i + 1}`} style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} />
+                    <button type="button" className="btn bsm bo" style={{ position: 'absolute', top: -6, right: -6, padding: 0, width: 20, height: 20, borderRadius: 10, lineHeight: '18px' }} title="Remove" onClick={() => setPhotos(ps => ps.filter((_, j) => j !== i))} disabled={busy}>×</button>
+                  </span>
+                ))}
+                {!photos.length && <span style={{ fontSize: '.74rem', color: '#c0392b' }}>At least one photo is required as proof of delivery.</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 10 }}>
+                <button className="btn bsm bp" disabled={busy || uploading || !!deliveryIssue(po, delivMarks, photos)} onClick={deliver} style={{ background: '#2980b9' }} title={deliveryIssue(po, delivMarks, photos) || 'Record the delivery — the Operations Manager and the warehouse are notified'}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>task_alt</span> Delivery Confirmed
+                </button>
+                {deliveryIssue(po, delivMarks, photos) && <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{deliveryIssue(po, delivMarks, photos)}</span>}
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: '.78rem', color: 'var(--muted)' }}>Awaiting the delivery confirmation and photo proof from {po.dispatchAssignedTo || 'the assigned person'}.</div>
           )}
         </div>
       )}
@@ -420,6 +611,24 @@ export default function DispatchPanel({ po, lead }) {
           )}
         </div>
       )}
+
+      {/* ── The movement history ───────────────────────────────────────────── */}
+      <div style={{ marginTop: 12, paddingTop: 8, borderTop: '1px dashed var(--bor)' }}>
+        <button type="button" className="btn bsm bo" onClick={() => setShowHistory(h => !h)} style={{ border: 'none', padding: '2px 0', color: 'var(--pri)' }}>
+          <span className="material-icons-round" style={{ fontSize: 16 }}>{showHistory ? 'expand_less' : 'history'}</span> Material movement history ({timeline.filter(s => s.done).length} of {timeline.length} stages)
+        </button>
+        {showHistory && (
+          <ol style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: '.78rem' }}>
+            {timeline.map(s => (
+              <li key={s.key} style={{ marginBottom: 4, color: s.done ? 'var(--dark)' : 'var(--muted)' }}>
+                <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px', color: s.done ? '#1e8449' : 'var(--muted)', marginRight: 4 }}>{s.done ? 'check_circle' : 'radio_button_unchecked'}</span>
+                <strong>{s.label}</strong>
+                {s.done ? <> — {s.by || '-'}{s.at ? `, ${formatDateTime(s.at)}` : ''}{s.detail ? ` · ${s.detail}` : ''}</> : <> — pending</>}
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
     </div>
   );
 }

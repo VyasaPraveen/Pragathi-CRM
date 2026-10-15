@@ -11,6 +11,7 @@
 // ============================================================================
 
 import { canSeeLead, canSeePaymentRequest, isLeaveLeader, PR_STATUS, normalizeRole } from './permissions';
+import { assignedMaterialsOpenFor } from './dispatchFlow';
 import { hasAccess } from './helpers';
 
 const lc = (v) => String(v || '').trim().toLowerCase();
@@ -46,7 +47,7 @@ export function badgeCounts(data, user, role) {
   // Leads — unchanged in meaning from the badge that was already there, but
   // now counted over the leads this person is allowed to see.
   const leadCount = leads.filter(l =>
-    l.status === 'Interested' && canSeeLead(l, user, role, users, team)).length;
+    l.status === 'Interested' && canSeeLead(l, user, role, users, team, leadPOs)).length;
 
   const paymentRequestCount = paymentRequests.filter(pr =>
     pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED &&
@@ -77,6 +78,7 @@ export function badgeCounts(data, user, role) {
 
   return {
     leads: leadCount,
+    assigned_materials: assignedMaterialsOpenFor(leadPOs, user).length,
     payment_requests: paymentRequestCount,
     leave: leaveCount,
     tasks: taskCount,

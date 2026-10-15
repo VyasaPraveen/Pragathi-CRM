@@ -166,7 +166,7 @@ export default function Installations() {
                       : <span style={{ color: '#d68910', fontSize: '.76rem' }}><br />Awaiting the site visit</span>)}
                 </>} />}
                 <DetailItem label="Roof Type" value={inst.roofType} /><DetailItem label="Floors" value={inst.floors} />
-                <DetailItem label="Structure" value={inst.structureType} /><DetailItem label="Start Date" value={formatDate(inst.startDate)} />
+                <DetailItem label="Type of Installation" value={inst.structureType} /><DetailItem label="Start Date" value={formatDate(inst.startDate)} />
                 <DetailItem label="Total Days" value={inst.totalDays} /><DetailItem label="Team Size" value={inst.numPeople} />
                 <DetailItem label="Team Leader" value={inst.teamLeader} />
                 {Array.isArray(inst.teamMembers) && inst.teamMembers.length > 0 && <DetailItem label="Team Members" value={inst.teamMembers.join(', ')} />}
@@ -349,7 +349,7 @@ function InstallationModal({ data, id, users, onSave, onClose }) {
               <small style={{ display: 'block', marginTop: 4, color: 'var(--muted)' }}>Assigned by {d.siteVisitAssignedBy || '-'} on {formatDate(d.siteVisitAssignedAt)}{d.siteVisitReportedAt ? ` · visit reported done ${formatDate(d.siteVisitReportedAt)}` : ''}</small>
             )}
           </div><div className="fg"><label>Site Visit Status</label><select className="fi" value={f.siteVisitStatus} onChange={e => set('siteVisitStatus', e.target.value)}><option>Not Visited</option><option>Visited</option></select></div></div>
-          <div className="fr3"><div className="fg"><label>Roof Type</label><select className="fi" value={f.roofType} onChange={e => set('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option></select></div><div className="fg"><label>Floors</label><input type="number" className="fi" value={f.floors} onChange={e => set('floors', e.target.value)} /></div><div className="fg"><label>Structure</label><select className="fi" value={f.structureType} onChange={e => set('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div></div>
+          <div className="fr3"><div className="fg"><label>Roof Type</label><select className="fi" value={f.roofType} onChange={e => set('roofType', e.target.value)}><option>RCC</option><option>Sheet</option><option>Tile</option></select></div><div className="fg"><label>Floors</label><input type="number" className="fi" value={f.floors} onChange={e => set('floors', e.target.value)} /></div><div className="fg"><label>Type of Installation</label><select className="fi" value={f.structureType} onChange={e => set('structureType', e.target.value)}><option>Flat</option><option>Sloped</option></select></div></div>
           <div className="fr"><div className="fg"><label>Start Date</label><input type="date" className="fi" value={f.startDate} onChange={e => set('startDate', e.target.value)} /></div><div className="fg"><label>Total Days</label><input type="number" className="fi" value={f.totalDays} onChange={e => set('totalDays', e.target.value)} /></div></div>
 
           {/* R6.4 (8-Oct): the team. The leader is chosen from the system's

@@ -26,9 +26,44 @@ export function isMine(record, { email, name } = {}) {
 // Order two marks by when they were actually recorded.
 const byTime = (a, b) => new Date(a.createdAt || 0) - new Date(b.createdAt || 0);
 
+// ── Duration rules (Req 5, 15-Oct) ──────────────────────────────────────────
+// A day is a Full Day from 8 hours, a Half Day from 5, and a Short Day below
+// that. The two thresholds are the Owner's / Admin's to set in Settings
+// (attendanceRules); these are the defaults when nothing has been set.
+export const DEFAULT_ATTENDANCE_RULES = { halfDayHours: 5, fullDayHours: 8 };
+export const FULL_DAY = 'Full Day';
+export const HALF_DAY = 'Half Day';
+export const SHORT_DAY = 'Short Day';
+
+// The rules as saved in company settings, with the defaults filling any gap
+// and nonsense (a half day longer than a full day, zero, text) put right.
+export function attendanceRulesFrom(settings) {
+  const s = (settings && settings.attendanceRules) || {};
+  let half = Number(s.halfDayHours), full = Number(s.fullDayHours);
+  if (!(half > 0)) half = DEFAULT_ATTENDANCE_RULES.halfDayHours;
+  if (!(full > 0)) full = DEFAULT_ATTENDANCE_RULES.fullDayHours;
+  if (half > full) half = full;
+  return { halfDayHours: half, fullDayHours: full };
+}
+
+// What a day's hours amount to. Null when the day has no complete pair of
+// marks yet, so an unfinished day is never counted as short.
+export function dayStanding(hours, rules) {
+  if (hours == null || isNaN(hours)) return null;
+  const r = attendanceRulesFrom({ attendanceRules: rules });
+  if (hours >= r.fullDayHours) return FULL_DAY;
+  if (hours >= r.halfDayHours) return HALF_DAY;
+  return SHORT_DAY;
+}
+
+// How much of a day's leave a standing costs: a Short Day is a day's leave, a
+// Half Day half of one, a Full Day none. Worked out, never stored, so the
+// same day can never be deducted twice.
+export const leaveCostOf = (standing) => (standing === SHORT_DAY ? 1 : standing === HALF_DAY ? 0.5 : 0);
+
 // Fold a person's marks into one row per day: first check-in, last check-out,
 // the hours between them, and what the day amounts to.
-export function foldAttendanceDays(records, who) {
+export function foldAttendanceDays(records, who, rules) {
   const byDate = new Map();
   (records || []).forEach(r => {
     if (!r || !r.date || !isMine(r, who)) return;
@@ -50,20 +85,29 @@ export function foldAttendanceDays(records, who) {
     const status = inMark && outMark ? 'Complete'
       : inMark ? 'Checked in'
         : outMark ? 'Check-out only' : '-';
-    return { date: day.date, marks: ordered, in: inMark, out: outMark, hours, present: !!inMark, status };
+    const standing = dayStanding(hours, rules);
+    return { date: day.date, marks: ordered, in: inMark, out: outMark, hours, present: !!inMark, status, standing, leaveCost: leaveCostOf(standing) };
   }).sort((a, b) => (a.date < b.date ? 1 : -1));   // newest first
 }
 
-// The month's figures, straight off the folded days.
+// The month's figures, straight off the folded days. The leave counter is the
+// days' leave cost added up (a Short Day one, a Half Day half) — a figure
+// read off the records each time, so nothing is deducted twice.
 export function attendanceSummary(days) {
   const list = days || [];
   const worked = list.filter(d => d.hours != null);
   const totalHours = worked.reduce((sum, d) => sum + d.hours, 0);
+  const fullDays = list.filter(d => d.standing === FULL_DAY).length;
+  const halfDays = list.filter(d => d.standing === HALF_DAY).length;
+  const shortDays = list.filter(d => d.standing === SHORT_DAY).length;
   return {
     present: list.filter(d => d.present).length,
     incomplete: list.filter(d => d.present && !d.out).length,
     totalHours: Math.round(totalHours * 10) / 10,
     avgHours: worked.length ? Math.round((totalHours / worked.length) * 10) / 10 : 0,
+    fullDays, halfDays, shortDays,
+    leaveCounter: Math.round(list.reduce((n, d) => n + (d.leaveCost || 0), 0) * 10) / 10,
+    daysCredited: Math.round((fullDays + halfDays * 0.5) * 10) / 10,
   };
 }
 
@@ -121,9 +165,9 @@ export function detectInAppBrowser(ua) {
 // own view of themselves.
 
 // One person, one month: the days they marked and what they add up to.
-export function memberMonth(records, member, month) {
+export function memberMonth(records, member, month, rules) {
   const who = { email: member && member.email, name: member && member.displayName };
-  const all = foldAttendanceDays(records, who);
+  const all = foldAttendanceDays(records, who, rules);
   const days = all.filter(d => String(d.date || '').startsWith(month));
   return {
     email: member && member.email,
@@ -137,8 +181,8 @@ export function memberMonth(records, member, month) {
 
 // The whole team for a month, worst-attended first so the gaps are at the top
 // rather than buried at the bottom of an alphabetical list.
-export function teamMonthReport(records, members, month) {
-  const rows = (members || []).map(m => memberMonth(records, m, month));
+export function teamMonthReport(records, members, month, rules) {
+  const rows = (members || []).map(m => memberMonth(records, m, month, rules));
   rows.sort((a, b) => (a.present - b.present) || a.name.localeCompare(b.name));
   return {
     month,
@@ -147,6 +191,10 @@ export function teamMonthReport(records, members, month) {
     totalDays: rows.reduce((n, r) => n + r.present, 0),
     totalHours: Math.round(rows.reduce((n, r) => n + r.totalHours, 0) * 10) / 10,
     incomplete: rows.reduce((n, r) => n + r.incomplete, 0),
+    fullDays: rows.reduce((n, r) => n + (r.fullDays || 0), 0),
+    halfDays: rows.reduce((n, r) => n + (r.halfDays || 0), 0),
+    shortDays: rows.reduce((n, r) => n + (r.shortDays || 0), 0),
+    leaveCounter: Math.round(rows.reduce((n, r) => n + (r.leaveCounter || 0), 0) * 10) / 10,
   };
 }
 

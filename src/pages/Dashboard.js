@@ -77,11 +77,11 @@ function GradientStatCard({ gradient, icon, value, label, onClick, subtext }) {
 export default function Dashboard() {
   const navigate = useNavigate();
   const { role, designation, user } = useAuth();
-  const { leads: allLeads, customers, installations, income, expenses, materials, reminders, employeeTasks, team, users } = useData();
+  const { leads: allLeads, customers, installations, income, expenses, materials, reminders, employeeTasks, team, users, leadPOs } = useData();
 
   // The dashboard counts only the leads this person is allowed to see, so the
   // figures match the Leads screen instead of the whole company's book.
-  const leads = useMemo(() => allLeads.filter(l => canSeeLead(l, user, role, users, team)),
+  const leads = useMemo(() => allLeads.filter(l => canSeeLead(l, user, role, users, team, leadPOs)),
     [allLeads, user, role, users, team]);
 
   const stats = useMemo(() => {

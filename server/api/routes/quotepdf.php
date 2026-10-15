@@ -38,6 +38,38 @@ function qpdf_user_phone(string $displayName): string {
   }
 }
 
+// The role on the account of the person with this display name, as the word
+// printed under their name on page 1 ("Executive", "Sales Manager", ...), or
+// '' when there is no such account. Req 6 (15-Oct): the role is read from the
+// account each time, never typed in.
+function qpdf_user_role(string $displayName): string {
+  $name = strtolower(trim($displayName));
+  if ($name === '') return '';
+  try {
+    $st = db()->prepare('SELECT role FROM `users` WHERE LOWER(display_name) = ? LIMIT 1');
+    $st->execute([$name]);
+    $r = $st->fetch();
+    return $r ? qpdf_role_label((string)($r['role'] ?? '')) : '';
+  } catch (Throwable $e) {
+    error_log('quotation pdf: could not read the signatory role: ' . $e->getMessage());
+    return '';
+  }
+}
+// The role keys as the account stores them → the words the customer reads.
+// Mirrors roleLabel() in src/services/permissions.js; the Owner's account
+// signs as the Owner.
+function qpdf_role_label(string $role): string {
+  static $labels = [
+    'executive' => 'Executive', 'technical_manager' => 'Technical Manager', 'operation_manager' => 'Operation Manager',
+    'accountant' => 'Accountant', 'admin' => 'Admin', 'management' => 'Management', 'bco' => 'BCO',
+    'technician' => 'Technician', 'team_leader' => 'Team Leader', 'sales_manager' => 'Sales Manager',
+    'warehouse_admin' => 'Warehouse Admin', 'super_admin' => 'Owner',
+    // the legacy keys some older accounts still carry
+    'manager' => 'Operation Manager', 'coordinator' => 'BCO', 'engineer' => 'Technician', 'staff' => 'Executive',
+  ];
+  return $labels[$role] ?? ucwords(str_replace('_', ' ', $role));
+}
+
 function handle_quotation_pdf(string $method): void {
   $claims = require_auth();
   if (!in_array($method, ['GET', 'POST'], true)) fail(405, 'Method not allowed');
@@ -60,6 +92,11 @@ function handle_quotation_pdf(string $method): void {
   // own account here; the quotation record itself is not changed.
   if (trim((string)($q['executivePhone'] ?? '')) === '' && trim((string)($q['executiveName'] ?? '')) !== '') {
     $q['executivePhone'] = qpdf_user_phone((string)$q['executiveName']);
+  }
+  // Req 6 (15-Oct): and their role, printed under the name — Executive, Sales
+  // Manager, whatever the account says — fetched the same way.
+  if (trim((string)($q['executiveName'] ?? '')) !== '') {
+    $q['executiveRole'] = qpdf_user_role((string)$q['executiveName']);
   }
 
   // The artwork lives beside the app, not in the API folder.
