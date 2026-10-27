@@ -28,7 +28,8 @@ function PasswordField({ label, value, onChange, placeholder, autoComplete, onCa
   return (
     <div className="fg">
       <label>{label}</label>
-      <div className="pw">
+      <div className="pw lg-ic">
+        <span className="material-icons-round lg-icon" aria-hidden="true">lock</span>
         <input
           type={show ? 'text' : 'password'}
           className="fi"
@@ -179,34 +180,50 @@ export default function Login() {
       ? 'Register for access — an admin will approve your account.'
       : 'Enter your email and your reset request will be sent to an administrator.';
 
+  // An icon on the left of a field.
+  const Field = ({ label, icon, hint, children }) => (
+    <div className="fg">
+      <label>{label}</label>
+      <div className="lg-ic"><span className="material-icons-round lg-icon" aria-hidden="true">{icon}</span>{children}</div>
+      {hint && <small className="lg-hint">{hint}</small>}
+    </div>
+  );
+  const year = new Date().getFullYear();
+
   return (
     <div className="lg">
-      {/* Brand panel */}
+      {/* Brand panel: the moving background, the emblem and what the app does */}
       <aside className="lg-brand" aria-hidden="true">
-        <span className="lg-glow lg-glow-1" />
-        <span className="lg-glow lg-glow-2" />
+        <span className="lg-orb lg-o1" /><span className="lg-orb lg-o2" /><span className="lg-orb lg-o3" />
+        <span className="lg-sweep" />
+        <svg className="lg-lines" viewBox="0 0 600 600" preserveAspectRatio="xMidYMid slice" focusable="false">
+          <circle className="lg-sun" cx="300" cy="520" r="26" />
+          <path className="lg-bolt" d="M330 40 260 250h70l-60 210 140-260h-78l68-160z" />
+          <circle className="lg-ripple" cx="300" cy="520" r="40" />
+          <circle className="lg-ripple lg-d2" cx="300" cy="520" r="40" />
+          <circle className="lg-ripple lg-d3" cx="300" cy="520" r="40" />
+        </svg>
         <div className="lg-brand-inner">
-          <img src="/logo-full.png" alt="Pragathi Power Solutions" onError={e => e.target.style.display = 'none'} />
-          <h1 className="lg-brand-title">Solar Business Management CRM</h1>
-          <p className="lg-brand-sub">Everything your solar business needs — leads, installations, teams and revenue — in one place.</p>
+          <div className="lg-emblem-wrap"><img className="lg-emblem" src="/icon-192.png" alt="" width="96" height="96" onError={e => e.target.style.display = 'none'} /></div>
+          <h1 className="lg-brand-title">Pragathi Power Solutions <span>Solar CRM · Since 2012</span></h1>
+          <p className="lg-brand-sub">Power from the Sun… to power every one — now in your pocket.</p>
           <ul className="lg-feats">
-            <li><span className="material-icons-round">bolt</span> Track leads &amp; installations end to end</li>
-            <li><span className="material-icons-round">groups</span> Manage teams, tasks &amp; workflows</li>
-            <li><span className="material-icons-round">insights</span> Live reports, revenue &amp; reminders</li>
+            <li style={{ '--i': 0 }}><span className="material-icons-round">bolt</span><div><b>Leads to installation, end to end</b>Quotations, purchase orders, dispatch and handovers in one flow</div></li>
+            <li style={{ '--i': 1 }}><span className="material-icons-round">groups</span><div><b>Your team in one place</b>Attendance, tasks, leave and planning for everyone</div></li>
+            <li style={{ '--i': 2 }}><span className="material-icons-round">insights</span><div><b>Live stock and revenue</b>Materials, approvals and reports, always current</div></li>
           </ul>
         </div>
-        <p className="lg-brand-foot">Pragathi Power Solutions &copy; {new Date().getFullYear()}</p>
       </aside>
 
       {/* Form panel */}
       <main className="lg-main">
         <div className="lg-card">
-          <img className="lg-logo-sm" src="/logo-full.png" alt="PPS" onError={e => e.target.style.display = 'none'} />
+          <img className="lg-logo" src="/logo-full.png" alt="Pragathi Power Solutions" onError={e => e.target.style.display = 'none'} />
           <h2 className="lg-head">{heading}</h2>
           <p className="lg-subhead">{subheading}</p>
 
           {error && (
-            <div className="aerr show" role="alert">
+            <div className="aerr show lg-shake" role="alert" key={error}>
               <span className="material-icons-round" style={{ fontSize: 18 }}>error</span>
               <span>{error}</span>
             </div>
@@ -219,11 +236,10 @@ export default function Login() {
           )}
 
           {mode === 'login' && (
-            <form onSubmit={handleLogin}>
-              <div className="fg">
-                <label>Email Address</label>
-                <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@pragathipower.com" autoComplete="email" autoFocus required />
-              </div>
+            <form onSubmit={handleLogin} noValidate>
+              <Field label="Email Address" icon="mail">
+                <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@pragathipower.com" autoComplete="email" autoCapitalize="none" spellCheck="false" autoFocus required />
+              </Field>
               <PasswordField label="Password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Enter password" autoComplete="current-password" onCapsLock={onCapsLock} />
               {capsLock && (
                 <p className="lg-caps"><span className="material-icons-round" style={{ fontSize: 15 }}>keyboard_capslock</span> Caps Lock is on</p>
@@ -232,9 +248,10 @@ export default function Login() {
                 <span />
                 <button type="button" className="lg-link" onClick={() => switchMode('reset')}>Forgot password?</button>
               </div>
-              <button type="submit" className="btn bp blk blg" disabled={loading} style={{ marginTop: 8 }}>
-                {loading ? <><span className="ssm"></span> Signing in...</> : <><span className="material-icons-round" style={{ fontSize: 20 }}>login</span> Sign In</>}
+              <button type="submit" className="btn bp blk blg lg-shine" disabled={loading} style={{ marginTop: 8 }}>
+                {loading ? <><span className="ssm"></span> Signing in...</> : <>Sign In <span className="material-icons-round lg-go" style={{ fontSize: 20 }}>arrow_forward</span></>}
               </button>
+              <div className="lg-secure"><span className="material-icons-round" style={{ fontSize: 15 }}>verified_user</span> Secure sign-in — your data stays on Pragathi's own server</div>
               <p className="lg-switch">
                 Don't have an account?{' '}
                 <button type="button" onClick={() => switchMode('signup')} className="lg-link">Sign Up</button>
@@ -244,34 +261,28 @@ export default function Login() {
 
           {mode === 'signup' && (
             <form onSubmit={handleSignup}>
-              <div className="fg">
-                <label>Full Name</label>
+              <Field label="Full Name" icon="person">
                 <input type="text" className="fi" value={name} onChange={e => setName(e.target.value)} placeholder="Enter your full name" autoComplete="name" required />
-              </div>
-              <div className="fg">
-                <label>Email Address</label>
-                <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@pragathipower.com" autoComplete="email" required />
-              </div>
-              <div className="fg">
-                <label>Phone Number</label>
+              </Field>
+              <Field label="Email Address" icon="mail">
+                <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@pragathipower.com" autoComplete="email" autoCapitalize="none" spellCheck="false" required />
+              </Field>
+              <Field label="Phone Number" icon="phone_iphone" hint="Used to verify your identity with the team">
                 <input type="tel" className="fi" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Enter your mobile number" autoComplete="tel" required />
-                <small className="lg-hint">Used to verify your identity with the team</small>
-              </div>
+              </Field>
               <PasswordField label="Password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Min 8 chars, upper+lower+number" autoComplete="new-password" onCapsLock={onCapsLock} />
               <PasswordField label="Confirm Password" value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="Re-enter password" autoComplete="new-password" onCapsLock={onCapsLock} />
               {capsLock && (
                 <p className="lg-caps"><span className="material-icons-round" style={{ fontSize: 15 }}>keyboard_capslock</span> Caps Lock is on</p>
               )}
-              <div className="fg">
-                <label>Designation</label>
+              <Field label="Designation" icon="badge" hint="Access will be granted after admin approval">
                 <select className="fi" value={designation} onChange={e => setDesignation(e.target.value)}>
                   {DESIGNATIONS.filter(d => d.role !== 'admin' && d.role !== 'super_admin').map(d => (
                     <option key={d.label} value={d.label}>{d.label}</option>
                   ))}
                 </select>
-                <small className="lg-hint">Access will be granted after admin approval</small>
-              </div>
-              <button type="submit" className="btn bp blk blg" disabled={loading} style={{ marginTop: 8 }}>
+              </Field>
+              <button type="submit" className="btn bp blk blg lg-shine" disabled={loading} style={{ marginTop: 8 }}>
                 {loading ? <><span className="ssm"></span> Creating account...</> : <><span className="material-icons-round" style={{ fontSize: 20 }}>person_add</span> Sign Up</>}
               </button>
               <p className="lg-switch">
@@ -282,13 +293,12 @@ export default function Login() {
           )}
 
           {mode === 'reset' && (
-            <form onSubmit={handleReset}>
-              <div className="fg">
-                <label>Email Address</label>
-                <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@pragathipower.com" autoComplete="email" autoFocus required />
-              </div>
-              <button type="submit" className="btn bp blk blg" disabled={loading} style={{ marginTop: 8 }}>
-                {loading ? <><span className="ssm"></span> Sending link...</> : <><span className="material-icons-round" style={{ fontSize: 20 }}>mail</span> Send Reset Link</>}
+            <form onSubmit={handleReset} noValidate>
+              <Field label="Email Address" icon="mail">
+                <input type="email" className="fi" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@pragathipower.com" autoComplete="email" autoCapitalize="none" spellCheck="false" autoFocus required />
+              </Field>
+              <button type="submit" className="btn bp blk blg lg-shine" disabled={loading} style={{ marginTop: 8 }}>
+                {loading ? <><span className="ssm"></span> Sending...</> : <><span className="material-icons-round" style={{ fontSize: 20 }}>mail</span> Send Reset Request</>}
               </button>
               <p className="lg-switch">
                 <button type="button" onClick={() => switchMode('login')} className="lg-link">
@@ -298,7 +308,7 @@ export default function Login() {
             </form>
           )}
         </div>
-        <p className="lg-foot-sm">Pragathi Power Solutions &copy; {new Date().getFullYear()}</p>
+        <p className="lg-foot-sm">Pragathi Power Solutions &copy; {year}</p>
       </main>
     </div>
   );
