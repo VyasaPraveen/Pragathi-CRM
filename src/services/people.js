@@ -70,7 +70,27 @@ export function matchScore(name, query) {
   if (words.some(w => w.startsWith(q))) return 2;
   if (n.includes(q)) return 3;                        // somewhere inside
   if (isSubsequence(n, q)) return 4;                  // letters in order, spread out
+  // Every word of the query is the start of some word of the name, in any
+  // order: "cable dc" finds "DC Cable 4 sq mm" (27-Oct, Req 4D).
+  const qWords = String(query || '').toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  if (qWords.length > 1 && qWords.every(qw => words.some(w => w.startsWith(qw)))) return 5;
+  // One letter wrong, missing or extra in a word of at least four letters:
+  // "soler" still finds "Solar PV Module".
+  if (q.length >= 4 && words.some(w => w.length >= 4 && editDistance(q, w.slice(0, q.length)) <= 1)) return 6;
   return null;
+}
+
+// The number of single-letter edits between two short strings.
+function editDistance(a, b) {
+  const m = a.length, n = b.length;
+  if (Math.abs(m - n) > 2) return 99;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const cur = [i];
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[n];
 }
 
 // The names that answer `query`, best first, then alphabetically so the order

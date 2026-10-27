@@ -811,6 +811,35 @@ export default function QuotationPanel({ lead }) {
 function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) {
   const [f, setF] = useState(form.data);
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  // Req 6 (27-Oct): the BOM as a reusable template. Templates live in the
+  // same `bomTemplates` collection as the purchase order's, marked
+  // kind 'quotation' so neither list shows the other's. Optional: a
+  // quotation made without one is exactly as before.
+  const { bomTemplates: allTemplates } = useData();
+  const { toast: tplToast } = useToast();
+  const quoteTemplates = (allTemplates || []).filter(t => t && t.kind === 'quotation');
+  const [tplSaving, setTplSaving] = useState(false);
+  const saveTemplate = async () => {
+    const rows = (f.bomItems || []).filter(r => r && String(r.material || '').trim());
+    if (!rows.length) { tplToast('Add at least one material to the BOM first', 'er'); return; }
+    const name = window.prompt('Name for this BOM template (e.g. "3 kW residential"):');
+    if (!name || !name.trim()) return;
+    setTplSaving(true);
+    try {
+      await addDocument('bomTemplates', { name: name.trim(), kind: 'quotation', kw: f.kw || '', rows: rows.map(r => ({ material: r.material, specification: r.specification || '', quantity: r.quantity || '', warranty: r.warranty || 'NA' })) });
+      tplToast(`Template "${name.trim()}" saved — pick it from "Load template" on the next quotation`);
+    } catch (e) { tplToast(e.message, 'er'); }
+    finally { setTplSaving(false); }
+  };
+  const loadTemplate = (id) => {
+    const t = quoteTemplates.find(x => x.id === id);
+    if (!t) return;
+    if ((f.bomItems || []).some(r => r && String(r.material || '').trim()) && !window.confirm(`Replace the current BOM with the ${(t.rows || []).length} materials of template "${t.name}"?`)) return;
+    // Loaded rows are editable and removable, like rows added by hand.
+    set('bomItems', (t.rows || []).map(r => ({ ...EMPTY_BOM_ROW, ...r, added: true })));
+    set('bomSource', 'template');
+    tplToast(`Template "${t.name}" loaded — ${(t.rows || []).length} materials`);
+  };
   const isRevision = form.mode === 'revise';
   const isEdit = form.mode === 'edit';
   const calc = calcQuotation(f);
@@ -901,8 +930,20 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
           <div className="fg" style={{ marginTop: 12 }}>
             <label>Bill of Materials <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>
               {(f.bomItems || []).length} material{(f.bomItems || []).length === 1 ? '' : 's'} ·{' '}
-              {f.bomSource === 'po' ? 'taken from this lead’s purchase order(s)' : 'standard template — replaced by the actual PO / BOM later'}
+              {f.bomSource === 'po' ? 'taken from this lead’s purchase order(s)' : f.bomSource === 'template' ? 'from a saved template — replaced by the actual PO / BOM later' : 'standard template — replaced by the actual PO / BOM later'}
             </span></label>
+            {/* Req 6 (27-Oct): save this BOM for reuse, or load one saved before. Optional. */}
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', margin: '4px 0 8px' }}>
+              {quoteTemplates.length > 0 && (
+                <select className="fi" style={{ width: 'auto', padding: '5px 8px', fontSize: '.8rem' }} value="" onChange={e => { if (e.target.value) loadTemplate(e.target.value); }}>
+                  <option value="">Load template…</option>
+                  {quoteTemplates.map(t => <option key={t.id} value={t.id}>{t.name} ({(t.rows || []).length} items{t.kw ? `, ${t.kw} kW` : ''})</option>)}
+                </select>
+              )}
+              <button type="button" className="btn bsm bo" onClick={saveTemplate} disabled={tplSaving || busy} title="Save these BOM items as a template for future quotations">
+                <span className="material-icons-round" style={{ fontSize: 16 }}>bookmark_add</span> Save Template
+              </button>
+            </div>
             <div className="tw">
               <table style={{ fontSize: '.8rem' }}>
                 <thead><tr><th style={{ width: 38 }}>#</th><th>Material</th><th>Specification</th><th>Qty</th><th>Warranty</th></tr></thead>

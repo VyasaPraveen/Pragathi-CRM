@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Routes, Route, Navigate, useNavigate } from 'react-router-dom';
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { hasAccess } from '../services/helpers';
+import { hasAccess, moduleRoute } from '../services/helpers';
+import { useData } from '../context/DataContext';
+import { updateDocument } from '../services/firestore';
+import { notificationsForRoute } from '../services/badges';
 import { hasModule } from '../services/permissions';
 import { registerPush } from '../services/push';
 import DueAlerts from './DueAlerts';
@@ -50,6 +53,21 @@ export default function AppLayout() {
   const [sbOpen, setSbOpen] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const { user } = useAuth();
+  const { notifications } = useData();
+
+  // Req 7 (27-Oct): opening a section reads its notifications, so the
+  // sidebar count for it goes to zero and stays there. Only this person's
+  // unread notifications about this route are touched; each is written once.
+  const marking = React.useRef(new Set());
+  useEffect(() => {
+    const due = notificationsForRoute(notifications, user, pathname, moduleRoute).filter(n => !marking.current.has(n.id));
+    if (!due.length) return;
+    due.forEach(n => marking.current.add(n.id));
+    Promise.all(due.map(n => updateDocument('notifications', n.id, { read: true }).catch(() => {})))
+      .finally(() => due.forEach(n => marking.current.delete(n.id)));
+  }, [pathname, notifications, user]);
 
   // When a tapped push cannot navigate this tab itself, the service worker asks
   // the app to route instead. Only in-app paths are accepted.

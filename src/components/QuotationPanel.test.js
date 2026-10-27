@@ -301,9 +301,12 @@ describe('DispatchPanel — final dispatch', () => {
     expect(text).toContain('10 Nos');
     asUser('om@x.com', 'operation_manager');
     expect(render(<DispatchPanel po={received} lead={lead} />)).toContain('Confirm Final Dispatch');
+    // 27-Oct (Req 4A): the warehouse may confirm too; a BCO waits.
     asUser('wh@x.com', 'warehouse_admin');
+    expect(render(<DispatchPanel po={received} lead={lead} />)).toContain('Confirm Final Dispatch');
+    asUser('bco@x.com', 'bco');
     text = render(<DispatchPanel po={received} lead={lead} />);
-    expect(text).toContain('Awaiting the final dispatch confirmation');
+    expect(text).toContain('Awaiting the dispatch confirmation');
     expect(text).not.toContain('Confirm Final Dispatch');
     // Not before receipt.
     asUser('revanth@x.com', 'executive');
@@ -312,10 +315,12 @@ describe('DispatchPanel — final dispatch', () => {
     const done = { ...received, stockDispatchedAt: '2026-10-08T08:00:00Z', stockDispatchedBy: 'Revanth Reddy', stockDispatchRef: 'DSP-261008-ZZZZZ',
       stockDispatchItems: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos', previousBalance: 16, newBalance: 10 }] };
     text = render(<DispatchPanel po={done} lead={lead} />);
-    expect(text).toContain('Stock deducted');
+    expect(text).toContain('Dispatch 1');
     expect(text).toContain('DSP-261008-ZZZZZ');
     expect(text).toContain('16 → 10');
+    expect(text).toContain('All items dispatched');
     expect(text).not.toContain('Confirm Final Dispatch');
+    expect(text).not.toContain('Confirm Partial Dispatch');
   });
   test('survives no materials loaded yet', () => {
     mockData = { users, materials: undefined };
@@ -364,7 +369,7 @@ describe('DispatchPanel — Stock OK lock, delivery and history', () => {
     expect(text).toContain('Delivered by Revanth Reddy');
     expect(text).toContain('Nellore site');
     expect(text).not.toContain('Add delivery photo');
-    expect(text).toContain('Material movement history (7 of 8 stages)');
+    expect(text).toContain('Material movement history (7 of 9 stages)');
   });
 });
 
@@ -392,5 +397,84 @@ describe('Assigned Materials page', () => {
     mockData = { leadPOs: [], leads: [], users, materials: [] };
     asUser('revanth@x.com', 'executive');
     expect(render(<AssignedMaterials />)).toContain('No materials assigned to you');
+  });
+});
+
+
+// 27-Oct: partial dispatch, extra items, drafts, returns, yard items.
+describe('DispatchPanel — partial dispatch, returns and yard items', () => {
+  const materials = [{ id: 'M1', name: 'Solar PV Module', unit: 'Nos', balance: 10 }, { id: 'M2', name: 'DC Cable', unit: 'mtrs', balance: 100 }];
+  const received = { id: 'P1', poNumber: 'PO-1', leadId: 'L1', status: 'Approved', dispatchStatus: 'Completed', dispatchCompletedBy: 'W', dispatchCompletedAt: '2026-10-08T05:00:00Z', dispatchConfirmedAt: 'x',
+    items: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos' }, { materialName: 'DC Cable 4sqmm', quantity: 30, unit: 'mtrs' }], dispatchItems: [{ dispatched: true }, { dispatched: true }],
+    dispatchAssignedTo: 'Revanth Reddy', dispatchAssignedToEmail: 'revanth@x.com', dispatchAssignedBy: 'OM', dispatchAssignedAt: '2026-10-08T06:00:00Z',
+    dispatchReceivedBy: 'Revanth Reddy', dispatchReceivedAt: '2026-10-08T07:00:00Z' };
+  test('the dispatch table shows ordered / so far / remaining, an Add Item row, Save and Confirm; after a partial it says so', () => {
+    mockData = { users, materials, stockTransactions: [] };
+    asUser('revanth@x.com', 'executive');
+    let text = render(<DispatchPanel po={received} lead={lead} />);
+    expect(text).toContain('Dispatch now');
+    expect(text).toContain('Add more items');
+    expect(text).toContain('Save Dispatch Details');
+    expect(text).toContain('Confirm Final Dispatch');
+    expect(text).toContain('2 items will be deducted now');
+    const partial = { ...received, stockDispatches: [{ ref: 'DSP-1', at: '2026-10-09T05:00:00Z', by: 'Revanth Reddy', items: [{ index: 0, materialId: 'M1', materialName: 'Solar PV Module', quantity: 2, unit: 'Nos', previousBalance: 12, newBalance: 10 }] }] };
+    text = render(<DispatchPanel po={partial} lead={lead} />);
+    expect(text).toContain('1 partial dispatch confirmed');
+    expect(text).toContain('Dispatch 1');
+    expect(text).toContain('12 → 10');
+    expect(text).toContain('Confirm Final Dispatch');   // what remains is everything left, so the next one is final
+    // the warehouse may confirm now (Req 4A); the BCO may not
+    asUser('wh@x.com', 'warehouse_admin');
+    expect(render(<DispatchPanel po={received} lead={lead} />)).toContain('Confirm Final Dispatch');
+    asUser('bco@x.com', 'bco');
+    expect(render(<DispatchPanel po={received} lead={lead} />)).not.toContain('Confirm Final Dispatch');
+  });
+  test('a saved draft is announced; a completed PO shows Return Items for the OM, and the ninth stage', () => {
+    mockData = { users, materials, stockTransactions: [{ id: 'T1', type: 'return', poId: 'P1', materialId: 'M2', materialName: 'DC Cable', unit: 'mtrs', quantity: 5, status: 'Forwarded to Owner', submittedBy: 'OM', submittedAt: '2026-10-27T05:00:00Z', returnDate: '2026-10-27', reference: 'RTN-261027-AAAAA' }] };
+    asUser('revanth@x.com', 'executive');
+    const drafted = { ...received, stockDispatchDraft: { lines: [{ index: 0, materialId: 'M1', quantity: 3 }], savedBy: 'Revanth Reddy', savedAt: '2026-10-27T04:00:00Z' } };
+    let text = render(<DispatchPanel po={drafted} lead={lead} />);
+    expect(text).toContain('Saved by Revanth Reddy');
+    expect(text).toContain('Confirm Partial Dispatch');
+    const complete = { ...received, stockDispatchComplete: true, stockDispatches: [{ ref: 'DSP-1', at: '2026-10-09T05:00:00Z', by: 'R', items: [{ index: 0, materialId: 'M1', materialName: 'Solar PV Module', quantity: 6, unit: 'Nos', previousBalance: 16, newBalance: 10 }, { index: 1, materialId: 'M2', materialName: 'DC Cable', quantity: 30, unit: 'mtrs', previousBalance: 130, newBalance: 100 }] }] };
+    asUser('om@x.com', 'operation_manager');
+    text = render(<DispatchPanel po={complete} lead={lead} />);
+    expect(text).toContain('Return Items');
+    expect(text).toContain('Record Return');
+    expect(text).toContain('Awaiting the Owner');
+    expect(text).toContain('RTN-261027-AAAAA');
+    expect(text).toContain('of 9 stages');
+    asUser('revanth@x.com', 'executive');
+    text = render(<DispatchPanel po={complete} lead={lead} />);
+    expect(text).toContain('Return Items');
+    expect(text).not.toContain('Record Return');
+  });
+  test('the OM gets the Yard Items row before the approval; the warehouse does not; a yard line is flagged', () => {
+    mockData = { users, materials, stockTransactions: [] };
+    const open = { id: 'P2', poNumber: 'PO-2', leadId: 'L1', status: 'Approved', items: [{ materialName: 'Solar PV Module', quantity: 6, unit: 'Nos' }], yardItems: [{ materialId: 'M2', materialName: 'DC Cable', quantity: 10, unit: 'mtrs', addedBy: 'OM' }] };
+    asUser('om@x.com', 'operation_manager');
+    let text = render(<DispatchPanel po={open} lead={lead} />);
+    expect(text).toContain('Yard Items');
+    expect(text).toContain('Yard');
+    expect(text).toContain('DC Cable');
+    expect(text).toContain('2 available'.slice(-9));   // "0 / 2 available"
+    asUser('wh@x.com', 'warehouse_admin');
+    text = render(<DispatchPanel po={open} lead={lead} />);
+    expect(text).not.toContain('Yard Items —');
+    expect(text).toContain('DC Cable');
+  });
+});
+
+describe('Materials page — returns', () => {
+  const Materials = require('../pages/Materials').default;
+  test('the OM gets Record Return; a pending return sits in Approvals with its figures', () => {
+    const materials = [{ id: 'M2', name: 'DC Cable', unit: 'mtrs', stock: 120, dispatched: 45, installed: 0, balance: 65 }];
+    const txns = [{ id: 'T1', type: 'return', materialId: 'M2', materialName: 'DC Cable', unit: 'mtrs', quantity: 10, status: 'Forwarded to Owner', submittedBy: 'Ops Manager', submittedAt: '2026-10-27T05:00:00Z', returnDate: '2026-10-27', reference: 'RTN-261027-BBBBB', balanceAtSubmission: 65, poNumber: 'PO-7', customerName: 'Mr Rao', remarks: 'left over' }];
+    mockData = { materials, stockTransactions: txns, purchaseOrders: [], leadPOs: [], leads: [], users };
+    asUser('om@x.com', 'operation_manager');
+    let text = render(<Materials />);
+    expect(text).toContain('Record Return');
+    asUser('x@x.com', 'technician');
+    expect(render(<Materials />)).not.toContain('Record Return');
   });
 });

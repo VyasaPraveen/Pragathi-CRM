@@ -3,8 +3,9 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
+import { apiUpload } from '../services/api';
 import { assignableNames, supportingNames } from '../services/people';
-import { formatCurrency, formatDate, formatDateTime, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr } from '../services/helpers';
+import { formatCurrency, formatDate, formatDateTime, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr, compressImage, isSafeUrl } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect, DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import { sharePOWhatsApp } from '../services/poUtils';
@@ -20,7 +21,7 @@ import { canViewBco, bcoProgress } from '../services/bco';
 import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
 import { getOptions, withCurrent } from '../services/options';
 import { sortBomItems } from '../services/bomOrder';
-import { buildLeadNotice, leadNotifyTargets } from '../services/leadNotify';
+import { buildLeadNotice, leadNotifyTargets, siteVisitPhotoIssue, sitePhotoList } from '../services/leadNotify';
 
 // Lead Reference, Follow-up Status, Priority and Mode of Payment now come from
 // Settings → Manage Options (src/services/options.js holds the same defaults).
@@ -375,6 +376,7 @@ function LeadModal({ data, id, onSave, onClose }) {
     email: data.email || '',
     leadReference: data.leadReference || 'Website', leadReferenceOther: data.leadReferenceOther || '', dateGenerated: data.dateGenerated || todayStr(),
     lastFollowUp: data.lastFollowUp || '', followUpStatus: data.followUpStatus || 'New Lead',
+    siteVisitPhotos: sitePhotoList(data.siteVisitPhotos),
     siteVisit: data.siteVisit || 'No', quotationSent: data.quotationSent || 'No',
     advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', status: data.status || 'Interested',
     modeOfPayment: data.modeOfPayment || '', modeOfPaymentOther: data.modeOfPaymentOther || '',
@@ -399,6 +401,32 @@ function LeadModal({ data, id, onSave, onClose }) {
     availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || ''
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  // Site visit photos (Req 1, 27-Oct): several per visit, kept on the lead;
+  // adding more never replaces the ones already there.
+  const { toast: photoToast } = useToast();
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const addSitePhotos = async (files) => {
+    const list = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!list.length) { photoToast('Choose a photograph (JPG / PNG)', 'er'); return; }
+    setPhotoBusy(true);
+    try {
+      const added = [];
+      for (const f of list) {
+        const small = await compressImage(f, 1600, 0.8);
+        const res = await apiUpload(small, 'site-visits');
+        if (res && res.url) added.push({ url: res.url, name: res.name || f.name, at: new Date().toISOString() });
+      }
+      setForm(p => ({ ...p, siteVisitPhotos: [...(p.siteVisitPhotos || []), ...added] }));
+      photoToast(`${added.length} photo${added.length === 1 ? '' : 's'} added`);
+    } catch (e) { photoToast(e.message, 'er'); }
+    finally { setPhotoBusy(false); }
+  };
+  const photoIssue = siteVisitPhotoIssue(form, data);
+  // The Site Visit is not marked done without a photo (Req 1).
+  const submitLead = (...args) => {
+    if (photoIssue) { photoToast(photoIssue, 'er'); return undefined; }
+    return onSave(...args);
+  };
   const { toast } = useToast();
   const [cityOptions, setCityOptions] = useState([]);
   const [saving, setSaving] = useState(false);
@@ -519,7 +547,7 @@ function LeadModal({ data, id, onSave, onClose }) {
             ...form,
             supportingTeam: (form.supportingTeam || []).filter(n => !usedAbove.includes(norm(n))),
           };
-          await onSave(cleanedForm, id, prevStatus, data.expectedSignUpDate || '');
+          await submitLead(cleanedForm, id, prevStatus, data.expectedSignUpDate || '');
         }
         finally { setSaving(false); }
       }}>
@@ -670,6 +698,22 @@ function LeadModal({ data, id, onSave, onClose }) {
               <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft)</label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder="e.g. 200" /></div></div>
               <div className="fg"><label>Customer Service Number</label><input className="fi" value={form.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} placeholder="Service number from electricity bill" /></div>
               <div className="fg"><label>Site Visit Notes</label><textarea className="fi" value={form.siteVisitNotes} onChange={e => set('siteVisitNotes', e.target.value)} rows="2" placeholder="Observations from site visit..." /></div>
+              {/* Req 1 (27-Oct): the photographs of the visit — one or many, never replacing earlier ones; at least one is required to mark the visit done. */}
+              <div className="fg"><label>Site Visit Photos * <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '.76rem' }}>({(form.siteVisitPhotos || []).length} uploaded — at least one is required)</span></label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label className="btn bsm bo" style={{ cursor: photoBusy ? 'wait' : 'pointer' }}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>add_a_photo</span> {photoBusy ? 'Uploading…' : 'Add photo(s)'}
+                    <input type="file" accept="image/*" multiple style={{ display: 'none' }} disabled={photoBusy} onChange={e => { addSitePhotos(e.target.files); e.target.value = ''; }} />
+                  </label>
+                  {(form.siteVisitPhotos || []).map((p, i) => (
+                    <span key={p.url || i} style={{ position: 'relative', display: 'inline-block' }}>
+                      <a href={p.url} target="_blank" rel="noreferrer"><img src={p.url} alt={`Site visit ${i + 1}`} style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} /></a>
+                      <button type="button" className="btn bsm bo" style={{ position: 'absolute', top: -6, right: -6, padding: 0, width: 20, height: 20, borderRadius: 10, lineHeight: '18px' }} title="Remove this photo" onClick={() => set('siteVisitPhotos', form.siteVisitPhotos.filter((_, j) => j !== i))}>×</button>
+                    </span>
+                  ))}
+                </div>
+                {photoIssue && <div style={{ fontSize: '.76rem', color: '#c0392b', marginTop: 4 }}>{photoIssue}</div>}
+              </div>
             </div>
           )}
           <div className="fg"><label>Notes</label><textarea className="fi" value={form.notes} onChange={e => set('notes', e.target.value)} rows="3" placeholder="Follow-up notes..." /></div>
@@ -944,7 +988,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 {(lead.modeOfPayment) && <div className="di"><div className="dl">Mode of Payment</div><div className="dv">{lead.modeOfPayment === 'Other' ? (lead.modeOfPaymentOther || 'Other') : lead.modeOfPayment}</div></div>}
                 <div className="di"><div className="dl">Follow-up Status</div><div className="dv">{lead.followUpStatus || '-'}</div></div>
                 {lead.referredByName && <div className="di"><div className="dl">Referred By</div><div className="dv">{lead.referredByName} ({lead.referredByType})</div></div>}
-                {lead.siteVisit === 'Yes' && (lead.roofType || lead.structureType || lead.existingConnection) && (
+                {lead.siteVisit === 'Yes' && (lead.roofType || lead.structureType || lead.existingConnection || sitePhotoList(lead.siteVisitPhotos).length > 0) && (
                   <>
                     <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl" style={{ fontWeight: 700 }}>Site Visit Details</div><div className="dv">{lead.siteVisitDate ? formatDate(lead.siteVisitDate) : ''}</div></div>
                     {lead.roofType && <div className="di"><div className="dl">Roof Type</div><div className="dv">{lead.roofType}</div></div>}
@@ -957,6 +1001,15 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                     {lead.availableSpace && <div className="di"><div className="dl">Available Space</div><div className="dv">{lead.availableSpace} sq.ft</div></div>}
                     {(lead.customerServiceNumber || lead.meterNumber) && <div className="di"><div className="dl">Customer Service No.</div><div className="dv">{lead.customerServiceNumber || lead.meterNumber}</div></div>}
                     {lead.siteVisitNotes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Site Visit Notes</div><div className="dv">{lead.siteVisitNotes}</div></div>}
+                    {sitePhotoList(lead.siteVisitPhotos).length > 0 && (
+                      <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Site Visit Photos ({sitePhotoList(lead.siteVisitPhotos).length})</div>
+                        <div className="dv" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {sitePhotoList(lead.siteVisitPhotos).filter(p => isSafeUrl(p.url)).map((p, i) => (
+                            <a key={p.url || i} href={p.url} target="_blank" rel="noreferrer" title={p.at ? formatDateTime(p.at) : ''}><img src={p.url} alt={`Site visit ${i + 1}`} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} /></a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 {lead.notes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Notes</div><div className="dv">{lead.notes}</div></div>}

@@ -19,7 +19,7 @@ const sections = [
   { title: 'Operations', items: [
     { to: '/installations', icon: 'solar_power', label: 'Installations', perm: 'installations' },
     { to: '/ongoing', icon: 'construction', label: 'Ongoing Work', perm: 'ongoing_work' },
-    { to: '/materials', icon: 'inventory_2', label: 'Materials', perm: 'materials' },
+    { to: '/materials', icon: 'inventory_2', label: 'Materials', badgeKey: 'materials', perm: 'materials' },
     { to: '/purchase-orders', icon: 'receipt_long', label: 'Purchase Orders', badgeKey: 'purchase_orders', perm: 'purchase_orders' },
     { to: '/assigned-materials', icon: 'assignment_turned_in', label: 'Assigned Materials', badgeKey: 'assigned_materials', perm: 'assigned_materials' },
   ]},
@@ -55,7 +55,7 @@ export default function Sidebar({ open, onClose }) {
 
   // Each count covers only what this person can actually open, so the number
   // always matches the list behind it.
-  const counts = badgeCounts(data, user, role);
+  const counts = badgeCounts(data, user);
   const getBadge = (key) => counts[key] || 0;
 
   // A nav item shows only when the role floor AND the user's own permission allow it.

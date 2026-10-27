@@ -4,22 +4,25 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { updateDocument, createNotification } from '../services/firestore';
 import { apiUpload } from '../services/api';
-import { formatDate, formatDateTime, compressImage, isSafeUrl } from '../services/helpers';
+import { formatDate, formatDateTime, compressImage, isSafeUrl, toNumber, todayStr } from '../services/helpers';
 import {
   DISPATCH_STATUS, DISPATCH_CONFIRM_ROLES, dispatchOpen, canUpdateDispatch, canConfirmDispatch,
   dispatchMarks, dispatchSummary, dispatchCompleteIssue, dispatchNotifyUsers, warehouseUsers,
-  canAssignDispatch, dispatchedItemNames, dispatchHandoverState, dispatchSent, normalizeRole,
+  canAssignDispatch, dispatchedItemNames, dispatchHandoverState, dispatchSent, normalizeRole, poLines,
+  canAddYardItems, yardItemFrom,
 } from '../services/permissions';
 import { directoryPeople } from '../services/people';
 import {
-  finalDispatchOpen, canFinalDispatch, finalDispatchLines, finalDispatchIssue, finalDispatchBody, finalDispatchState, stockDispatched, qtyText,
+  finalDispatchOpen, canFinalDispatch, finalDispatchLines, finalDispatchIssue, finalDispatchBody, dispatchDraftBody, finalDispatchState,
+  stockDispatched, stockDispatches, stockDispatchComplete, isPartialDispatch, activeDispatchLines, extraDispatchLine, qtyText,
+  canRecordReturn, poReturns, STOCK_STATUS,
 } from '../services/stock';
-import { confirmFinalDispatch } from '../services/stockApi';
+import { confirmFinalDispatch, saveDispatchDraft, submitStockReturn, newClientRef } from '../services/stockApi';
 import {
   handoverLines, blankHandoverMarks, handoverIssue, handoverMarksForSave, handoverSummary,
   canConfirmHandover, handoverDone, canConfirmDelivery, deliveryOpen, deliveryDone, deliveryIssue, dispatchTimeline,
 } from '../services/dispatchFlow';
-import { SearchSelect } from './SharedUI';
+import { SearchSelect, DateInput } from './SharedUI';
 
 const nowIso = () => new Date().toISOString();
 const NOT_STOCKED = '— not kept in inventory —';
@@ -33,24 +36,27 @@ const PHOTO_QUALITY = 0.8;
 //
 //   1. Warehouse material verification: each item Yes / No with a note, saved
 //      as it goes, then "Stock OK" — which locks the warehouse's entry and
-//      sends the list to the Operation Manager (Req 3.2–3.3, 15-Oct; this was
-//      "OK & Send" before and is the same step).
-//   2. The Operation Manager reviews (and may still correct the marks) and
-//      gives the "Approval for Dispatch" (Req 3.4; formerly "Confirm Dispatch").
+//      sends the list to the Operation Manager. The Operation Manager may add
+//      "yard items" from the Materials master to the same list (Req 3, 27-Oct).
+//   2. The Operation Manager reviews and gives the "Approval for Dispatch".
 //   3. The Operation Manager assigns the items to a person, who is notified
-//      and finds them under Assigned Materials (R6, 8-Oct; Req 3.5–3.6).
+//      and finds them under Assigned Materials.
 //   4. First handover: the person checks each item received from the
-//      warehouse, Yes / No with a note, and presses "Handover Received" (Req 3.7).
+//      warehouse and presses "Handover Received".
 //   5. Second handover: at the customer's location the person checks each
-//      item again, photographs the delivery, and presses "Delivery Confirmed"
-//      (Req 3.8).
-//   6. The stock comes off at "Confirm Final Dispatch" (10-Oct), once.
+//      item again, photographs the delivery, and presses "Delivery Confirmed".
+//   6. The stock comes off at "Confirm Dispatch" — in one or more parts
+//      (Req 4, 27-Oct): quantities are entered per line, extra materials can
+//      be added, a draft can be saved, and what is left stays for later.
+//   7. Material that comes back is recorded under "Return Items" for the
+//      Owner's approval (Req 5, 27-Oct) — the ninth stage.
 //
-// Every step is a stamp on the PO, so the history at the bottom is the record
-// itself. The PO's own status is never touched here.
+// Every step is a stamp on the PO (the dispatches and returns also in the
+// stock ledger), so the history at the bottom is the record itself. The PO's
+// own status is never touched here.
 // ============================================================================
 export default function DispatchPanel({ po, lead }) {
-  const { users, materials } = useData();
+  const { users, materials, stockTransactions } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const meName = user?.displayName || user?.email || '';
@@ -60,10 +66,17 @@ export default function DispatchPanel({ po, lead }) {
   const [dirty, setDirty] = useState(false);
   const [assignee, setAssignee] = useState('');
   const [assignNote, setAssignNote] = useState('');
-  // The final dispatch: which inventory material each sent line is.
-  const [mapOverride, setMapOverride] = useState({});
+  // Yard items the Operation Manager is adding (Req 3).
+  const [yardPick, setYardPick] = useState('');
+  const [yardQty, setYardQty] = useState('');
+  const [yardAdds, setYardAdds] = useState([]);
+  // The final dispatch (Req 4): the lines as edited here, the extra item being added.
+  const [lines, setLines] = useState(null);           // null = follow the PO / draft until touched
+  const [extraPick, setExtraPick] = useState('');
+  const [extraQty, setExtraQty] = useState('');
   const [destination, setDestination] = useState('');
   const [dispatchNote, setDispatchNote] = useState('');
+  const [dispatchClientRef, setDispatchClientRef] = useState(newClientRef);
   // The two handovers: the person's Yes / No per item, the delivery photos.
   const [handMarks, setHandMarks] = useState(() => blankHandoverMarks(po));
   const [delivMarks, setDelivMarks] = useState(() => blankHandoverMarks(po));
@@ -71,6 +84,12 @@ export default function DispatchPanel({ po, lead }) {
   const [uploading, setUploading] = useState(false);
   const [deliveryLocation, setDeliveryLocation] = useState('');
   const [deliveryNote, setDeliveryNote] = useState('');
+  // Returns (Req 5).
+  const [retPick, setRetPick] = useState('');
+  const [retQty, setRetQty] = useState('');
+  const [retDate, setRetDate] = useState(todayStr());
+  const [retRemarks, setRetRemarks] = useState('');
+  const [retClientRef, setRetClientRef] = useState(newClientRef);
   const [showHistory, setShowHistory] = useState(false);
 
   // What the server last gave us (or what we last saved), so a refreshed copy
@@ -81,15 +100,20 @@ export default function DispatchPanel({ po, lead }) {
     const incoming = JSON.stringify(dispatchMarks(po));
     if (incoming !== baseline && !dirty) { setMarks(dispatchMarks(po)); setBaseline(incoming); }
   }, [po, dirty, baseline]);
+  // A confirmed dispatch refreshes the PO: start the next one from what is left.
+  const dispatchKey = (po.stockDispatches || []).length + '|' + (po.stockDispatchDraft ? po.stockDispatchDraft.savedAt : '');
+  useEffect(() => { setLines(null); }, [dispatchKey]);
 
   if (!dispatchOpen(po)) return null;
 
-  const items = po.items || [];
+  const items = poLines(po);
   const mayEdit = canUpdateDispatch(po, role);
   const mayConfirm = canConfirmDispatch(po, role);
   const mayAssign = canAssignDispatch(po, role);
+  const mayYard = canAddYardItems(po, role);
   const mayReceive = canConfirmHandover(po, user);
   const mayDeliver = canConfirmDelivery(po, user, role);
+  const mayReturn = canRecordReturn(role) && stockDispatched(po);
   const isConfirmer = role === 'super_admin' || DISPATCH_CONFIRM_ROLES.includes(normalizeRole(role));
   const summary = dispatchSummary({ ...po, dispatchItems: marks });
   const leadName = (lead && lead.name) || po.customerName || po.leadName || '';
@@ -99,18 +123,24 @@ export default function DispatchPanel({ po, lead }) {
   const mayFinalDispatch = canFinalDispatch(po, user, role);
   const finalState = finalDispatchState(po);
   const stockList = materials || [];
-  const finalLines = finalDispatchLines(po, stockList).map(l => (
-    Object.prototype.hasOwnProperty.call(mapOverride, l.index) ? { ...l, materialId: mapOverride[l.index], suggested: false } : l));
+  const materialNames = stockList.map(x => x.name).filter(Boolean).sort((a, b) => a.localeCompare(b));
+  const materialByName = (name) => stockList.find(x => x.name === name) || null;
+  const finalLines = lines || finalDispatchLines(po, stockList);
   const finalIssue = finalDispatchIssue(finalLines, stockList);
+  const partial = isPartialDispatch(finalLines);
   const materialName = (id) => { const m = stockList.find(x => x.id === id); return m ? m.name : ''; };
   const defaultDestination = [leadName, po.customerAddress || (lead && lead.address) || ''].filter(Boolean).join(', ');
   const stockOkLocked = po.dispatchStatus === DISPATCH_STATUS.COMPLETED && !po.dispatchConfirmedAt && !isConfirmer;
-  const timeline = dispatchTimeline(po);
+  const returns = poReturns(stockTransactions, po.id);
+  const timeline = dispatchTimeline(po, returns);
+  const dispatches = stockDispatches(po);
+  const draft = po.stockDispatchDraft || null;
 
   const setMark = (i, patch) => {
     setDirty(true);
     setMarks(ms => ms.map((m, j) => (j === i ? { ...m, ...patch } : m)));
   };
+  const setLine = (key, patch) => setLines(ls => (ls || finalDispatchLines(po, stockList)).map(l => ((l.extra ? l.key : l.index) === key ? { ...l, ...patch } : l)));
 
   // Stamp who marked what, and when, as it is saved.
   const stamped = () => marks.map((m, i) => {
@@ -152,6 +182,32 @@ export default function DispatchPanel({ po, lead }) {
       seen.add(key);
       createNotification({ forUser: key, title, message, type: 'status_update', module, relatedId: po.id });
     });
+  };
+
+  // Yard items (Req 3): the Operation Manager picks from the Materials master
+  // and the lines join the verification list, marks and all.
+  const addYardPick = () => {
+    const m = materialByName(yardPick);
+    if (!m) { toast('Choose a material from the Materials list', 'er'); return; }
+    if (toNumber(yardQty) <= 0) { toast('Enter the quantity', 'er'); return; }
+    setYardAdds(ys => [...ys, yardItemFrom(m, yardQty, meName)]);
+    setYardPick(''); setYardQty('');
+  };
+  const saveYard = async () => {
+    if (!yardAdds.length) return;
+    if (dirty) { toast('Save the verification marks first, then add the yard items', 'er'); return; }
+    setBusy(true);
+    try {
+      const yardItems = [...(po.yardItems || []), ...yardAdds];
+      // The new lines start unmarked; the existing marks are kept as they are.
+      const nextMarks = [...dispatchMarks(po), ...yardAdds.map(() => ({ dispatched: false, note: '' }))];
+      await updateDocument('leadPOs', po.id, { yardItems, dispatchItems: nextMarks, dispatchUpdatedAt: nowIso(), dispatchUpdatedBy: meName, dispatchStatus: po.dispatchStatus || DISPATCH_STATUS.NONE });
+      toast(`${yardAdds.length} yard item${yardAdds.length === 1 ? '' : 's'} added to the verification list`);
+      tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Yard Items Added',
+        `${meName} added ${yardAdds.length} yard item${yardAdds.length === 1 ? '' : 's'} to ${label}: ${yardAdds.map(y => `${y.materialName} (${y.quantity} ${y.unit})`).join(', ')}. They are verified with the PO items.`);
+      setYardAdds([]);
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
   };
 
   // "Stock OK" — the warehouse's verification goes to the office and is locked.
@@ -268,17 +324,50 @@ export default function DispatchPanel({ po, lead }) {
     finally { setBusy(false); }
   };
 
-  // The last step: the stock comes off, once.
-  const finalDispatch = async () => {
-    if (finalIssue) { toast(finalIssue, 'er'); return; }
-    const chosen = finalLines.filter(l => l.materialId);
-    const list = chosen.map(l => `${materialName(l.materialId)} −${qtyText(l.quantity, l.unit)}`).join('\n');
-    if (!window.confirm(`Confirm the FINAL DISPATCH for ${label}?\n\nThis deducts the stock now and cannot be repeated:\n${list}`)) return;
+  // The dispatch (Req 4): add an extra material, save a draft, confirm.
+  const addExtra = () => {
+    const m = materialByName(extraPick);
+    if (!m) { toast('Choose a material from the inventory list', 'er'); return; }
+    if (toNumber(extraQty) <= 0) { toast('Enter the quantity to dispatch', 'er'); return; }
+    setLines(ls => [...(ls || finalDispatchLines(po, stockList)), extraDispatchLine(m, extraQty)]);
+    setExtraPick(''); setExtraQty('');
+  };
+  const saveDraft = async () => {
     setBusy(true);
     try {
-      const res = await confirmFinalDispatch(finalDispatchBody(po, finalLines, { destination: (destination || defaultDestination).trim(), note: dispatchNote.trim() }));
-      toast(`Final dispatch confirmed — stock deducted (ref ${res.reference || ''}). The Operations Manager and the Owner have been notified.`);
-      setMapOverride({}); setDispatchNote('');
+      await saveDispatchDraft(dispatchDraftBody(po, finalLines, { destination: (destination || defaultDestination).trim(), note: dispatchNote.trim() }));
+      toast('Dispatch details saved — nothing has been deducted yet. Review and press Confirm when ready.');
+      setLines(null);
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
+  };
+  const finalDispatch = async () => {
+    if (finalIssue) { toast(finalIssue, 'er'); return; }
+    const chosen = activeDispatchLines(finalLines);
+    const list = chosen.map(l => `${materialName(l.materialId)} −${qtyText(l.quantity, l.unit)}`).join('\n');
+    const kind = partial ? 'PARTIAL DISPATCH' : 'FINAL DISPATCH';
+    if (!window.confirm(`Confirm the ${kind} for ${label}?\n\nThis deducts the stock now:\n${list}${partial ? '\n\nThe remaining quantities stay for a later dispatch.' : ''}`)) return;
+    setBusy(true);
+    try {
+      const res = await confirmFinalDispatch(finalDispatchBody(po, finalLines, { destination: (destination || defaultDestination).trim(), note: dispatchNote.trim(), clientRef: dispatchClientRef }));
+      toast(res && res.repeated ? 'This dispatch was already confirmed (ref ' + (res.reference || '') + ') — nothing was deducted twice.'
+        : `${partial ? 'Partial' : 'Final'} dispatch confirmed — stock deducted (ref ${res.reference || ''}). The Operations Manager and the Owner have been notified.`);
+      setLines(null); setDispatchNote(''); setDispatchClientRef(newClientRef());
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
+  };
+
+  // Return items (Req 5): recorded for the Owner's approval.
+  const recordReturn = async () => {
+    const m = materialByName(retPick);
+    if (!m) { toast('Choose the material that was returned', 'er'); return; }
+    if (toNumber(retQty) <= 0) { toast('Enter the returned quantity', 'er'); return; }
+    if (!window.confirm(`Record ${qtyText(retQty, m.unit)} of ${m.name} returned from ${label} for the Owner's approval?`)) return;
+    setBusy(true);
+    try {
+      const res = await submitStockReturn({ clientRef: retClientRef, materialId: m.id, quantity: toNumber(retQty), returnDate: retDate, poId: po.id, remarks: retRemarks.trim() });
+      toast(`Return ${res.reference || ''} recorded — the Owner has been notified. Stock is added back only once the Owner approves it.`);
+      setRetPick(''); setRetQty(''); setRetRemarks(''); setRetClientRef(newClientRef());
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }
   };
@@ -295,12 +384,12 @@ export default function DispatchPanel({ po, lead }) {
         : 'Awaiting the warehouse material verification';
 
   // One Yes / No row set, used for both handovers.
-  const HandoverTable = ({ lines, marksState, setMarksState, yesLabel, noLabel, disabled }) => (
+  const HandoverTable = ({ lines: hl, setMarksState, yesLabel, noLabel, disabled }) => (
     <div className="tw">
       <table style={{ fontSize: '.8rem' }}>
         <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th style={{ width: 170 }}>{yesLabel} / {noLabel}</th><th>Notes / reason</th></tr></thead>
         <tbody>
-          {lines.map(l => (
+          {hl.map(l => (
             <tr key={l.index} style={{ background: l.ok === true ? 'rgba(39,174,96,.06)' : l.ok === false ? 'rgba(231,76,60,.06)' : 'transparent' }}>
               <td>{l.index + 1}</td>
               <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}</td>
@@ -325,12 +414,12 @@ export default function DispatchPanel({ po, lead }) {
     </div>
   );
   // The same rows read-only, once recorded.
-  const RecordedTable = ({ lines, yesLabel, noLabel }) => (
+  const RecordedTable = ({ lines: hl, yesLabel, noLabel }) => (
     <div className="tw">
       <table style={{ fontSize: '.78rem' }}>
         <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th>{yesLabel} / {noLabel}</th><th>Notes</th></tr></thead>
         <tbody>
-          {lines.map(l => (
+          {hl.map(l => (
             <tr key={l.index}>
               <td>{l.index + 1}</td><td>{l.name}</td><td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
               <td>{l.ok === true ? <span style={{ color: '#1e8449', fontWeight: 600 }}>{yesLabel}</span> : l.ok === false ? <span style={{ color: '#c0392b', fontWeight: 600 }}>{noLabel}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
@@ -363,7 +452,8 @@ export default function DispatchPanel({ po, lead }) {
               return (
                 <tr key={i} style={{ background: m.dispatched ? 'rgba(39,174,96,.06)' : 'transparent' }}>
                   <td>{i + 1}</td>
-                  <td>{it.materialName}{it.specification ? <span style={{ color: 'var(--muted)' }}> · {it.specification}</span> : null}</td>
+                  <td>{it.materialName}{it.specification ? <span style={{ color: 'var(--muted)' }}> · {it.specification}</span> : null}
+                    {it.yard && <span className="st st-b" style={{ padding: '1px 6px', fontSize: '.64rem', marginLeft: 6 }} title={`Yard item added by ${it.addedBy || 'the Operation Manager'}`}>Yard</span>}</td>
                   <td style={{ whiteSpace: 'nowrap' }}>{it.quantity} {it.unit || ''}</td>
                   <td>
                     {mayEdit ? (
@@ -388,7 +478,16 @@ export default function DispatchPanel({ po, lead }) {
                 </tr>
               );
             })}
-            {!items.length && <tr><td colSpan="6" style={{ color: 'var(--muted)' }}>No items on this purchase order.</td></tr>}
+            {yardAdds.map((y, i) => (
+              <tr key={'yadd' + i} style={{ background: 'rgba(41,128,185,.06)' }}>
+                <td>{items.length + i + 1}</td>
+                <td>{y.materialName} <span className="st st-b" style={{ padding: '1px 6px', fontSize: '.64rem', marginLeft: 6 }}>Yard · not saved</span></td>
+                <td style={{ whiteSpace: 'nowrap' }}>{y.quantity} {y.unit}</td>
+                <td colSpan={2} style={{ color: 'var(--muted)' }}>Press "Save Yard Items" to add it to the verification list</td>
+                <td><button type="button" className="btn bsm bo" style={{ padding: '2px 6px' }} onClick={() => setYardAdds(ys => ys.filter((_, j) => j !== i))}>×</button></td>
+              </tr>
+            ))}
+            {!items.length && !yardAdds.length && <tr><td colSpan="6" style={{ color: 'var(--muted)' }}>No items on this purchase order.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -396,6 +495,22 @@ export default function DispatchPanel({ po, lead }) {
       {stockOkLocked && (
         <div style={{ fontSize: '.76rem', color: 'var(--muted)', marginTop: 6 }}>
           <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>lock</span> Stock OK has been submitted; the verification is locked for the warehouse. The Operation Manager can correct it.
+        </div>
+      )}
+
+      {/* Yard items (Req 3): the Operation Manager adds materials from the master list */}
+      {mayYard && (
+        <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 10, padding: '8px 10px', border: '1px dashed var(--bor)', borderRadius: 8 }}>
+          <div style={{ minWidth: 240, flex: 2 }}>
+            <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Yard Items — add a material from the Materials list</label>
+            <SearchSelect value={yardPick} onChange={setYardPick} options={materialNames} allowFree={false} placeholder="Search the material…" emptyText="No such material — add it under Materials first" disabled={busy} />
+          </div>
+          <div style={{ width: 110 }}>
+            <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Qty{materialByName(yardPick) ? ` (${materialByName(yardPick).unit || ''})` : ''}</label>
+            <input type="number" min="0" step="any" className="fi" value={yardQty} onChange={e => setYardQty(e.target.value)} disabled={busy} />
+          </div>
+          <button type="button" className="btn bsm bo" onClick={addYardPick} disabled={busy || !yardPick}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>
+          {yardAdds.length > 0 && <button type="button" className="btn bsm bp" onClick={saveYard} disabled={busy}><span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save Yard Items ({yardAdds.length})</button>}
         </div>
       )}
 
@@ -465,7 +580,7 @@ export default function DispatchPanel({ po, lead }) {
           {mayReceive && (
             <div style={{ marginTop: 10, border: '1px solid var(--bor)', borderRadius: 8, padding: 10 }}>
               <div style={{ fontSize: '.82rem', fontWeight: 700, marginBottom: 6 }}><span className="material-icons-round" style={{ fontSize: 16, verticalAlign: '-3px', color: 'var(--pri)' }}>fact_check</span> Handover from the warehouse — check each item you received</div>
-              <HandoverTable lines={handoverLines(po, handMarks)} marksState={handMarks} setMarksState={setHandMarks} yesLabel="Received" noLabel="Missing" disabled={busy} />
+              <HandoverTable lines={handoverLines(po, handMarks)} setMarksState={setHandMarks} yesLabel="Received" noLabel="Missing" disabled={busy} />
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
                 <button className="btn bsm bp" disabled={busy} onClick={receive} style={{ background: '#1e8449' }} title="Confirm the items are with you — the Operations Manager and the warehouse are notified">
                   <span className="material-icons-round" style={{ fontSize: 16 }}>how_to_reg</span> Handover Received
@@ -510,7 +625,7 @@ export default function DispatchPanel({ po, lead }) {
             </>
           ) : mayDeliver ? (
             <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: 10 }}>
-              <HandoverTable lines={handoverLines(po, delivMarks)} marksState={delivMarks} setMarksState={setDelivMarks} yesLabel="Delivered" noLabel="Not delivered" disabled={busy} />
+              <HandoverTable lines={handoverLines(po, delivMarks)} setMarksState={setDelivMarks} yesLabel="Delivered" noLabel="Not delivered" disabled={busy} />
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
                 <div style={{ minWidth: 220, flex: 2 }}>
                   <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Delivered at (location)</label>
@@ -547,67 +662,163 @@ export default function DispatchPanel({ po, lead }) {
         </div>
       )}
 
-      {/* ── The final dispatch: the one step that takes stock out ─────────── */}
+      {/* ── The dispatch: the step that takes stock out (one or more parts) ─ */}
       {(finalDispatchOpen(po) || stockDispatched(po)) && (
         <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--bor)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
-            <span className="material-icons-round" style={{ fontSize: 18, color: finalState.step === 'done' ? '#1e8449' : '#c0392b' }}>{finalState.step === 'done' ? 'inventory' : 'outbox'}</span>
+            <span className="material-icons-round" style={{ fontSize: 18, color: finalState.step === 'done' ? '#1e8449' : finalState.step === 'partial' ? '#d68910' : '#c0392b' }}>{finalState.step === 'done' ? 'inventory' : 'outbox'}</span>
             <strong style={{ fontSize: '.84rem' }}>Final Dispatch — Stock Deduction</strong>
             <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{finalState.text}</span>
           </div>
 
-          {stockDispatched(po) ? (
-            <div style={{ fontSize: '.78rem' }}>
-              <div style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Stock deducted on {formatDate(po.stockDispatchedAt)} by {po.stockDispatchedBy || '-'} · ref {po.stockDispatchRef}</div>
-              <ul style={{ margin: '4px 0 0 18px', padding: 0, color: 'var(--dark)' }}>
-                {(po.stockDispatchItems || []).map((it, i) => <li key={i}>{it.materialName}: −{qtyText(it.quantity, it.unit)} ({qtyText(it.previousBalance, '')} → {qtyText(it.newBalance, '')})</li>)}
-              </ul>
-              {po.stockDispatchDestination ? <div style={{ color: 'var(--muted)', marginTop: 4 }}>Destination: {po.stockDispatchDestination}{po.stockDispatchNote ? ` · ${po.stockDispatchNote}` : ''}</div> : null}
+          {dispatches.length > 0 && (
+            <div style={{ fontSize: '.78rem', marginBottom: 8 }}>
+              {dispatches.map((d, i) => (
+                <div key={d.ref || i} style={{ marginBottom: 4 }}>
+                  <span style={{ color: '#1e8449', fontWeight: 600 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>check_circle</span> Dispatch {i + 1} · ref {d.ref || '-'} · {d.by || '-'} on {formatDateTime(d.at)}</span>
+                  <ul style={{ margin: '2px 0 0 18px', padding: 0, color: 'var(--dark)' }}>
+                    {(d.items || []).map((it, j) => <li key={j}>{it.materialName}: −{qtyText(it.quantity, it.unit)} ({qtyText(it.previousBalance, '')} → {qtyText(it.newBalance, '')}){it.extra ? ' · added at dispatch' : ''}</li>)}
+                  </ul>
+                  {d.destination ? <div style={{ color: 'var(--muted)' }}>Destination: {d.destination}{d.note ? ` · ${d.note}` : ''}</div> : null}
+                </div>
+              ))}
             </div>
-          ) : mayFinalDispatch ? (
+          )}
+
+          {finalDispatchOpen(po) && (mayFinalDispatch ? (
             <>
+              {draft && !lines && <div style={{ fontSize: '.76rem', color: '#2980b9', marginBottom: 6 }}><span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>save</span> Saved by {draft.savedBy || '-'} on {formatDateTime(draft.savedAt)} — nothing deducted yet. Review and confirm.</div>}
               <div className="tw">
                 <table style={{ fontSize: '.8rem' }}>
-                  <thead><tr><th>Sent item</th><th>Qty</th><th style={{ minWidth: 220 }}>Inventory material to deduct</th><th>Available</th></tr></thead>
+                  <thead><tr><th>Item</th><th>Ordered</th><th>Dispatched so far</th><th>Remaining</th><th style={{ minWidth: 220 }}>Inventory material</th><th>Available</th><th style={{ width: 110 }}>Dispatch now</th></tr></thead>
                   <tbody>
                     {finalLines.map(l => {
                       const m = stockList.find(x => x.id === l.materialId);
-                      const short = m && l.quantity > (Number(m.balance) || 0);
+                      const key = l.extra ? l.key : l.index;
+                      const fullyDone = !l.extra && l.ordered > 0 && l.remaining <= 1e-9;
+                      const over = !l.extra && l.ordered > 0 && toNumber(l.quantity) > l.remaining + 1e-9;
+                      const short = m && toNumber(l.quantity) > (Number(m.balance) || 0);
                       return (
-                        <tr key={l.index}>
-                          <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}</td>
-                          <td style={{ whiteSpace: 'nowrap' }}>{qtyText(l.quantity, l.unit)}</td>
+                        <tr key={key} style={{ opacity: fullyDone ? .55 : 1 }}>
+                          <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}{l.yard ? <span className="st st-b" style={{ padding: '1px 6px', fontSize: '.64rem', marginLeft: 6 }}>Yard</span> : null}{l.extra ? <span className="st st-o" style={{ padding: '1px 6px', fontSize: '.64rem', marginLeft: 6 }}>Added</span> : null}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{l.extra ? '—' : qtyText(l.ordered, l.unit)}</td>
+                          <td style={{ whiteSpace: 'nowrap' }}>{l.extra ? '—' : qtyText(l.done, l.unit)}</td>
+                          <td style={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{l.extra ? '—' : fullyDone ? <span style={{ color: '#1e8449' }}>done</span> : qtyText(l.remaining, l.unit)}</td>
                           <td>
-                            <SearchSelect
-                              value={l.materialId ? (m ? m.name : '') : (Object.prototype.hasOwnProperty.call(mapOverride, l.index) ? NOT_STOCKED : '')}
-                              onChange={name => setMapOverride(o => ({ ...o, [l.index]: name === NOT_STOCKED ? '' : ((stockList.find(x => x.name === name) || {}).id || '') }))}
-                              options={[NOT_STOCKED, ...stockList.map(x => x.name).filter(Boolean).sort()]} allowFree={false} placeholder="Choose the material…" disabled={busy} />
-                            {l.suggested && <div style={{ fontSize: '.7rem', color: 'var(--muted)' }}>matched by name — change it if wrong</div>}
+                            {l.extra ? <span>{l.name}</span> : (
+                              <>
+                                <SearchSelect
+                                  value={l.materialId ? (m ? m.name : '') : NOT_STOCKED}
+                                  onChange={name => setLine(key, { materialId: name === NOT_STOCKED ? '' : ((materialByName(name) || {}).id || ''), suggested: false })}
+                                  options={[NOT_STOCKED, ...materialNames]} allowFree={false} placeholder="Search the material…" disabled={busy || fullyDone} />
+                                {l.suggested && <div style={{ fontSize: '.7rem', color: 'var(--muted)' }}>matched by name — change it if wrong</div>}
+                              </>
+                            )}
                           </td>
                           <td style={{ whiteSpace: 'nowrap', color: short ? '#c0392b' : 'var(--dark)', fontWeight: short ? 700 : 400 }}>{m ? qtyText(m.balance, m.unit) : '—'}{short ? ' (short)' : ''}</td>
+                          <td>
+                            {fullyDone ? <span style={{ color: 'var(--muted)' }}>—</span> : (
+                              <>
+                                <input type="number" min="0" step="any" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem', borderColor: over ? '#c0392b' : undefined }} value={l.quantity}
+                                  onChange={e => setLine(key, { quantity: e.target.value })} disabled={busy} />
+                                {l.extra && <button type="button" className="btn bsm bo" style={{ padding: '2px 6px', marginTop: 2 }} title="Remove this added item" onClick={() => setLines(ls => (ls || []).filter(x => x.key !== key))}>×</button>}
+                              </>
+                            )}
+                          </td>
                         </tr>
                       );
                     })}
+                    {!finalLines.length && <tr><td colSpan={7} style={{ color: 'var(--muted)' }}>No verified items to dispatch.</td></tr>}
                   </tbody>
                 </table>
+              </div>
+              {/* Add more items (Req 4E) */}
+              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8, padding: '8px 10px', border: '1px dashed var(--bor)', borderRadius: 8 }}>
+                <div style={{ minWidth: 240, flex: 2 }}>
+                  <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Add more items — a material from the inventory not on this PO</label>
+                  <SearchSelect value={extraPick} onChange={setExtraPick} options={materialNames} allowFree={false} placeholder="Search the material…" emptyText="No such material — the Owner or a manager can add it under Materials" disabled={busy} />
+                </div>
+                <div style={{ width: 110 }}>
+                  <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Qty{materialByName(extraPick) ? ` (${materialByName(extraPick).unit || ''})` : ''}</label>
+                  <input type="number" min="0" step="any" className="fi" value={extraQty} onChange={e => setExtraQty(e.target.value)} disabled={busy} />
+                </div>
+                <button type="button" className="btn bsm bo" onClick={addExtra} disabled={busy || !extraPick}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Item</button>
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: 8 }}>
                 <div style={{ minWidth: 220, flex: 2 }}>
                   <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Destination / project</label>
-                  <input className="fi" value={destination} onChange={e => setDestination(e.target.value)} placeholder={defaultDestination || 'Site / customer'} disabled={busy} />
+                  <input className="fi" value={destination} onChange={e => setDestination(e.target.value)} placeholder={(draft && draft.destination) || defaultDestination || 'Site / customer'} disabled={busy} />
                 </div>
                 <div style={{ minWidth: 180, flex: 1 }}>
                   <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Note (optional)</label>
-                  <input className="fi" value={dispatchNote} onChange={e => setDispatchNote(e.target.value)} placeholder="Vehicle, challan no., …" disabled={busy} />
+                  <input className="fi" value={dispatchNote} onChange={e => setDispatchNote(e.target.value)} placeholder={(draft && draft.note) || 'Vehicle, challan no., …'} disabled={busy} />
                 </div>
-                <button className="btn bsm bp" disabled={busy || !!finalIssue} onClick={finalDispatch} style={{ background: '#c0392b' }} title={finalIssue || 'Deduct the stock for the chosen materials — once'}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>outbox</span> Confirm Final Dispatch
+                <button type="button" className="btn bsm bo" disabled={busy} onClick={saveDraft} title="Save these details without deducting anything">
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save Dispatch Details
+                </button>
+                <button className="btn bsm bp" disabled={busy || !!finalIssue} onClick={finalDispatch} style={{ background: '#c0392b' }} title={finalIssue || 'Deduct the stock for the quantities entered'}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>outbox</span> {partial ? 'Confirm Partial Dispatch' : 'Confirm Final Dispatch'}
                 </button>
               </div>
-              {finalIssue && <div style={{ fontSize: '.76rem', color: '#c0392b', marginTop: 6 }}>{finalIssue}</div>}
+              <div style={{ fontSize: '.76rem', color: finalIssue ? '#c0392b' : 'var(--muted)', marginTop: 6 }}>
+                {finalIssue || `${activeDispatchLines(finalLines).length} item${activeDispatchLines(finalLines).length === 1 ? '' : 's'} will be deducted now${partial ? '; the rest stays for a later dispatch' : ''}.`}
+              </div>
             </>
           ) : (
-            <div style={{ fontSize: '.78rem', color: 'var(--muted)' }}>Awaiting the final dispatch confirmation by {po.dispatchAssignedTo || 'the assigned person'} or the Operation Manager; the stock is deducted then.</div>
+            <div style={{ fontSize: '.78rem', color: 'var(--muted)' }}>Awaiting the dispatch confirmation by {po.dispatchAssignedTo || 'the assigned person'}, the Operation Manager or the warehouse; the stock is deducted then.</div>
+          ))}
+        </div>
+      )}
+
+      {/* ── Return items: the ninth stage (Req 5) ─────────────────────────── */}
+      {(stockDispatched(po) || returns.length > 0) && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: '1px dashed var(--bor)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 6 }}>
+            <span className="material-icons-round" style={{ fontSize: 18, color: returns.some(t => t.appliedAt) ? '#1e8449' : '#8e44ad' }}>assignment_return</span>
+            <strong style={{ fontSize: '.84rem' }}>Return Items</strong>
+            <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>Material that physically came back is recorded here and added to stock only once the Owner approves it.</span>
+          </div>
+          {returns.length > 0 && (
+            <div className="tw" style={{ marginBottom: 8 }}>
+              <table style={{ fontSize: '.78rem' }}>
+                <thead><tr><th>Material</th><th>Qty</th><th>Date</th><th>Recorded by</th><th>Status</th><th>Ref</th><th>Remarks</th></tr></thead>
+                <tbody>
+                  {returns.map(t => (
+                    <tr key={t.id}>
+                      <td>{t.materialName}</td><td style={{ whiteSpace: 'nowrap', color: '#1e8449', fontWeight: 600 }}>+{qtyText(t.quantity, t.unit)}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>{formatDate(t.returnDate)}</td><td>{t.submittedBy}</td>
+                      <td>{t.appliedAt ? <span className="st st-g" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Approved · {t.approvedBy}</span>
+                        : t.status === STOCK_STATUS.REJECTED ? <span className="st st-r" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Rejected</span>
+                          : <span className="st st-o" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Awaiting the Owner</span>}</td>
+                      <td style={{ fontSize: '.72rem' }}>{t.reference}</td><td style={{ color: 'var(--muted)' }}>{t.remarks || '—'}{t.rejectReason ? ` · Rejected: ${t.rejectReason}` : ''}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {mayReturn && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap', padding: '8px 10px', border: '1px dashed var(--bor)', borderRadius: 8 }}>
+              <div style={{ minWidth: 240, flex: 2 }}>
+                <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Returned material</label>
+                <SearchSelect value={retPick} onChange={setRetPick} options={materialNames} allowFree={false} placeholder="Search the material…" emptyText="No such material — add it under Materials first" disabled={busy} />
+              </div>
+              <div style={{ width: 110 }}>
+                <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Qty{materialByName(retPick) ? ` (${materialByName(retPick).unit || ''})` : ''}</label>
+                <input type="number" min="0" step="any" className="fi" value={retQty} onChange={e => setRetQty(e.target.value)} disabled={busy} />
+              </div>
+              <div style={{ width: 150 }}>
+                <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Return date</label>
+                <DateInput value={retDate} onChange={e => setRetDate(e.target.value)} max={todayStr()} />
+              </div>
+              <div style={{ minWidth: 180, flex: 1 }}>
+                <label style={{ fontSize: '.74rem', color: 'var(--muted)', display: 'block', marginBottom: 3 }}>Remarks</label>
+                <input className="fi" value={retRemarks} onChange={e => setRetRemarks(e.target.value)} placeholder="Condition, reason for return…" disabled={busy} />
+              </div>
+              <button type="button" className="btn bsm bp" style={{ background: '#8e44ad' }} onClick={recordReturn} disabled={busy || !retPick} title="Recorded for the Owner's approval; stock changes only when approved">
+                <span className="material-icons-round" style={{ fontSize: 16 }}>assignment_return</span> Record Return
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -623,7 +834,7 @@ export default function DispatchPanel({ po, lead }) {
               <li key={s.key} style={{ marginBottom: 4, color: s.done ? 'var(--dark)' : 'var(--muted)' }}>
                 <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px', color: s.done ? '#1e8449' : 'var(--muted)', marginRight: 4 }}>{s.done ? 'check_circle' : 'radio_button_unchecked'}</span>
                 <strong>{s.label}</strong>
-                {s.done ? <> — {s.by || '-'}{s.at ? `, ${formatDateTime(s.at)}` : ''}{s.detail ? ` · ${s.detail}` : ''}</> : <> — pending</>}
+                {s.done ? <> — {s.by || '-'}{s.at ? `, ${formatDateTime(s.at)}` : ''}{s.detail ? ` · ${s.detail}` : ''}</> : <> — {s.detail || 'pending'}</>}
               </li>
             ))}
           </ol>

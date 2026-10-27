@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument, createNotification } from '../services/firestore';
+import { addDocument, updateDocument, deleteDocument, createNotification } from '../services/firestore';
 import { apiUpload } from '../services/api';
 import { formatDate, toNumber, safeStr, isSafeUrl } from '../services/helpers';
 import { StatusBadge, DetailItem, ProgressBar, Modal, EmptyState, SearchSelect, DateFilter } from '../components/SharedUI';
@@ -142,6 +142,14 @@ export default function Installations() {
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={installations} fields={INSTALLATION_DATE_FIELDS} /></div>
       {displayed.map(inst => {
         const mayEdit = canEditInstallation(inst, user, role);
+        // Req 2 (27-Oct): the Owner alone may delete an installation; regular
+        // users still have no delete here, exactly as before.
+        const mayDelete = role === 'super_admin';
+        const remove = async () => {
+          if (!window.confirm(`Delete the installation for "${inst.customerName}" permanently?`)) return;
+          try { await deleteDocument('installations', inst.id); toast('Installation deleted'); }
+          catch (e) { toast(e.message, 'er'); }
+        };
         return (
           <div className="card" style={{ marginBottom: 16 }} key={inst.id}>
             <div className="ch">
@@ -149,6 +157,7 @@ export default function Installations() {
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, color: 'var(--pri)' }}>{inst.progress}%</span>
                 {mayEdit && <button className="btn bsm bo" onClick={() => setModal({ data: inst, id: inst.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit</button>}
+                {mayDelete && <button className="btn bsm bo" onClick={remove} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div>
             </div>
             <div className="cb">

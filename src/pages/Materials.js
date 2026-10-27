@@ -8,11 +8,11 @@ import { Modal, EmptyState, DateFilter, StatusBadge, SearchSelect, DateInput } f
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import {
   STOCK_TYPES, STOCK_STATUS, STOCK_DATE_FIELDS, isStockOpen,
-  canEnterStock, canReviewStock, canApproveStock, canCorrectStockDirectly,
+  canEnterStock, canReviewStock, canApproveStock, canCorrectStockDirectly, canRecordReturn,
   stockStatusOf, qtyText, signedQty, materialSummary, pendingStockEntries, stockEntryActions, stockEntryState, stockTypeLabel,
   receivablePOs, poReceiptProgress,
 } from '../services/stock';
-import { submitStockReceipt, submitStockAdjustment, reviewStockEntry, approveStockEntry, newClientRef } from '../services/stockApi';
+import { submitStockReceipt, submitStockAdjustment, submitStockReturn, reviewStockEntry, approveStockEntry, newClientRef } from '../services/stockApi';
 
 const MATERIAL_DATE_FIELDS = ['lastStockChangeAt', 'updatedAt', 'createdAt'];
 const MATERIAL_CATEGORIES = ['Complete Kit', 'Inverter', 'Solar Panels', 'DC Cable', 'AC Cable', 'MMS Structure', 'Earthing', 'Protection (ACDB / DCDB / SPD)', 'Accessories', 'Other'];
@@ -99,6 +99,7 @@ export default function Materials() {
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
           {mayEnter && <button className="btn bp bsm" onClick={() => setModal({ kind: 'receipt' })} title="Record material that has arrived — it goes to the Operation Manager and the Owner for approval"><span className="material-icons-round" style={{ fontSize: 18 }}>move_to_inbox</span> Receive Stock</button>}
           {mayEnter && <button className="btn bo bsm" onClick={() => setModal({ kind: 'adjustment' })} title={mayApprove ? 'Correct a stock figure, with the reason on record' : 'Report a physical count that differs from the book figure'}><span className="material-icons-round" style={{ fontSize: 18 }}>rule</span> {mayApprove ? 'Correct Stock' : 'Report Discrepancy'}</button>}
+          {canRecordReturn(role) && <button className="btn bo bsm" onClick={() => setModal({ kind: 'return' })} title="Record material that physically came back — added to stock once the Owner approves it"><span className="material-icons-round" style={{ fontSize: 18 }}>assignment_return</span> Record Return</button>}
           {canAdd && <button className="btn bo bsm" onClick={() => setModal({ kind: 'material', data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Material</button>}
         </div>
       </div>
@@ -157,6 +158,7 @@ export default function Materials() {
       {modal && modal.kind === 'material' && <MaterialModal data={modal.data} id={modal.id} owner={mayApprove} onSave={saveMaterial} onClose={() => setModal(null)} />}
       {modal && modal.kind === 'receipt' && <ReceiptModal materials={materials} initialMaterialId={modal.materialId} pos={receivablePOs(purchaseOrders, leadPOs, leads)} txns={stockTransactions} onClose={() => setModal(null)} />}
       {modal && modal.kind === 'adjustment' && <AdjustmentModal materials={materials} initialMaterialId={modal.materialId} direct={canCorrectStockDirectly(role)} onClose={() => setModal(null)} />}
+      {modal && modal.kind === 'return' && <ReturnModal materials={materials} pos={receivablePOs([], leadPOs, leads)} onClose={() => setModal(null)} />}
       {modal && modal.kind === 'detail' && (() => {
         const m = materials.find(x => x.id === modal.id);
         return m ? <MaterialDetailModal material={m} txns={stockTransactions} onReceive={mayEnter ? () => setModal({ kind: 'receipt', materialId: m.id }) : null} onClose={() => setModal(null)} /> : null;
@@ -351,6 +353,55 @@ function AdjustmentModal({ materials, initialMaterialId, direct, onClose }) {
   );
 }
 
+// ── Material that physically came back (Req 5, 27-Oct) ──────────────────────
+// Recorded by the Operation Manager (or the warehouse side) for the Owner's
+// approval; nothing is added to stock until then.
+function ReturnModal({ materials, pos, onClose }) {
+  const { toast } = useToast();
+  const [f, setF] = useState({ materialName: '', quantity: '', returnDate: todayStr(), poLabel: '', remarks: '' });
+  const [clientRef] = useState(newClientRef);
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const material = materials.find(m => m.name === f.materialName) || null;
+  const po = pos.find(p => p.label === f.poLabel) || null;
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!material) { toast('Choose the material that was returned', 'er'); return; }
+    if (toNumber(f.quantity) <= 0) { toast('Enter the returned quantity', 'er'); return; }
+    setBusy(true);
+    try {
+      const res = await submitStockReturn({ clientRef, materialId: material.id, quantity: toNumber(f.quantity), returnDate: f.returnDate, poId: po ? po.id : '', remarks: f.remarks.trim() });
+      toast(`Return ${res.reference || ''} recorded — the Owner has been notified. It is added to stock once approved.`);
+      onClose();
+    } catch (err) { toast(err.message, 'er'); }
+    finally { setBusy(false); }
+  };
+  return (
+    <Modal title="Record Returned Material" onClose={onClose} wide>
+      <form onSubmit={submit}>
+        <div className="mb">
+          <div className="fr">
+            <div className="fg" style={{ flex: 2 }}><label>Material *</label>
+              <SearchSelect value={f.materialName} onChange={v => set('materialName', v)} options={materials.map(m => m.name).filter(Boolean).sort()} allowFree={false} placeholder="Search the material…" emptyText="No such material — add it with Add Material first" />
+              {material && <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: 3 }}>Available now: <strong>{qtyText(material.balance, material.unit)}</strong> · Dispatched so far {qtyText(material.dispatched, material.unit)}</div>}
+            </div>
+            <div className="fg"><label>Returned Quantity * {material ? `(${material.unit})` : ''}</label><input type="number" min="0" step="any" className="fi" value={f.quantity} onChange={e => set('quantity', e.target.value)} required /></div>
+            <div className="fg"><label>Return Date *</label><DateInput value={f.returnDate} onChange={e => set('returnDate', e.target.value)} max={todayStr()} required /></div>
+          </div>
+          <div className="fr">
+            <div className="fg" style={{ flex: 2 }}><label>Returned from purchase order (optional)</label>
+              <SearchSelect value={f.poLabel} onChange={v => set('poLabel', v)} options={pos.map(p => p.label)} allowFree={false} placeholder="Search by PO number or customer…" emptyText="No approved purchase order" />
+            </div>
+            <div className="fg" style={{ flex: 2 }}><label>Remarks</label><input className="fi" value={f.remarks} onChange={e => set('remarks', e.target.value)} placeholder="Condition, reason for return…" /></div>
+          </div>
+          <p style={{ fontSize: '.76rem', color: 'var(--muted)', margin: 0 }}>The return waits for the Owner on the Approvals tab. The quantity is added to the material's stock only when the Owner approves it, and it appears in the Stock History as a return.</p>
+        </div>
+        <div className="mf"><button type="button" className="btn bo" onClick={onClose} disabled={busy}>Cancel</button><button type="submit" className="btn bp" disabled={busy}><span className="material-icons-round" style={{ fontSize: 16 }}>assignment_return</span> Submit for Owner Approval</button></div>
+      </form>
+    </Modal>
+  );
+}
+
 // ── Where the entries waiting on somebody are decided ───────────────────────
 function ApprovalsPanel({ entries, user, role, onDecide }) {
   if (!entries.length) return <div className="card"><div className="cb"><EmptyState icon="fact_check" title="Nothing awaiting approval" message="Receipts and discrepancy reports appear here until the Owner decides them." /></div></div>;
@@ -363,7 +414,7 @@ function ApprovalsPanel({ entries, user, role, onDecide }) {
           <div key={t.id} className="card" style={{ borderLeft: `4px solid ${t.status === STOCK_STATUS.FORWARDED ? '#2980b9' : '#d68910'}` }}>
             <div className="cb" style={{ padding: '12px 14px' }}>
               <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
-                <span className="material-icons-round" style={{ color: isAdj ? '#8e44ad' : '#1e8449' }}>{isAdj ? 'rule' : 'move_to_inbox'}</span>
+                <span className="material-icons-round" style={{ color: t.type === STOCK_TYPES.RETURN ? '#8e44ad' : isAdj ? '#8e44ad' : '#1e8449' }}>{t.type === STOCK_TYPES.RETURN ? 'assignment_return' : isAdj ? 'rule' : 'move_to_inbox'}</span>
                 <strong>{stockTypeLabel(t.type)} — {t.materialName}</strong>
                 <StatusBadge status={t.status} />
                 <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>Ref {t.reference}</span>
@@ -371,7 +422,16 @@ function ApprovalsPanel({ entries, user, role, onDecide }) {
                 <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>Submitted {formatDateTime(t.submittedAt)}</span>
               </div>
               <div className="dg" style={{ marginTop: 10 }}>
-                {isAdj ? (
+                {t.type === STOCK_TYPES.RETURN ? (
+                  <>
+                    <Item label="Returned quantity" value={<strong style={{ color: '#1e8449' }}>+{qtyText(t.quantity, t.unit)}</strong>} />
+                    <Item label="Return date" value={formatDate(t.returnDate)} />
+                    <Item label="Available stock when recorded" value={qtyText(t.balanceAtSubmission, t.unit)} />
+                    <Item label="Balance after approval" value={qtyText(toNumber(t.balanceAtSubmission) + toNumber(t.quantity), t.unit)} />
+                    <Item label="Returned from" value={t.poNumber ? `PO ${t.poNumber}${t.customerName ? ' — ' + t.customerName : ''}` : 'No purchase order named'} />
+                    <Item label="Remarks" value={t.remarks} />
+                  </>
+                ) : isAdj ? (
                   <>
                     <Item label="Book figure when counted" value={qtyText(t.balanceAtSubmission, t.unit)} />
                     <Item label="Physically counted" value={qtyText(t.countedQuantity, t.unit)} />
@@ -418,7 +478,7 @@ function DecideModal({ entry, action, role, onClose }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const titles = { approve: 'Approve & Update Stock', forward: 'Forward to the Owner', reject: 'Reject this Entry' };
-  const after = entry.type === STOCK_TYPES.ADJUSTMENT ? toNumber(entry.countedQuantity) : toNumber(entry.balanceAtSubmission) + toNumber(entry.quantity);
+  const after = entry.type === STOCK_TYPES.ADJUSTMENT ? toNumber(entry.countedQuantity) : toNumber(entry.balanceAtSubmission) + toNumber(entry.quantity);   // a receipt or a return adds its quantity
   const go = async () => {
     if (action === 'reject' && !note.trim()) { toast('Give the reason for rejecting it', 'er'); return; }
     setBusy(true);
@@ -469,10 +529,12 @@ function MaterialDetailModal({ material, txns, onReceive, onClose }) {
           <Card label="Opening" value={qtyText(s.opening, material.unit)} />
           <Card label="Total Received" value={qtyText(s.received, material.unit)} />
           <Card label="Total Dispatched" value={qtyText(s.dispatched, material.unit)} />
+          <Card label="Returned" value={qtyText(s.returned, material.unit)} tone={s.returned ? '#8e44ad' : undefined} />
           <Card label="Installed" value={qtyText(s.installed, material.unit)} />
           <Card label="Corrections" value={`${s.approvedAdjustmentCount} (${signedQty(s.adjusted, material.unit)})`} />
           <Card label="Pending Receipts" value={s.pendingReceiptCount ? `${s.pendingReceiptCount} · +${qtyText(s.pendingReceiptQty, material.unit)}` : 'None'} tone={s.pendingReceiptCount ? '#d68910' : undefined} />
           <Card label="Pending Corrections" value={s.pendingAdjustmentCount || 'None'} tone={s.pendingAdjustmentCount ? '#d68910' : undefined} />
+          <Card label="Pending Returns" value={s.pendingReturnCount ? `${s.pendingReturnCount} · +${qtyText(s.pendingReturnQty, material.unit)}` : 'None'} tone={s.pendingReturnCount ? '#d68910' : undefined} />
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
           <StatusBadge status={s.status} />
@@ -491,7 +553,7 @@ function MaterialDetailModal({ material, txns, onReceive, onClose }) {
 // figure with who, when and what it did to the balance.
 function LedgerTable({ txns, showMaterial }) {
   const sorted = [...(txns || [])].sort((a, b) => String(b.submittedAt || b.createdAt || '').localeCompare(String(a.submittedAt || a.createdAt || '')));
-  const when = (t) => t.type === STOCK_TYPES.RECEIPT ? formatDate(t.receiptDate) : t.type === STOCK_TYPES.DISPATCH ? formatDate(t.dispatchDate) : formatDate(t.submittedAt);
+  const when = (t) => t.type === STOCK_TYPES.RECEIPT ? formatDate(t.receiptDate) : t.type === STOCK_TYPES.DISPATCH ? formatDate(t.dispatchDate) : t.type === STOCK_TYPES.RETURN ? formatDate(t.returnDate) : formatDate(t.submittedAt);
   const refText = (t) => {
     const parts = [];
     if (t.poNumber) parts.push(`PO ${t.poNumber}${t.poItemName ? ' · ' + t.poItemName : ''}`);
@@ -514,8 +576,9 @@ function LedgerTable({ txns, showMaterial }) {
           <td style={{ whiteSpace: 'nowrap' }}>{when(t)}<div style={{ fontSize: '.7rem', color: 'var(--muted)' }}>logged {formatDateTime(t.submittedAt)}</div></td>
           {showMaterial && <td style={{ fontWeight: 600 }}>{t.materialName}</td>}
           <td>{stockTypeLabel(t.type)}</td>
-          <td style={{ fontWeight: 700, color: t.type === STOCK_TYPES.DISPATCH ? '#c0392b' : toNumber(t.quantity) < 0 ? '#c0392b' : '#1e8449', whiteSpace: 'nowrap' }}>
+          <td style={{ fontWeight: 700, color: t.type === STOCK_TYPES.DISPATCH ? '#c0392b' : toNumber(t.quantity) < 0 ? '#c0392b' : '#1e8449', whiteSpace: 'nowrap' }} title={t.type === STOCK_TYPES.RETURN ? 'Returned material added back to stock' : t.type === STOCK_TYPES.DISPATCH ? 'Dispatched — taken out of stock' : ''}>
             {t.type === STOCK_TYPES.DISPATCH ? `−${qtyText(t.quantity, t.unit)}` : signedQty(t.quantity, t.unit)}
+            {t.extraItem ? <div style={{ fontSize: '.68rem', color: 'var(--muted)', fontWeight: 400 }}>added at dispatch</div> : null}
           </td>
           <td style={{ whiteSpace: 'nowrap' }}>{t.appliedAt ? `${qtyText(t.previousBalance, '')} → ${qtyText(t.newBalance, '')}` : isStockOpen(t) ? <span style={{ color: '#d68910' }}>not yet applied</span> : '—'}</td>
           <td><StatusBadge status={t.status} /></td>

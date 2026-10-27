@@ -237,7 +237,9 @@ export default function PurchaseOrders() {
 }
 
 function POModal({ data, id, onSave, onClose }) {
-  const { bomTemplates } = useData();
+  const { bomTemplates: allTemplates } = useData();
+  // The quotation keeps its own templates (kind 'quotation', Req 6 27-Oct); the PO lists only its own.
+  const bomTemplates = (allTemplates || []).filter(t => !t.kind || t.kind === 'po');
   const { role } = useAuth();
   const { toast } = useToast();
   const canManageTemplates = hasAccess(role, 'manager');

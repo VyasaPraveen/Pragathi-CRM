@@ -18,13 +18,13 @@
 
 import { isSameUser, toNumber } from './helpers';
 import {
-  DISPATCH_STATUS, dispatchOpen, dispatchSent, dispatchMarks, canReceiveDispatch, normalizeRole,
+  DISPATCH_STATUS, dispatchOpen, dispatchSent, dispatchMarks, canReceiveDispatch, normalizeRole, poLines,
 } from './permissions';
 
 // The dispatched lines of a PO, each with the handover mark on it.
 // `marks` is the stored handoverItems / deliveryItems array (by PO line index).
 export function handoverLines(po, marks) {
-  const items = (po && po.items) || [];
+  const items = poLines(po);
   const sent = dispatchMarks(po);
   const stored = Array.isArray(marks) ? marks : [];
   return items.map((it, index) => ({
@@ -57,7 +57,7 @@ export function handoverIssue(po, marks) {
 // The marks as stored on the PO: one entry per PO line index, blanks for lines
 // that were never sent.
 export function handoverMarksForSave(po, marks) {
-  const items = (po && po.items) || [];
+  const items = poLines(po);
   const stored = Array.isArray(marks) ? marks : [];
   return items.map((_, i) => (stored[i] && typeof stored[i].ok === 'boolean' ? { ok: stored[i].ok, note: String(stored[i].note || '').trim() } : null));
 }
@@ -110,11 +110,12 @@ export const DISPATCH_STAGES = [
   { key: 'received', label: 'Received by the assigned person — out for delivery' },
   { key: 'delivered', label: 'Delivered at the customer location' },
   { key: 'closed', label: 'Delivered and stock deducted' },
+  { key: 'returned', label: 'Return items recorded' },
 ];
 
 export function dispatchStage(po) {
   if (!po || po.status !== 'Approved') return null;
-  if (deliveryDone(po)) return po.stockDispatchedAt ? 'closed' : 'delivered';
+  if (deliveryDone(po)) return (po.stockDispatchedAt || (po.stockDispatches || []).length) ? 'closed' : 'delivered';
   if (handoverDone(po)) return 'received';
   if (po.dispatchAssignedTo) return 'assigned';
   if (po.dispatchConfirmedAt) return 'approved_dispatch';
@@ -145,10 +146,17 @@ export const assignedMaterialsOpenFor = (leadPOs, user) =>
 // Everything on a PO that says who did what and when, in order, for the
 // Operation Manager and the warehouse to follow the material from approval
 // to delivery.
-export function dispatchTimeline(po) {
+// `returns` are this PO's return transactions from the ledger (Req 5): the
+// ninth stage is done once the Owner has approved one.
+export function dispatchTimeline(po, returns) {
   if (!po) return [];
   const marks = dispatchMarks(po);
-  const items = po.items || [];
+  const items = poLines(po);
+  const dispatches = Array.isArray(po.stockDispatches) && po.stockDispatches.length ? po.stockDispatches
+    : (po.stockDispatchedAt ? [{ ref: po.stockDispatchRef, at: po.stockDispatchedAt, by: po.stockDispatchedBy, items: po.stockDispatchItems || [] }] : []);
+  const rets = (returns || []).filter(t => t && t.type === 'return');
+  const approvedReturns = rets.filter(t => t.appliedAt);
+  const pendingReturns = rets.filter(t => ['Pending Review', 'Forwarded to Owner'].includes(t.status));
   const sentNames = marks.map((m, i) => (m.dispatched ? (items[i] && items[i].materialName) || `Item ${i + 1}` : '')).filter(Boolean);
   const heldNames = marks.map((m, i) => (!m.dispatched && m.note ? `${(items[i] && items[i].materialName) || `Item ${i + 1}`} (${m.note})` : '')).filter(Boolean);
   const hand = handoverLines(po, po.handoverItems);
@@ -165,8 +173,12 @@ export function dispatchTimeline(po) {
       detail: po.dispatchReceivedAt && hand.length ? handoverSummary(po, po.handoverItems).text : '' },
     { key: 'delivered', label: 'Delivered at the customer location', by: po.deliveredBy, at: po.deliveredAt, done: !!po.deliveredAt,
       detail: po.deliveredAt ? `${deliv.length ? handoverSummary(po, po.deliveryItems).text : ''}${(po.deliveryPhotos || []).length ? `; ${(po.deliveryPhotos || []).length} photo${(po.deliveryPhotos || []).length === 1 ? '' : 's'}` : ''}${po.deliveryLocation ? `; at ${po.deliveryLocation}` : ''}` : '' },
-    { key: 'stock', label: 'Stock deducted (final dispatch)', by: po.stockDispatchedBy, at: po.stockDispatchedAt, done: !!po.stockDispatchedAt,
-      detail: po.stockDispatchRef ? `ref ${po.stockDispatchRef}` : '' },
+    { key: 'stock', label: 'Stock deducted (final dispatch)', by: dispatches.length ? dispatches[dispatches.length - 1].by : po.stockDispatchedBy, at: dispatches.length ? dispatches[dispatches.length - 1].at : po.stockDispatchedAt, done: dispatches.length > 0,
+      detail: dispatches.length ? `${dispatches.length} confirmation${dispatches.length === 1 ? '' : 's'}${po.stockDispatchComplete ? ', complete' : ' so far'} — ${dispatches.map(d => d.ref).filter(Boolean).join(', ')}` : '' },
+    { key: 'returned', label: 'Return items', by: approvedReturns.length ? approvedReturns[0].approvedBy : (pendingReturns.length ? pendingReturns[0].submittedBy : ''),
+      at: approvedReturns.length ? approvedReturns[0].approvedAt : (pendingReturns.length ? pendingReturns[0].submittedAt : ''), done: approvedReturns.length > 0,
+      detail: approvedReturns.length ? `${approvedReturns.length} approved: ${approvedReturns.map(t => `${t.materialName} +${t.quantity}${t.unit ? ' ' + t.unit : ''}`).join(', ')}${pendingReturns.length ? `; ${pendingReturns.length} awaiting the Owner` : ''}`
+        : (pendingReturns.length ? `${pendingReturns.length} recorded, awaiting the Owner's approval` : '') },
   ];
   return steps;
 }

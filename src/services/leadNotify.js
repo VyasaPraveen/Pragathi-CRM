@@ -17,6 +17,19 @@ import { normName } from './helpers';
 import { quotationApprovers, leaderOf, normalizeRole } from './permissions';
 import { QT_STATUS } from './quotation';
 
+// ── Site visit photos (Req 1, 27-Oct) ───────────────────────────────────────
+// A site visit is complete only with at least one photograph. The check
+// bites when the Site Visit is being set to "Yes" (a new lead, or a lead that
+// was "No"); a lead already marked "Yes" before photos existed can still be
+// edited. Mirrors enforce_site_visit_photos() in routes/collections.php.
+export const sitePhotoList = (v) => (Array.isArray(v) ? v.filter(p => p && String(p.url || '').trim()) : []);
+export function siteVisitPhotoIssue(form, prev) {
+  if (!form || form.siteVisit !== 'Yes') return '';
+  if (prev && prev.siteVisit === 'Yes') return '';
+  if (sitePhotoList(form.siteVisitPhotos).length) return '';
+  return 'Upload at least one site visit photo before marking the Site Visit as done. Until then it stays "No".';
+}
+
 // The fields worth interrupting somebody for. A change to anything not on this
 // list — notes, a spelling fix, a pincode — is saved silently, as before.
 export const WATCHED_LEAD_FIELDS = [

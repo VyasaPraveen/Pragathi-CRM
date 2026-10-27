@@ -56,6 +56,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     $data = body();
     unset($data['id'], $data['createdAt'], $data['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('POST', $claims, $data, []);
+    if ($collection === 'leads') enforce_site_visit_photos($data, []);
     // Force the correct initial status for approval-chain collections so the
     // workflow can't be bypassed by POSTing an already-advanced status (the UI
     // always starts here; this stops the raw API from skipping stages).
@@ -110,7 +111,10 @@ function handle_collections(string $collection, string $id, string $method): voi
     $patch = body();
     unset($patch['id'], $patch['createdAt'], $patch['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('PATCH', $claims, $patch, $existing);
-    if ($collection === 'leads') enforce_lead_edit($claims, $patch, $existing + ['createdBy' => $existing['createdBy'] ?? (string)($row['created_by'] ?? '')]);
+    if ($collection === 'leads') {
+      enforce_lead_edit($claims, $patch, $existing + ['createdBy' => $existing['createdBy'] ?? (string)($row['created_by'] ?? '')]);
+      enforce_site_visit_photos($patch, $existing);
+    }
     enforce_status_transition($collection, $role, $patch, $existing, $email);
 
     $merged = array_merge($existing, $patch);
@@ -126,6 +130,12 @@ function handle_collections(string $collection, string $id, string $method): voi
     // receipts and dispatches recorded against it.
     if ($collection === 'materials' && material_has_ledger($id)) {
       fail(409, 'This material has stock transactions recorded against it and cannot be deleted. Correct its figures with a stock adjustment instead.');
+    }
+    // Req 2 (27-Oct): deleting a customer or an installation is the Owner's
+    // alone — these sections had no delete before, and get one only for the
+    // Owner account. Leads, tasks and purchase orders keep their Admin delete.
+    if (in_array($collection, ['customers', 'installations'], true) && $role !== 'super_admin') {
+      fail(403, 'Only the Owner can delete a customer or an installation.');
     }
     if (!has_access($role, 'admin')) {
       // A photo may only be removed by the person who uploaded it.
@@ -402,6 +412,20 @@ function enforce_lead_edit(array $claims, array $patch, array $lead): void {
   fail(403, 'Only the person this lead is assigned to, its creator, their Team Leader, the Operation Manager or an Admin can edit it.');
 }
 
+// ── Leads: a site visit is complete only with a photograph (Req 1, 27-Oct) ──
+// Marking the Site Visit "Yes" needs at least one site-visit photo on the
+// lead — sent with this write or already saved. Only the move to "Yes" is
+// checked, so an older lead already marked "Yes" without photos can still be
+// edited; the UI mirrors this in LeadModal. Mirrors siteVisitPhotoIssue() in
+// src/services/leadNotify.js.
+function enforce_site_visit_photos(array $patch, array $existing): void {
+  if (($patch['siteVisit'] ?? '') !== 'Yes') return;
+  if (($existing['siteVisit'] ?? '') === 'Yes') return;
+  $photos = array_key_exists('siteVisitPhotos', $patch) ? $patch['siteVisitPhotos'] : ($existing['siteVisitPhotos'] ?? []);
+  $photos = is_array($photos) ? array_filter($photos, fn($p) => is_array($p) && trim((string)($p['url'] ?? '')) !== '') : [];
+  if (!$photos) fail(422, 'Upload at least one site visit photo before marking the Site Visit as done. Until then the Site Visit stays "No".');
+}
+
 // Who may CREATE in a given collection.
 function enforce_create(string $collection, array $claims): void {
   $role = $claims['role'] ?? '';
@@ -481,6 +505,8 @@ function bco_ops_editor(string $role): bool {
 const PO_DISPATCH_FIELDS = [
   'dispatchItems', 'dispatchStatus', 'dispatchUpdatedAt', 'dispatchUpdatedBy',
   'dispatchCompletedAt', 'dispatchCompletedBy', 'dispatchNote',
+  // Req 3 (27-Oct): the Operation Manager's yard items, verified like PO lines.
+  'yardItems',
 ];
 const PO_DISPATCH_CONFIRM_FIELDS = ['dispatchConfirmedAt', 'dispatchConfirmedBy', 'dispatchConfirmNote'];
 // The handover (R6, 8-Oct): the Operation Manager assigns the sent items to
@@ -700,6 +726,16 @@ function enforce_status_transition(string $collection, string $role, array &$pat
         if (($existing['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not marked this dispatch complete yet.');
       } else {
         if (!po_dispatch_editor($role)) fail(403, 'Only the warehouse can record a dispatch.');
+        // Yard items (Req 3): the Operation Manager (or an Admin) adds them from
+        // the Materials master, until the Approval for Dispatch is given.
+        if (array_key_exists('yardItems', $patch)) {
+          if (!po_dispatch_confirmer($role)) fail(403, 'Only the Operation Manager or an Admin can add yard items.');
+          if (!is_array($patch['yardItems'])) fail(422, 'Yard items must be a list.');
+          foreach ($patch['yardItems'] as $y) {
+            if (!is_array($y) || trim((string)($y['materialName'] ?? '')) === '') fail(422, 'Every yard item needs a material from the Materials list.');
+            if ((float)($y['quantity'] ?? 0) <= 0) fail(422, 'Every yard item needs a quantity.');
+          }
+        }
         if (!empty($existing['dispatchConfirmedAt']) && $role !== 'super_admin' && !has_access($role, 'admin')) {
           fail(409, 'This dispatch has been confirmed and can no longer be changed.');
         }

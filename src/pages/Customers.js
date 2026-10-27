@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument, createNotification, notifyAdmins } from '../services/firestore';
+import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState, DateFilter , SearchSelect } from '../components/SharedUI';
@@ -40,6 +40,14 @@ export default function Customers() {
   const { toast } = useToast();
   const canEdit = hasAccess(role, 'coordinator');
   const [search, setSearch] = useState('');
+  // Req 2 (27-Oct): the Owner alone may delete a customer (a duplicate or a
+  // mistaken entry). Nobody else gets the button, and the API refuses them.
+  const isOwner = role === 'super_admin';
+  const handleDeleteCustomer = async (c) => {
+    if (!window.confirm(`Delete the customer "${c.name}" permanently? Their installations and payments are not deleted with them.`)) return;
+    try { await deleteDocument('customers', c.id); toast('Customer deleted'); }
+    catch (e) { toast(e.message, 'er'); }
+  };
   const [typeFilter, setTypeFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [modal, setModal] = useState(null);
@@ -161,6 +169,7 @@ export default function Customers() {
                   </button>
                 )}
                 {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                {isOwner && <button className="btn bsm bo" onClick={() => handleDeleteCustomer(c)} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
           );

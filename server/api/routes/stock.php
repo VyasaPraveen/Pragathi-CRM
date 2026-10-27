@@ -15,9 +15,16 @@
 //   adjustment  A physical count that differs from the book figure, with the
 //               reason → the same review → the Owner approves → balance moved
 //               by the difference. The Owner's own correction applies at once.
-//   dispatch    The final dispatch confirmation on a purchase order whose
+//   dispatch    A final dispatch confirmation on a purchase order whose
 //               items have been sent, assigned and received: one transaction
-//               per material, balance down, exactly once per PO.
+//               per material, balance down. 27-Oct (Req 4): a PO may be
+//               dispatched in parts — each confirmation takes only the
+//               quantities sent in it, never more than a line has left, and
+//               extra materials may be added; a draft may be saved first
+//               without touching stock.
+//   return      Material that physically came back (27-Oct, Req 5): the
+//               Operation Manager records it, the Owner approves it, and the
+//               balance goes up (and "dispatched" down) exactly once.
 //   opening     The figure a material was created with by the Owner.
 //
 // A figure is applied exactly once: the transaction's status is the guard, it
@@ -35,6 +42,10 @@ const STOCK_ENTRY_ROLES  = ['warehouse_admin', 'technical_manager', 'bco', 'oper
 // Who REVIEWS an entry and forwards it to the Owner: the Operation Manager,
 // with Admin / Management able to cover. Mirrors STOCK_REVIEW_ROLES.
 const STOCK_REVIEW_ROLES = ['operation_manager', 'admin', 'management', 'super_admin'];
+// Who confirms a final dispatch besides the assigned person (Req 4A, 27-Oct):
+// the Owner, Management, Admin, the Operation Manager and the warehouse.
+// Mirrors FINAL_DISPATCH_ROLES in stock.js.
+const STOCK_DISPATCH_ROLES = ['operation_manager', 'admin', 'management', 'super_admin', 'warehouse_admin'];
 // Below this balance a material is "Low Stock" — the figure the Materials
 // page has always used. Mirrors STOCK_LOW in stock.js.
 const STOCK_LOW = 10;
@@ -49,6 +60,21 @@ function stock_is_owner(string $role): bool { return $role === 'super_admin'; }
 function stock_can_enter(string $role): bool { return $role === 'super_admin' || in_array(normalize_role($role), STOCK_ENTRY_ROLES, true); }
 function stock_can_review(string $role): bool { return $role === 'super_admin' || in_array(normalize_role($role), STOCK_REVIEW_ROLES, true); }
 function stock_is_admin(string $role): bool { return $role === 'super_admin' || has_access($role, 'admin'); }
+function stock_can_dispatch(string $role): bool { return $role === 'super_admin' || in_array(normalize_role($role), STOCK_DISPATCH_ROLES, true); }
+
+// The lines the warehouse verified: the PO's items followed by the Operation
+// Manager's yard items (Req 3). Mirrors poLines() in permissions.js.
+function po_lines(array $po): array {
+  $items = is_array($po['items'] ?? null) ? $po['items'] : [];
+  $yard = is_array($po['yardItems'] ?? null) ? $po['yardItems'] : [];
+  foreach ($yard as $y) { if (is_array($y)) { $y['yard'] = true; $items[] = $y; } }
+  return $items;
+}
+// "6 Nos" still has a number in it.
+function stock_leading_num($v): float {
+  if (is_numeric($v)) return round((float)$v, 3);
+  return preg_match('/-?\d+(\.\d+)?/', str_replace(',', '', (string)$v), $m) ? round((float)$m[0], 3) : 0.0;
+}
 
 function handle_stock(string $action, string $method): void {
   $claims = require_auth();
@@ -63,6 +89,8 @@ function handle_stock(string $action, string $method): void {
       case 'review':     stock_review($claims, $b); break;
       case 'approve':    stock_approve($claims, $b); break;
       case 'dispatch':   stock_final_dispatch($claims, $b); break;
+      case 'dispatch-draft': stock_dispatch_draft($claims, $b); break;
+      case 'return':     stock_submit_return($claims, $b); break;
       default: fail(404, 'Not found');
     }
   } catch (Throwable $e) {
@@ -357,6 +385,7 @@ function stock_apply(array $doc, array &$material, array $actor, string $how): a
   if ($type === 'receipt') { $f['stock'] += $q; $f['balance'] += $q; }
   elseif ($type === 'adjustment') { $f['stock'] += $q; $f['balance'] += $q; }
   elseif ($type === 'dispatch') { $f['dispatched'] += $q; $f['balance'] -= $q; }
+  elseif ($type === 'return') { $f['dispatched'] = max(0, $f['dispatched'] - $q); $f['balance'] += $q; }
   elseif ($type === 'opening') { $f['stock'] += $q; $f['balance'] += $q; }
   else fail(422, 'Unknown stock transaction type.');
   if ($f['balance'] < -1e-9) fail(409, 'This would take ' . ($material['name'] ?? 'the material') . ' below zero (available ' . stock_qty_text($before, (string)($material['unit'] ?? '')) . ').');
@@ -366,7 +395,7 @@ function stock_apply(array $doc, array &$material, array $actor, string $how): a
   stock_save('materials', (string)$material['id'], $material, $actor['email']);
   $doc['previousBalance'] = $before; $doc['newBalance'] = $f['balance'];
   $doc['appliedAt'] = stock_now(); $doc['appliedBy'] = $actor['name']; $doc['appliedByEmail'] = $actor['email'];
-  $doc['status'] = in_array($type, ['receipt', 'adjustment'], true) && $how !== 'Owner correction' ? STOCK_APPROVED : STOCK_APPLIED;
+  $doc['status'] = in_array($type, ['receipt', 'adjustment', 'return'], true) && $how !== 'Owner correction' ? STOCK_APPROVED : STOCK_APPLIED;
   return $doc;
 }
 
@@ -380,7 +409,7 @@ function stock_review(array $claims, array $b): void {
   db()->beginTransaction();
   $t = stock_fetch('stock_transactions', (string)($b['id'] ?? ''), true);
   if (!$t) fail(404, 'That stock entry no longer exists.');
-  if (!in_array($t['type'] ?? '', ['receipt', 'adjustment'], true)) fail(409, 'Only receipts and discrepancy reports are reviewed.');
+  if (!in_array($t['type'] ?? '', ['receipt', 'adjustment', 'return'], true)) fail(409, 'Only receipts, discrepancy reports and returns are reviewed.');
   if (($t['status'] ?? '') !== STOCK_PENDING) fail(409, 'This entry is ' . strtolower((string)($t['status'] ?? 'not pending')) . ' and is no longer waiting for review.');
   $unit = (string)($t['unit'] ?? ''); $q = stock_num($t['quantity'] ?? 0);
   $what = ($t['type'] === 'receipt' ? 'receipt of ' . stock_qty_text($q, $unit) : 'correction of ' . ($q > 0 ? '+' : '') . stock_qty_text($q, $unit)) . " of {$t['materialName']}";
@@ -422,12 +451,12 @@ function stock_approve(array $claims, array $b): void {
   db()->beginTransaction();
   $t = stock_fetch('stock_transactions', (string)($b['id'] ?? ''), true);
   if (!$t) fail(404, 'That stock entry no longer exists.');
-  if (!in_array($t['type'] ?? '', ['receipt', 'adjustment'], true)) fail(409, 'Only receipts and discrepancy reports are approved.');
+  if (!in_array($t['type'] ?? '', ['receipt', 'adjustment', 'return'], true)) fail(409, 'Only receipts, discrepancy reports and returns are approved.');
   if (!in_array($t['status'] ?? '', [STOCK_PENDING, STOCK_FORWARDED], true)) {
     fail(409, 'This entry is already ' . strtolower((string)($t['status'] ?? '')) . '.');
   }
   $unit = (string)($t['unit'] ?? ''); $q = stock_num($t['quantity'] ?? 0);
-  $what = ($t['type'] === 'receipt' ? 'receipt of ' . stock_qty_text($q, $unit) : 'correction of ' . ($q > 0 ? '+' : '') . stock_qty_text($q, $unit)) . " of {$t['materialName']}";
+  $what = ($t['type'] === 'receipt' ? 'receipt of ' . stock_qty_text($q, $unit) : ($t['type'] === 'return' ? 'return of ' . stock_qty_text($q, $unit) : 'correction of ' . ($q > 0 ? '+' : '') . stock_qty_text($q, $unit))) . " of {$t['materialName']}";
   $tell = array_filter([(string)($t['submittedBy'] ?? ''), (string)($t['reviewedBy'] ?? '')]);
 
   if ($action === 'approve') {
@@ -459,43 +488,137 @@ function stock_approve(array $claims, array $b): void {
   fail(422, 'The approval action must be "approve" or "reject".');
 }
 
-// ── 5. The final dispatch: the one step that takes stock out ───────────────
+// ── 5. The final dispatch: the step that takes stock out ────────────────────
 // On a purchase order whose items the warehouse sent, the Operation Manager
-// assigned and the person received. The assigned person (or the Operation
-// Manager / an Admin) confirms it, naming which inventory material each sent
-// line is, and the balance comes down — once.
-function stock_final_dispatch(array $claims, array $b): void {
+// assigned and the person received. The assigned person (or the Owner,
+// Management, an Admin, the Operation Manager or the warehouse) confirms it,
+// naming which inventory material each line is and how much goes now.
+//
+// 27-Oct (Req 4): a PO may be confirmed in parts. Each confirmation is kept
+// under `stockDispatches` on the PO with its own reference; a line can never
+// go out for more than it has left; extra materials not on the PO may be
+// added; a repeated request (same clientRef) returns the dispatch it already
+// made instead of deducting twice; and a saved draft (`stockDispatchDraft`)
+// deducts nothing.
+function stock_dispatch_eligible(array $claims, array $po): void {
   $role = (string)($claims['role'] ?? '');
+  $actor = stock_actor($claims);
+  if (($po['status'] ?? '') !== 'Approved') fail(409, 'Material is dispatched only on an approved purchase order.');
+  if (($po['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not submitted Stock OK for this purchase order yet.');
+  if (empty($po['dispatchAssignedTo'])) fail(409, 'The Operation Manager has not assigned these items to anyone yet.');
+  if (empty($po['dispatchReceivedAt'])) fail(409, 'The assigned person has not confirmed the handover ("Handover Received") yet.');
+  $isAssignee = stock_same_person((string)($po['dispatchAssignedToEmail'] ?? ''), $actor) || stock_same_person((string)($po['dispatchAssignedTo'] ?? ''), $actor);
+  if (!$isAssignee && !stock_can_dispatch($role)) fail(403, 'Only the person the items were assigned to, the Operation Manager, the warehouse or an Admin can confirm the dispatch.');
+}
+// Every confirmation on the PO so far. A PO dispatched before 27-Oct carries
+// only the legacy stamps and reads as one.
+function stock_dispatches_of(array $po): array {
+  if (is_array($po['stockDispatches'] ?? null) && $po['stockDispatches']) return $po['stockDispatches'];
+  if (!empty($po['stockDispatchedAt']) && is_array($po['stockDispatchItems'] ?? null)) {
+    return [['ref' => (string)($po['stockDispatchRef'] ?? ''), 'at' => (string)$po['stockDispatchedAt'], 'by' => (string)($po['stockDispatchedBy'] ?? ''), 'items' => $po['stockDispatchItems']]];
+  }
+  return [];
+}
+// How much of each PO line has gone out, by line index.
+function stock_dispatched_so_far(array $po): array {
+  $out = [];
+  foreach (stock_dispatches_of($po) as $d) {
+    foreach ((array)($d['items'] ?? []) as $it) {
+      if (!isset($it['index']) || $it['index'] === null || $it['index'] === '') continue;
+      $out[(int)$it['index']] = ($out[(int)$it['index']] ?? 0) + stock_num($it['quantity'] ?? 0);
+    }
+  }
+  return $out;
+}
+// Has every sent line gone out in full?
+function stock_dispatch_complete(array $po): bool {
+  if (!empty($po['stockDispatchComplete'])) return true;
+  // A PO dispatched before 27-Oct went out in one confirmation that was final.
+  if (!empty($po['stockDispatchedAt']) && empty($po['stockDispatches'])) return true;
+  $lines = po_lines($po);
+  $marks = is_array($po['dispatchItems'] ?? null) ? $po['dispatchItems'] : [];
+  $done = stock_dispatched_so_far($po);
+  $any = false;
+  foreach ($lines as $i => $it) {
+    if (empty($marks[$i]['dispatched'])) continue;
+    $any = true;
+    $ordered = stock_leading_num($it['quantity'] ?? 0);
+    if ($ordered > 0 && ($done[$i] ?? 0) + 1e-9 < $ordered) return false;
+    if ($ordered <= 0 && !isset($done[$i])) return false;
+  }
+  return $any;
+}
+
+// Save the dispatch as it stands, without deducting anything (Req 4C).
+function stock_dispatch_draft(array $claims, array $b): void {
   $actor = stock_actor($claims);
   db()->beginTransaction();
   $po = stock_fetch('lead_pos', (string)($b['poId'] ?? ''), true);
   if (!$po) fail(404, 'That purchase order no longer exists.');
-  if (($po['status'] ?? '') !== 'Approved') fail(409, 'Material is dispatched only on an approved purchase order.');
-  if (($po['dispatchStatus'] ?? '') !== 'Completed') fail(409, 'The warehouse has not sent this dispatch yet (OK & Send).');
-  if (empty($po['dispatchAssignedTo'])) fail(409, 'The Operation Manager has not assigned these items to anyone yet.');
-  if (empty($po['dispatchReceivedAt'])) fail(409, 'The assigned person has not confirmed receipt of the items yet.');
-  if (!empty($po['stockDispatchedAt'])) fail(409, 'The stock for this purchase order was already deducted on ' . $po['stockDispatchedAt'] . ' (ref ' . ($po['stockDispatchRef'] ?? '') . '). It is not deducted twice.');
-  $isAssignee = stock_same_person((string)($po['dispatchAssignedToEmail'] ?? ''), $actor) || stock_same_person((string)($po['dispatchAssignedTo'] ?? ''), $actor);
-  if (!$isAssignee && !stock_can_review($role)) fail(403, 'Only the person the items were assigned to, the Operation Manager or an Admin can confirm the final dispatch.');
+  stock_dispatch_eligible($claims, $po);
+  if (stock_dispatch_complete($po)) fail(409, 'Everything on this purchase order has already been dispatched.');
+  $lines = [];
+  foreach ((array)($b['lines'] ?? []) as $l) {
+    if (!is_array($l)) continue;
+    $idx = (isset($l['index']) && $l['index'] !== null && $l['index'] !== '') ? (int)$l['index'] : null;
+    $lines[] = ['index' => $idx, 'materialId' => stock_str($l['materialId'] ?? '', 40), 'quantity' => stock_num($l['quantity'] ?? 0),
+                'name' => stock_str($l['name'] ?? '', 190), 'unit' => stock_str($l['unit'] ?? '', 20)];
+  }
+  $po['stockDispatchDraft'] = ['lines' => $lines, 'destination' => stock_str($b['destination'] ?? '', 300), 'note' => stock_str($b['note'] ?? ''),
+                               'savedBy' => $actor['name'], 'savedByEmail' => $actor['email'], 'savedAt' => stock_now()];
+  stock_save('lead_pos', $po['id'], $po, $actor['email']);
+  db()->commit();
+  json_out(['ok' => true, 'po' => $po]);
+}
 
-  $items = is_array($po['items'] ?? null) ? $po['items'] : [];
+function stock_final_dispatch(array $claims, array $b): void {
+  $actor = stock_actor($claims);
+  db()->beginTransaction();
+  $po = stock_fetch('lead_pos', (string)($b['poId'] ?? ''), true);
+  if (!$po) fail(404, 'That purchase order no longer exists.');
+  stock_dispatch_eligible($claims, $po);
+
+  // The same confirmation sent twice (a double tap, a retry) is one dispatch.
+  $clientRef = stock_str($b['clientRef'] ?? '', 80);
+  if ($clientRef !== '') {
+    foreach (stock_dispatches_of($po) as $d) {
+      if (($d['clientRef'] ?? '') === $clientRef) { db()->rollBack(); json_out(['ok' => true, 'reference' => $d['ref'], 'transactions' => [], 'po' => $po, 'repeated' => true]); }
+    }
+  }
+
+  $items = po_lines($po);
   $marks = is_array($po['dispatchItems'] ?? null) ? $po['dispatchItems'] : [];
+  $done = stock_dispatched_so_far($po);
   $chosen = is_array($b['items'] ?? null) ? $b['items'] : [];
-  if (!$chosen) fail(422, 'Name the inventory material for at least one dispatched item.');
+  if (!$chosen) fail(422, 'Enter a quantity for at least one item to dispatch now.');
 
   // Gather what comes out of each material, line by line.
   $lines = []; $perMaterial = []; $seenIndex = [];
   foreach ($chosen as $c) {
-    $i = (int)($c['index'] ?? -1);
-    if (!isset($items[$i])) fail(422, "Item " . ($i + 1) . ' is not on this purchase order.');
-    if (isset($seenIndex[$i])) fail(422, 'Item ' . ($i + 1) . ' is listed twice.');
-    $seenIndex[$i] = true;
-    if (empty($marks[$i]['dispatched'])) fail(409, 'Item ' . ($i + 1) . ' (' . ($items[$i]['materialName'] ?? '') . ') was not dispatched by the warehouse.');
     $mid = stock_str($c['materialId'] ?? '', 40);
-    if ($mid === '') fail(422, 'Choose the inventory material for item ' . ($i + 1) . ' (' . ($items[$i]['materialName'] ?? '') . ').');
-    $qty = stock_num($c['quantity'] ?? ($items[$i]['quantity'] ?? 0));
-    if ($qty <= 0) fail(422, 'Item ' . ($i + 1) . ' (' . ($items[$i]['materialName'] ?? '') . ') has no quantity to dispatch.');
-    $lines[] = ['index' => $i, 'materialId' => $mid, 'quantity' => $qty, 'itemName' => (string)($items[$i]['materialName'] ?? ''), 'spec' => (string)($items[$i]['specification'] ?? '')];
+    $qty = stock_num($c['quantity'] ?? 0);
+    $hasIndex = isset($c['index']) && $c['index'] !== null && $c['index'] !== '';
+    if ($hasIndex) {
+      $i = (int)$c['index'];
+      if (!isset($items[$i])) fail(422, 'Item ' . ($i + 1) . ' is not on this purchase order.');
+      if (isset($seenIndex[$i])) fail(422, 'Item ' . ($i + 1) . ' is listed twice.');
+      $seenIndex[$i] = true;
+      $name = (string)($items[$i]['materialName'] ?? ('Item ' . ($i + 1)));
+      if (empty($marks[$i]['dispatched'])) fail(409, "\"$name\" was not marked available by the warehouse.");
+      if ($mid === '') fail(422, "Choose the inventory material for \"$name\".");
+      if ($qty <= 0) fail(422, "Enter the quantity of \"$name\" to dispatch now.");
+      $ordered = stock_leading_num($items[$i]['quantity'] ?? 0);
+      $remaining = $ordered > 0 ? round($ordered - ($done[$i] ?? 0), 3) : null;
+      if ($remaining !== null && $qty > $remaining + 1e-9) {
+        fail(409, "\"$name\": " . stock_qty_text($qty, (string)($items[$i]['unit'] ?? '')) . ' entered but only ' . stock_qty_text(max(0, $remaining), (string)($items[$i]['unit'] ?? '')) . ' is left to dispatch on this purchase order.');
+      }
+      $lines[] = ['index' => $i, 'materialId' => $mid, 'quantity' => $qty, 'itemName' => $name, 'spec' => (string)($items[$i]['specification'] ?? ''), 'extra' => false];
+    } else {
+      // An extra material not on the PO (Req 4E).
+      if ($mid === '') fail(422, 'Choose the inventory material for the added item.');
+      if ($qty <= 0) fail(422, 'Enter the quantity of the added item.');
+      $lines[] = ['index' => null, 'materialId' => $mid, 'quantity' => $qty, 'itemName' => '', 'spec' => '', 'extra' => true];
+    }
     $perMaterial[$mid] = ($perMaterial[$mid] ?? 0) + $qty;
   }
 
@@ -509,7 +632,7 @@ function stock_final_dispatch(array $claims, array $b): void {
     $bal = stock_figures($m)['balance'];
     if ($qty > $bal + 1e-9) $short[] = "{$m['name']}: needs " . stock_qty_text($qty, (string)($m['unit'] ?? '')) . ', available ' . stock_qty_text($bal, (string)($m['unit'] ?? ''));
   }
-  if ($short) fail(409, 'Not enough stock to dispatch — ' . implode('; ', $short) . '. Receive stock first or correct the quantities.');
+  if ($short) fail(409, 'Not enough stock to dispatch — ' . implode('; ', $short) . '. Receive stock first or lower the quantities.');
 
   $ref = stock_reference('DSP');
   $destination = stock_str($b['destination'] ?? '', 300);
@@ -525,7 +648,8 @@ function stock_final_dispatch(array $claims, array $b): void {
       'type' => 'dispatch', 'reference' => $ref, 'dispatchRef' => $ref,
       'materialId' => $m['id'], 'materialName' => (string)($m['name'] ?? ''), 'unit' => (string)($m['unit'] ?? ''), 'category' => (string)($m['category'] ?? ''),
       'quantity' => $ln['quantity'], 'dispatchDate' => stock_today_ist(),
-      'poId' => $po['id'], 'poSource' => 'lead', 'poNumber' => (string)($po['poNumber'] ?? ''), 'poItemIndex' => $ln['index'], 'poItemName' => $ln['itemName'], 'poItemSpec' => $ln['spec'],
+      'poId' => $po['id'], 'poSource' => 'lead', 'poNumber' => (string)($po['poNumber'] ?? ''), 'poItemIndex' => $ln['index'], 'poItemName' => $ln['extra'] ? 'Added at dispatch' : $ln['itemName'], 'poItemSpec' => $ln['spec'],
+      'extraItem' => $ln['extra'],
       'leadId' => (string)($po['leadId'] ?? ''), 'customerName' => (string)($po['customerName'] ?? ''),
       'installationId' => stock_str($b['installationId'] ?? '', 40), 'destination' => $destination, 'remarks' => $note,
       'assignedTo' => (string)($po['dispatchAssignedTo'] ?? ''), 'receivedBy' => (string)($po['dispatchReceivedBy'] ?? ''),
@@ -533,17 +657,27 @@ function stock_final_dispatch(array $claims, array $b): void {
       'submittedBy' => $actor['name'], 'submittedByEmail' => $actor['email'], 'submittedAt' => stock_now(),
     ];
     $doc = stock_apply($doc, $m, $actor, 'Final dispatch');
-    $doc = stock_history($doc, 'Final dispatch confirmed — stock deducted', $actor, $note);
+    $doc = stock_history($doc, 'Dispatch confirmed — stock deducted', $actor, $note);
     $id = stock_insert('stock_transactions', $doc, $actor['email']);
     $doc['id'] = $id;
     $written[] = $doc;
     unset($m);
   }
 
-  $po['stockDispatchedAt'] = stock_now(); $po['stockDispatchedBy'] = $actor['name']; $po['stockDispatchedByEmail'] = $actor['email'];
+  $entry = ['ref' => $ref, 'clientRef' => $clientRef, 'at' => stock_now(), 'by' => $actor['name'], 'byEmail' => $actor['email'],
+    'destination' => $destination, 'note' => $note,
+    'items' => array_map(fn($d) => ['index' => $d['poItemIndex'], 'materialId' => $d['materialId'], 'materialName' => $d['materialName'],
+      'quantity' => $d['quantity'], 'unit' => $d['unit'], 'transactionId' => $d['id'], 'previousBalance' => $d['previousBalance'], 'newBalance' => $d['newBalance'], 'extra' => $d['extraItem']], $written)];
+  $dispatches = stock_dispatches_of($po);
+  $dispatches[] = $entry;
+  $po['stockDispatches'] = $dispatches;
+  // The legacy stamps: the first confirmation's time, the latest reference,
+  // every line across all confirmations.
+  if (empty($po['stockDispatchedAt'])) { $po['stockDispatchedAt'] = $entry['at']; $po['stockDispatchedBy'] = $actor['name']; $po['stockDispatchedByEmail'] = $actor['email']; }
   $po['stockDispatchRef'] = $ref; $po['stockDispatchDestination'] = $destination; $po['stockDispatchNote'] = $note;
-  $po['stockDispatchItems'] = array_map(fn($d) => ['index' => $d['poItemIndex'], 'materialId' => $d['materialId'], 'materialName' => $d['materialName'],
-    'quantity' => $d['quantity'], 'unit' => $d['unit'], 'transactionId' => $d['id'], 'previousBalance' => $d['previousBalance'], 'newBalance' => $d['newBalance']], $written);
+  $po['stockDispatchItems'] = array_merge(...array_map(fn($d) => (array)($d['items'] ?? []), $dispatches));
+  $po['stockDispatchComplete'] = stock_dispatch_complete($po);
+  unset($po['stockDispatchDraft']);
   stock_save('lead_pos', $po['id'], $po, $actor['email']);
   db()->commit();
 
@@ -551,10 +685,65 @@ function stock_final_dispatch(array $claims, array $b): void {
   $label = 'PO ' . ($po['poNumber'] ?? '') . (!empty($po['customerName']) ? " for \"{$po['customerName']}\"" : '');
   $list = implode(', ', array_map(fn($d) => $d['materialName'] . ' ' . stock_qty_text(stock_num($d['quantity']), $d['unit'])
     . ' (' . stock_qty_text(stock_num($d['previousBalance']), $d['unit']) . ' → ' . stock_qty_text(stock_num($d['newBalance']), $d['unit']) . ')', $written));
+  $kind = $po['stockDispatchComplete'] ? 'Final dispatch' : 'Partial dispatch';
   stock_notify(array_merge(stock_people_by_role(['super_admin', 'operation_manager']), [(string)($po['dispatchAssignedBy'] ?? '')]),
-    'Final Dispatch — Stock Deducted', "{$actor['name']} confirmed the final dispatch for $label (ref $ref). Stock deducted: $list." . ($destination !== '' ? " Destination: $destination." : ''),
+    "$kind — Stock Deducted", "{$actor['name']} confirmed a " . strtolower($kind) . " for $label (ref $ref). Stock deducted: $list." . ($destination !== '' ? " Destination: $destination." : '')
+    . ($po['stockDispatchComplete'] ? ' Everything on this purchase order has now been dispatched.' : ' The remaining quantities stay for a later dispatch.'),
     $po['id'], $actor);
   json_out(['ok' => true, 'reference' => $ref, 'transactions' => $written, 'po' => $po]);
+}
+
+// ── 6. Returns: material that physically came back (Req 5, 27-Oct) ─────────
+// The Operation Manager (or the warehouse side) records what returned and
+// how much; it waits for the Owner, who approves or rejects it on the
+// Materials → Approvals tab. Only an approval moves the balance.
+function stock_submit_return(array $claims, array $b): void {
+  $role = (string)($claims['role'] ?? '');
+  if (!stock_can_enter($role)) fail(403, 'Only the Operation Manager or the warehouse can record returned material.');
+  $actor = stock_actor($claims);
+  $clientRef = stock_str($b['clientRef'] ?? '', 80);
+  if ($clientRef !== '') {
+    foreach (stock_ledger() as $t) {
+      if (($t['clientRef'] ?? '') === $clientRef && ($t['type'] ?? '') === 'return') json_out($t);
+    }
+  }
+  $material = stock_fetch('materials', (string)($b['materialId'] ?? ''));
+  if (!$material) fail(404, 'Choose the material that was returned.');
+  $qty = stock_num($b['quantity'] ?? 0);
+  if ($qty <= 0) fail(422, 'The returned quantity must be more than zero.');
+  $remarks = stock_str($b['remarks'] ?? '');
+  $date = stock_str($b['returnDate'] ?? '', 10);
+  if ($date === '') $date = stock_today_ist();
+  if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) fail(422, 'The return date is not a valid date.');
+  if ($date > stock_today_ist()) fail(422, 'The return date cannot be in the future.');
+
+  $po = null; $poId = stock_str($b['poId'] ?? '', 40);
+  if ($poId !== '') {
+    $po = stock_fetch('lead_pos', $poId);
+    if (!$po) fail(404, 'That purchase order no longer exists.');
+  }
+  $figures = stock_figures($material);
+  $doc = [
+    'type' => 'return', 'reference' => stock_reference('RTN'), 'clientRef' => $clientRef,
+    'materialId' => $material['id'], 'materialName' => (string)($material['name'] ?? ''), 'unit' => (string)($material['unit'] ?? ''),
+    'category' => (string)($material['category'] ?? ''),
+    'quantity' => $qty, 'returnDate' => $date, 'remarks' => $remarks, 'reason' => $remarks,
+    'poId' => $poId, 'poSource' => $poId !== '' ? 'lead' : '', 'poNumber' => $po ? (string)($po['poNumber'] ?? '') : '',
+    'leadId' => $po ? (string)($po['leadId'] ?? '') : '', 'customerName' => $po ? (string)($po['customerName'] ?? '') : '',
+    'balanceAtSubmission' => $figures['balance'],
+    'status' => STOCK_FORWARDED,
+    'submittedBy' => $actor['name'], 'submittedByEmail' => $actor['email'], 'submittedAt' => stock_now(),
+  ];
+  $doc = stock_history($doc, 'Return recorded — awaiting the Owner', $actor, $remarks);
+  $id = stock_insert('stock_transactions', $doc, $actor['email']);
+  $doc['id'] = $id;
+  $unit = $doc['unit'];
+  stock_notify(stock_people_by_role(['super_admin']), 'Returned Material for Your Approval — ' . $doc['materialName'],
+    "{$actor['name']} recorded " . stock_qty_text($qty, $unit) . " of {$doc['materialName']} returned" . ($doc['poNumber'] !== '' ? " from PO {$doc['poNumber']}" : '')
+    . ($doc['customerName'] !== '' ? " ({$doc['customerName']})" : '') . " on $date. Current available stock " . stock_qty_text($figures['balance'], $unit)
+    . ($remarks !== '' ? ". Remarks: $remarks" : '') . ". Ref {$doc['reference']}. Open Materials → Approvals to approve it; only then is it added back to stock.",
+    $id, $actor);
+  json_out($doc, 201);
 }
 
 // ── The figure a material is created with ───────────────────────────────────

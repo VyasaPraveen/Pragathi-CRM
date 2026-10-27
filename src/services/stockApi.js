@@ -49,6 +49,21 @@ export async function approveStockEntry(id, action, note = '') {
 export async function confirmFinalDispatch(body) {
   const res = await apiPost('/stock/dispatch', body);
   refresh();
-  logActivity('Final Dispatch Confirmed', 'leadPOs', res && res.reference);
+  logActivity('Dispatch Confirmed', 'leadPOs', res && res.reference);
+  return res;
+}
+
+// Save the dispatch as it stands, before confirming (Req 4C). Deducts nothing.
+export async function saveDispatchDraft(body) {
+  const res = await apiPost('/stock/dispatch-draft', body);
+  refresh();
+  return res;
+}
+
+// Material that physically came back (Req 5): recorded for the Owner's approval.
+export async function submitStockReturn(body) {
+  const res = await apiPost('/stock/return', body);
+  refresh();
+  logActivity('Stock Return Recorded', 'materials', `${res && res.materialName} × ${res && res.quantity} (${res && res.reference})`);
   return res;
 }

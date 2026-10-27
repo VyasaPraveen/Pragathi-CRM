@@ -1,5 +1,5 @@
 // ============================================================================
-// The stock ledger — Materials & Inventory (10-Oct).
+// The stock ledger — Materials & Inventory (10-Oct, extended 27-Oct).
 //
 // A material's figures (stock, dispatched, balance) are no longer typed into
 // a form. They move only through transactions the server records in
@@ -12,8 +12,13 @@
 //               reason → the same review → the Owner approves → the balance
 //               moves by the difference (the Owner's own correction applies
 //               at once)
-//   dispatch    the final dispatch confirmation on a PO whose items were
-//               sent, assigned and received → balance down, once per PO
+//   dispatch    a final dispatch confirmation on a PO whose items were sent,
+//               assigned and received → balance down. 27-Oct: a PO may be
+//               dispatched in parts — each confirmation takes only the
+//               quantities entered, what is left stays for a later one, and
+//               extra materials can be added before confirming.
+//   return      material that physically came back (27-Oct) → the Owner
+//               approves → balance up, dispatched down
 //   opening     the figure the Owner created a material with
 //
 // Everything here is pure: who may do what (mirroring the server, which is
@@ -21,10 +26,10 @@
 // line finds its inventory material. The calls themselves are in stockApi.js.
 // ============================================================================
 
-import { normalizeRole, DISPATCH_STATUS } from './permissions';
+import { normalizeRole, DISPATCH_STATUS, poLines } from './permissions';
 import { isSameUser, toNumber } from './helpers';
 
-export const STOCK_TYPES = { RECEIPT: 'receipt', ADJUSTMENT: 'adjustment', DISPATCH: 'dispatch', OPENING: 'opening' };
+export const STOCK_TYPES = { RECEIPT: 'receipt', ADJUSTMENT: 'adjustment', DISPATCH: 'dispatch', RETURN: 'return', OPENING: 'opening' };
 export const STOCK_STATUS = {
   PENDING: 'Pending Review',        // with the Operation Manager
   FORWARDED: 'Forwarded to Owner',  // with the Owner
@@ -38,12 +43,16 @@ export const STOCK_OPEN_STATUSES = [STOCK_STATUS.PENDING, STOCK_STATUS.FORWARDED
 export const isStockOpen = (t) => !!t && STOCK_OPEN_STATUSES.includes(t.status);
 export const isStockApplied = (t) => !!t && !!t.appliedAt;
 
-// Who enters receipts and reports discrepancies: the warehouse side (which
-// the client's "Warehouse / BCO" includes, with the Technical Manager) and
-// the office roles that stand in for it. Mirrors STOCK_ENTRY_ROLES in stock.php.
+// Who enters receipts, reports discrepancies and records returns: the
+// warehouse side (which the client's "Warehouse / BCO" includes, with the
+// Technical Manager) and the office roles that stand in for it. Mirrors
+// STOCK_ENTRY_ROLES in stock.php.
 export const STOCK_ENTRY_ROLES = ['warehouse_admin', 'technical_manager', 'bco', 'operation_manager', 'admin', 'management', 'super_admin'];
 // Who reviews an entry and forwards it to the Owner. Mirrors STOCK_REVIEW_ROLES.
 export const STOCK_REVIEW_ROLES = ['operation_manager', 'admin', 'management', 'super_admin'];
+// Who confirms a final dispatch besides the assigned person (Req 4A, 27-Oct):
+// the Owner, Management, Admin, the Operation Manager and the warehouse.
+export const FINAL_DISPATCH_ROLES = ['operation_manager', 'admin', 'management', 'super_admin', 'warehouse_admin'];
 // The Materials page has always called a balance under 10 "Low Stock" and
 // under 30 "Medium". Unchanged. Mirrors STOCK_LOW in stock.php.
 export const STOCK_LOW = 10;
@@ -58,6 +67,8 @@ export const canReviewStock = (role) => roleIn(role, STOCK_REVIEW_ROLES);
 export const canApproveStock = (role) => isStockOwner(role);
 // A quick "no approvals needed" correction: the Owner's alone.
 export const canCorrectStockDirectly = (role) => isStockOwner(role);
+// Recording a return (Req 5): the Operation Manager and the warehouse side.
+export const canRecordReturn = (role) => roleIn(role, STOCK_ENTRY_ROLES);
 
 // Good / Medium / Low Stock from the available balance — the rule the page
 // has always used, now in one place for the page, the dashboard and the
@@ -92,11 +103,13 @@ export function materialSummary(material, txns) {
   const opening = sum(t => t.type === STOCK_TYPES.OPENING && isStockApplied(t));
   const received = sum(t => t.type === STOCK_TYPES.RECEIPT && isStockApplied(t));
   const dispatched = sum(t => t.type === STOCK_TYPES.DISPATCH && isStockApplied(t));
+  const returned = sum(t => t.type === STOCK_TYPES.RETURN && isStockApplied(t));
   const adjusted = sum(t => t.type === STOCK_TYPES.ADJUSTMENT && isStockApplied(t));
   const pendingReceipts = lines.filter(t => t.type === STOCK_TYPES.RECEIPT && isStockOpen(t));
   const pendingAdjustments = lines.filter(t => t.type === STOCK_TYPES.ADJUSTMENT && isStockOpen(t));
+  const pendingReturns = lines.filter(t => t.type === STOCK_TYPES.RETURN && isStockOpen(t));
   return {
-    opening, received, dispatched, adjusted,
+    opening, received, dispatched, returned, adjusted,
     installed: toNumber(m.installed),
     stock: toNumber(m.stock),
     balance: toNumber(m.balance),
@@ -104,6 +117,8 @@ export function materialSummary(material, txns) {
     pendingReceiptQty: pendingReceipts.reduce((s, t) => s + toNumber(t.quantity), 0),
     pendingReceiptCount: pendingReceipts.length,
     pendingAdjustmentCount: pendingAdjustments.length,
+    pendingReturnQty: pendingReturns.reduce((s, t) => s + toNumber(t.quantity), 0),
+    pendingReturnCount: pendingReturns.length,
     approvedAdjustmentCount: lines.filter(t => t.type === STOCK_TYPES.ADJUSTMENT && isStockApplied(t)).length,
     lines,
   };
@@ -132,7 +147,7 @@ export function stockEntryState(t) {
   if (!t) return '';
   switch (t.status) {
     case STOCK_STATUS.PENDING: return `Awaiting the Operation Manager's review`;
-    case STOCK_STATUS.FORWARDED: return `Forwarded to the Owner by ${t.reviewedBy || '-'} — awaiting approval`;
+    case STOCK_STATUS.FORWARDED: return t.type === STOCK_TYPES.RETURN ? `Awaiting the Owner's approval of the return` : `Forwarded to the Owner by ${t.reviewedBy || '-'} — awaiting approval`;
     case STOCK_STATUS.APPROVED: return `Approved by ${t.approvedBy || '-'} — stock updated`;
     case STOCK_STATUS.REJECTED: return `Rejected by ${t.rejectedBy || '-'}${t.rejectReason ? ': ' + t.rejectReason : ''}`;
     case STOCK_STATUS.APPLIED: return t.type === STOCK_TYPES.DISPATCH ? `Dispatched — confirmed by ${t.confirmedBy || '-'}`
@@ -142,11 +157,11 @@ export function stockEntryState(t) {
 }
 
 export const stockTypeLabel = (type) => ({
-  receipt: 'Receipt', adjustment: 'Stock Correction', dispatch: 'Dispatch', opening: 'Opening Stock',
+  receipt: 'Receipt', adjustment: 'Stock Correction', dispatch: 'Dispatch', return: 'Return', opening: 'Opening Stock',
 }[type] || type || '');
 
 // The day an entry belongs to, for the Day / Month filter.
-export const STOCK_DATE_FIELDS = ['receiptDate', 'dispatchDate', 'submittedAt', 'createdAt'];
+export const STOCK_DATE_FIELDS = ['receiptDate', 'dispatchDate', 'returnDate', 'submittedAt', 'createdAt'];
 
 // ── Purchase orders and receipts ────────────────────────────────────────────
 // Both kinds of PO can bring material in: the vendor POs on the Purchase
@@ -201,49 +216,125 @@ export function matchMaterial(materials, name) {
   return partial[0] || null;
 }
 
+// A quantity typed as "6 Nos" or "20 mtrs" still has a number in it.
+export const leadingNumber = (v) => {
+  if (typeof v === 'number') return v;
+  const m = /-?\d+(\.\d+)?/.exec(String(v || '').replace(/,/g, ''));
+  return m ? Number(m[0]) : 0;
+};
+
 // ── The final dispatch on a lead PO ─────────────────────────────────────────
-export const stockDispatched = (po) => !!po && !!po.stockDispatchedAt;
+// 27-Oct: a PO is dispatched in one or more confirmations. Each is kept on
+// the PO under `stockDispatches` (ref, who, when, lines); the legacy stamps
+// `stockDispatchedAt/Ref/Items` still mark the first one and the latest ref.
+export const stockDispatched = (po) => !!po && (!!po.stockDispatchedAt || (po.stockDispatches || []).length > 0);
+
+// Every confirmed dispatch on the PO, oldest first. A PO dispatched before
+// 27-Oct carries only the legacy fields and reads as one dispatch.
+export function stockDispatches(po) {
+  if (!po) return [];
+  if (Array.isArray(po.stockDispatches) && po.stockDispatches.length) return po.stockDispatches;
+  if (po.stockDispatchedAt && Array.isArray(po.stockDispatchItems)) {
+    return [{ ref: po.stockDispatchRef || '', at: po.stockDispatchedAt, by: po.stockDispatchedBy || '', items: po.stockDispatchItems }];
+  }
+  return [];
+}
+
+// How much of each PO line has gone out so far, by line index.
+export function dispatchedSoFar(po) {
+  const out = {};
+  stockDispatches(po).forEach(d => (d.items || []).forEach(it => {
+    if (it.index === null || it.index === undefined || it.index === '') return;
+    out[it.index] = (out[it.index] || 0) + toNumber(it.quantity);
+  }));
+  return out;
+}
+
+// Has every sent line of the PO been dispatched in full?
+export function stockDispatchComplete(po) {
+  if (!po) return false;
+  if (po.stockDispatchComplete === true) return true;
+  // A PO dispatched before 27-Oct went out in one confirmation that was final
+  // by definition; it is never reopened.
+  if (po.stockDispatchedAt && !(Array.isArray(po.stockDispatches) && po.stockDispatches.length)) return true;
+  const sent = finalDispatchLines(po, []);
+  if (!sent.length) return false;
+  return sent.every(l => l.remaining <= 1e-9);
+}
 
 // The final dispatch is open once the items have been sent, assigned and
-// received, until the stock has come off. Mirrors stock_final_dispatch().
+// received, until every sent line has gone out. Mirrors stock_final_dispatch().
 export function finalDispatchOpen(po) {
   if (!po || po.status !== 'Approved') return false;
   if (po.dispatchStatus !== DISPATCH_STATUS.COMPLETED) return false;
   if (!po.dispatchAssignedTo || !po.dispatchReceivedAt) return false;
-  return !stockDispatched(po);
+  return !stockDispatchComplete(po);
 }
 
-// The assigned person confirms it, or the Operation Manager / an Admin.
+// The assigned person confirms it, or the Owner / Management / Admin / the
+// Operation Manager / the warehouse (Req 4A).
 export function canFinalDispatch(po, user, role) {
   if (!finalDispatchOpen(po)) return false;
-  if (canReviewStock(role)) return true;
+  if (roleIn(role, FINAL_DISPATCH_ROLES)) return true;
   return isSameUser(po.dispatchAssignedToEmail, user) || isSameUser(po.dispatchAssignedTo, user);
 }
+// Who may save a draft of the dispatch: the same people.
+export const canSaveDispatchDraft = canFinalDispatch;
 
-// The dispatched lines of a PO with the inventory material each most likely
-// is, ready for the person to confirm or change. `materialId: ''` means
-// "not kept in inventory" and the line is left out of the deduction.
+// The dispatched lines of a PO (including the Operation Manager's yard items)
+// with the inventory material each most likely is, what has already gone
+// out, what remains, and the quantity proposed for this confirmation (the
+// remainder). `materialId: ''` means "not kept in inventory" and the line is
+// left out of the deduction. A saved draft (Req 4C) overrides the proposal.
 export function finalDispatchLines(po, materials) {
-  const items = (po && po.items) || [];
+  const lines = poLines(po);
   const marks = (po && Array.isArray(po.dispatchItems)) ? po.dispatchItems : [];
-  return items.map((it, index) => {
+  const done = dispatchedSoFar(po);
+  const draft = (po && po.stockDispatchDraft && Array.isArray(po.stockDispatchDraft.lines)) ? po.stockDispatchDraft.lines : null;
+  const out = lines.map((it, index) => {
     const sent = !!(marks[index] && marks[index].dispatched);
-    const match = sent ? matchMaterial(materials, it.materialName) : null;
-    return { index, name: it.materialName || `Item ${index + 1}`, spec: it.specification || '', quantity: toNumber(it.quantity), unit: it.unit || '',
-      sent, materialId: match ? match.id : '', suggested: !!match };
+    const ordered = leadingNumber(it.quantity);
+    const soFar = done[index] || 0;
+    const remaining = Math.max(0, Math.round((ordered - soFar) * 1000) / 1000);
+    const match = sent ? ((it.materialId && (materials || []).find(m => m.id === it.materialId)) || matchMaterial(materials, it.materialName)) : null;
+    const d = draft ? draft.find(x => x.index === index) : null;
+    return { index, name: it.materialName || `Item ${index + 1}`, spec: it.specification || '', ordered, unit: it.unit || '', yard: !!it.yard,
+      sent, done: soFar, remaining,
+      materialId: d ? (d.materialId || '') : (match ? match.id : ''),
+      quantity: d ? toNumber(d.quantity) : remaining,
+      suggested: !d && !!match, extra: false };
   }).filter(l => l.sent);
+  // Extra materials added before confirming (Req 4E), kept on the draft.
+  if (draft) {
+    draft.filter(x => x && (x.index === null || x.index === undefined) && x.materialId).forEach((x, i) => {
+      const m = (materials || []).find(mm => mm.id === x.materialId);
+      out.push({ index: null, key: 'extra-' + i, name: (m && m.name) || x.name || 'Added item', spec: '', ordered: 0, unit: (m && m.unit) || x.unit || '', yard: false,
+        sent: true, done: 0, remaining: 0, materialId: x.materialId, quantity: toNumber(x.quantity), suggested: false, extra: true });
+    });
+  }
+  return out;
 }
 
-// What stops the deduction: nothing mapped, a line with no quantity, the
-// same material short of stock across the lines that use it.
+// A line the user adds before confirming: an inventory material and a quantity.
+export const extraDispatchLine = (material, quantity, key) => ({
+  index: null, key: key || ('extra-' + Date.now()), name: material ? material.name : '', spec: '', ordered: 0, unit: material ? material.unit || '' : '',
+  yard: false, sent: true, done: 0, remaining: 0, materialId: material ? material.id : '', quantity: toNumber(quantity), suggested: false, extra: true,
+});
+
+// The lines that will actually be deducted now: a material chosen and a
+// quantity above zero. Everything else simply stays for a later dispatch.
+export const activeDispatchLines = (lines) => (lines || []).filter(l => l && l.materialId && toNumber(l.quantity) > 0);
+
+// What stops the deduction: nothing to dispatch, more than a line has left,
+// or a material short of stock across the lines that use it. A line with no
+// material or a zero quantity is NOT an error — it is left for later.
 export function finalDispatchIssue(lines, materials) {
-  const chosen = (lines || []).filter(l => l.materialId);
-  if (!chosen.length) return 'Choose the inventory material for at least one dispatched item.';
+  const chosen = activeDispatchLines(lines);
+  if (!chosen.length) return 'Enter a quantity for at least one item (and choose its inventory material) to dispatch now; the rest can go in a later dispatch.';
+  const over = chosen.filter(l => !l.extra && l.ordered > 0 && toNumber(l.quantity) > l.remaining + 1e-9);
+  if (over.length) return `More than is left to dispatch — ${over.map(l => `${l.name}: ${qtyText(l.quantity, l.unit)} entered, ${qtyText(l.remaining, l.unit)} remaining`).join('; ')}.`;
   const need = {};
-  for (const l of chosen) {
-    if (toNumber(l.quantity) <= 0) return `"${l.name}" has no quantity to dispatch.`;
-    need[l.materialId] = (need[l.materialId] || 0) + toNumber(l.quantity);
-  }
+  for (const l of chosen) need[l.materialId] = (need[l.materialId] || 0) + toNumber(l.quantity);
   const short = Object.entries(need).map(([id, q]) => {
     const m = (materials || []).find(x => x.id === id);
     if (!m) return `a chosen material no longer exists`;
@@ -252,17 +343,41 @@ export function finalDispatchIssue(lines, materials) {
   return short.length ? `Not enough stock — ${short.join('; ')}.` : '';
 }
 
-// The request body for /stock/dispatch.
+// Is this confirmation only part of what remains?
+export function isPartialDispatch(lines) {
+  const all = (lines || []).filter(l => !l.extra);
+  return all.some(l => {
+    const q = l.materialId ? toNumber(l.quantity) : 0;
+    return l.remaining > 1e-9 && q + 1e-9 < l.remaining;
+  });
+}
+
+// The request body for /stock/dispatch (the active lines only).
 export const finalDispatchBody = (po, lines, extra = {}) => ({
   poId: po.id,
-  items: (lines || []).filter(l => l.materialId).map(l => ({ index: l.index, materialId: l.materialId, quantity: toNumber(l.quantity) })),
+  items: activeDispatchLines(lines).map(l => ({ index: l.extra ? null : l.index, materialId: l.materialId, quantity: toNumber(l.quantity) })),
+  ...extra,
+});
+// The draft saved before confirming (Req 4C): every line as it stands, so
+// the person can come back to it. Nothing is deducted by a draft.
+export const dispatchDraftBody = (po, lines, extra = {}) => ({
+  poId: po.id,
+  lines: (lines || []).map(l => ({ index: l.extra ? null : l.index, materialId: l.materialId || '', quantity: toNumber(l.quantity), name: l.name || '', unit: l.unit || '' })),
   ...extra,
 });
 
 // Where the final dispatch stands, in one line.
 export function finalDispatchState(po) {
   if (!po) return { step: 'none', text: '' };
-  if (stockDispatched(po)) return { step: 'done', text: `Stock deducted by ${po.stockDispatchedBy || '-'} (ref ${po.stockDispatchRef || '-'})` };
-  if (finalDispatchOpen(po)) return { step: 'open', text: `Items received by ${po.dispatchReceivedBy || po.dispatchAssignedTo} — awaiting the final dispatch confirmation` };
+  const done = stockDispatches(po);
+  if (stockDispatchComplete(po)) return { step: 'done', text: `All items dispatched — ${done.length} confirmation${done.length === 1 ? '' : 's'}, last by ${done.length ? done[done.length - 1].by || '-' : '-'}` };
+  if (done.length) return { step: 'partial', text: `${done.length} partial dispatch${done.length === 1 ? '' : 'es'} confirmed — the remaining quantities await the next` };
+  if (finalDispatchOpen(po)) return { step: 'open', text: `Items received by ${po.dispatchReceivedBy || po.dispatchAssignedTo} — awaiting the dispatch confirmation` };
   return { step: 'waiting', text: '' };
 }
+
+// ── Returns (Req 5, 27-Oct) ─────────────────────────────────────────────────
+// Returns recorded against a PO, newest first.
+export const poReturns = (txns, poId) =>
+  (txns || []).filter(t => t && t.type === STOCK_TYPES.RETURN && t.poId === poId)
+    .sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')));

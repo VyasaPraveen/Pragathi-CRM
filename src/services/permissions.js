@@ -824,10 +824,21 @@ export function canConfirmDispatch(po, role) {
 export const dispatchNotifyUsers = (users) =>
   (users || []).filter(u => u.approved !== false && DISPATCH_NOTIFY_ROLES.includes(normalizeRole(u.role)));
 
+// The lines the warehouse verifies: the PO's own items followed by the yard
+// items the Operation Manager added (Req 3, 27-Oct), each flagged `yard`.
+// Marks, handovers and the final dispatch all index into this one list, so a
+// yard item is verified, handed over and dispatched exactly like a PO item.
+// Mirrors po_lines() in routes/stock.php.
+export function poLines(po) {
+  const items = (po && Array.isArray(po.items)) ? po.items : [];
+  const yard = (po && Array.isArray(po.yardItems)) ? po.yardItems : [];
+  return [...items, ...yard.map(y => ({ ...y, yard: true }))];
+}
+
 // The marks for each item, one per PO line, in the PO's own order. A PO that
 // has never been touched gets a blank mark for every line.
 export function dispatchMarks(po) {
-  const items = (po && po.items) || [];
+  const items = poLines(po);
   const marks = (po && Array.isArray(po.dispatchItems)) ? po.dispatchItems : [];
   return items.map((it, i) => ({
     dispatched: !!(marks[i] && marks[i].dispatched),
@@ -839,7 +850,7 @@ export function dispatchMarks(po) {
 
 // How far the dispatch has got.
 export function dispatchSummary(po) {
-  const items = (po && po.items) || [];
+  const items = poLines(po);
   const marks = dispatchMarks(po);
   const pending = [];
   let dispatched = 0;
@@ -854,7 +865,7 @@ export function dispatchSummary(po) {
 // at all, or an item held back without a reason. Partial dispatch is allowed —
 // it just has to say why each missing item is missing.
 export function dispatchCompleteIssue(po, marks) {
-  const items = (po && po.items) || [];
+  const items = poLines(po);
   if (!items.length) return 'This purchase order has no items to dispatch.';
   const ms = marks || dispatchMarks(po);
   if (!ms.some(m => m.dispatched)) return 'Mark at least one item as dispatched first.';
@@ -874,6 +885,19 @@ export const DISPATCH_ASSIGN_ROLES = DISPATCH_CONFIRM_ROLES;
 // The dispatch has been sent to the office — the point from which it can be assigned.
 export const dispatchSent = (po) => !!po && po.dispatchStatus === DISPATCH_STATUS.COMPLETED;
 
+// Yard items (Req 3, 27-Oct): the Operation Manager (or an Admin) adds
+// materials from the Materials master to the verification list, until the
+// Approval for Dispatch is given. Mirrors the yardItems gate in collections.php.
+export function canAddYardItems(po, role) {
+  if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  return roleIn(role, DISPATCH_CONFIRM_ROLES);
+}
+// A yard line from a material on the master list and the quantity entered.
+export const yardItemFrom = (material, quantity, by) => ({
+  materialId: material.id, materialName: material.name, unit: material.unit || '', quantity: Number(quantity) || 0,
+  specification: material.category || '', addedBy: by || '', addedAt: new Date().toISOString(),
+});
+
 // The Operation Manager (or above) assigns, once the warehouse has sent the
 // list and until the items have been received. Re-assigning before receipt is
 // allowed — people fall ill.
@@ -892,7 +916,7 @@ export function canReceiveDispatch(po, user) {
 
 // The items that actually went out — what the assigned person is handed.
 export function dispatchedItemNames(po) {
-  const items = (po && po.items) || [];
+  const items = poLines(po);
   return dispatchMarks(po).map((m, i) => (m.dispatched ? `${(items[i] && items[i].materialName) || `Item ${i + 1}`} (${(items[i] && items[i].quantity) || ''} ${(items[i] && items[i].unit) || ''})`.replace(/\s+\)/, ')') : '')).filter(Boolean);
 }
 
