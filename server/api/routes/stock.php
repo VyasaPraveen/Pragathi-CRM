@@ -586,6 +586,7 @@ function stock_final_dispatch(array $claims, array $b): void {
     }
   }
 
+  if (stock_dispatch_complete($po)) fail(409, 'Everything on this purchase order has already been dispatched; nothing more can be deducted against it.');
   $items = po_lines($po);
   $marks = is_array($po['dispatchItems'] ?? null) ? $po['dispatchItems'] : [];
   $done = stock_dispatched_so_far($po);
