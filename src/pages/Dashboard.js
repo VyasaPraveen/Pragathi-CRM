@@ -57,19 +57,14 @@ function MiniBarChart({ data, height = 130, barColor }) {
 
 function GradientStatCard({ gradient, icon, value, label, onClick, subtext }) {
   return (
-    <div onClick={onClick} style={{
-      background: gradient, borderRadius: 16, padding: '20px 22px', color: '#fff',
-      cursor: onClick ? 'pointer' : 'default', transition: 'all .3s', position: 'relative', overflow: 'hidden',
-      boxShadow: '0 4px 15px rgba(0,0,0,.15)', minHeight: 110
-    }} onMouseEnter={e => { if (onClick) e.currentTarget.style.transform = 'translateY(-3px)'; e.currentTarget.style.boxShadow = '0 8px 25px rgba(0,0,0,.2)'; }}
-       onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 15px rgba(0,0,0,.15)'; }}>
-      <div style={{ position: 'absolute', top: -10, right: -10, opacity: 0.15, fontSize: 80 }}>
-        <span className="material-icons-round" style={{ fontSize: 80 }}>{icon}</span>
-      </div>
-      <span className="material-icons-round" style={{ fontSize: 28, opacity: 0.9, marginBottom: 8, display: 'block' }}>{icon}</span>
-      <div style={{ fontSize: '1.8rem', fontWeight: 800, lineHeight: 1.1 }}>{value}</div>
-      <div style={{ fontSize: '.78rem', opacity: 0.85, marginTop: 4, fontWeight: 500 }}>{label}</div>
-      {subtext && <div style={{ fontSize: '.68rem', opacity: 0.7, marginTop: 2 }}>{subtext}</div>}
+    <div className={`db-tile${onClick ? ' go' : ''}`} onClick={onClick} style={{ background: gradient }}
+      role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(); } }) : undefined}>
+      <span className="material-icons-round db-tile-wm" aria-hidden="true">{icon}</span>
+      <span className="material-icons-round db-tile-ic" aria-hidden="true">{icon}</span>
+      <div className="db-tile-v">{value}</div>
+      <div className="db-tile-l">{label}</div>
+      {subtext && <div className="db-tile-s">{subtext}</div>}
     </div>
   );
 }
@@ -221,41 +216,28 @@ export default function Dashboard() {
   const maxRevenue = Math.max(...monthlyData.map(m => Math.max(m.income, m.expense)), 1);
 
   return (
-    <>
+    <div className="db">
       {/* Welcome Banner */}
-      <div style={{
-        background: 'linear-gradient(135deg, #1a3a7a 0%, #2a5cb8 50%, #6366f1 100%)',
-        borderRadius: 18, padding: '24px 30px', marginBottom: 22, color: '#fff',
-        position: 'relative', overflow: 'hidden', boxShadow: '0 8px 30px rgba(26,58,122,.3)'
-      }}>
+      <div className="db-hero">
         <div style={{ position: 'absolute', top: -40, right: -20, width: 200, height: 200, background: 'radial-gradient(circle, rgba(255,255,255,.1), transparent 70%)', borderRadius: '50%' }} />
         <div style={{ position: 'absolute', bottom: -30, left: '40%', width: 150, height: 150, background: 'radial-gradient(circle, rgba(232,131,12,.15), transparent 70%)', borderRadius: '50%' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'relative', zIndex: 1 }}>
+        <div className="db-hero-in">
           <div>
             <h2 style={{ margin: 0, fontSize: '1.4rem', fontWeight: 800 }}>Welcome Back!</h2>
             <p style={{ opacity: 0.8, fontSize: '.88rem', margin: '4px 0 0' }}>
               {designation || role} | {new Date().toLocaleDateString('en-IN', { weekday: 'long', day: '2-digit', month: 'long', year: 'numeric' })}
             </p>
           </div>
-          <div style={{ display: 'flex', gap: 12 }}>
-            <div style={{ background: 'rgba(255,255,255,.15)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '12px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.6rem', fontWeight: 800 }}>{stats.convRate}%</div>
-              <div style={{ fontSize: '.7rem', opacity: 0.8 }}>Conversion Rate</div>
-            </div>
-            <div style={{ background: 'rgba(255,255,255,.15)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '12px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.6rem', fontWeight: 800 }}>{customers.length}</div>
-              <div style={{ fontSize: '.7rem', opacity: 0.8 }}>Total Customers</div>
-            </div>
-            <div style={{ background: 'rgba(255,255,255,.15)', backdropFilter: 'blur(10px)', borderRadius: 12, padding: '12px 20px', textAlign: 'center' }}>
-              <div style={{ fontSize: '1.6rem', fontWeight: 800 }}>{team.filter(t => t.status === 'Active').length}</div>
-              <div style={{ fontSize: '.7rem', opacity: 0.8 }}>Active Team</div>
-            </div>
+          <div className="db-hero-stats">
+            <div className="db-chip"><b>{stats.convRate}%</b><span>Conversion Rate</span></div>
+            <div className="db-chip"><b>{customers.length}</b><span>Total Customers</span></div>
+            <div className="db-chip"><b>{team.filter(t => t.status === 'Active').length}</b><span>Active Team</span></div>
           </div>
         </div>
       </div>
 
       {/* Gradient Stat Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16, marginBottom: 22 }}>
+      <div className="db-tiles">
         <GradientStatCard gradient="linear-gradient(135deg, #6366f1, #8b5cf6)" icon="leaderboard" value={stats.tl} label="Total Leads" onClick={() => navigate('/leads')} />
         <GradientStatCard gradient="linear-gradient(135deg, #22c55e, #14b8a6)" icon="check_circle" value={stats.cv} label="Converted" subtext={`${stats.convRate}% conversion`} />
         <GradientStatCard gradient="linear-gradient(135deg, #3b82f6, #06b6d4)" icon="trending_up" value={stats.it} label="Interested" onClick={() => navigate('/leads')} />
@@ -267,7 +249,7 @@ export default function Dashboard() {
       </div>
 
       {/* Row 1: Lead Status Donut + Conversion Funnel */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.5fr', gap: 18, marginBottom: 18 }}>
+      <div className="db-row db-12">
         {/* Lead Status Donut */}
         <div className="card" style={{ borderRadius: 16 }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
@@ -276,11 +258,11 @@ export default function Dashboard() {
               Lead Status
             </h3>
           </div>
-          <div className="cb" style={{ display: 'flex', alignItems: 'center', gap: 24, justifyContent: 'center' }}>
+          <div className="cb db-donut">
             <DonutChart segments={statusSegments} label={stats.tl} sublabel="Total" />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div className="db-legend">
               {statusSegments.map(s => (
-                <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <div key={s.label}>
                   <span style={{ width: 12, height: 12, borderRadius: 3, background: s.color, flexShrink: 0 }} />
                   <span style={{ fontSize: '.82rem', color: '#6b7280', minWidth: 90 }}>{s.label}</span>
                   <span style={{ fontSize: '.88rem', fontWeight: 700, color: '#1f2937' }}>{s.value}</span>
@@ -331,7 +313,7 @@ export default function Dashboard() {
 
       {/* Row 2: Revenue Chart + Monthly Leads */}
       {hasAccess(role, 'admin') ? (
-        <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 18, marginBottom: 18 }}>
+        <div className="db-row db-21">
           {/* Revenue vs Expenses */}
           <div className="card" style={{ borderRadius: 16 }}>
             <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
@@ -371,7 +353,7 @@ export default function Dashboard() {
                 </span>
               </div>
               {/* Summary */}
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 16 }}>
+              <div className="db-mini3">
                 <div style={{ background: 'rgba(34,197,94,.08)', borderRadius: 10, padding: '10px 14px', textAlign: 'center' }}>
                   <div style={{ fontSize: '1rem', fontWeight: 800, color: '#22c55e' }}>{formatCurrency(stats.tI)}</div>
                   <div style={{ fontSize: '.7rem', color: '#6b7280' }}>Total Revenue</div>
@@ -420,7 +402,7 @@ export default function Dashboard() {
           </div>
         </div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 18, marginBottom: 18 }}>
+        <div className="db-row db-1">
           <div className="card" style={{ borderRadius: 16 }}>
             <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
               <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -436,7 +418,7 @@ export default function Dashboard() {
       )}
 
       {/* Row 3: Priority Donut + Lead Sources + Task Summary */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 18, marginBottom: 18 }}>
+      <div className="db-row db-3">
         {/* Priority */}
         <div className="card" style={{ borderRadius: 16 }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
@@ -512,7 +494,7 @@ export default function Dashboard() {
       </div>
 
       {/* Row 4: City Distribution + Top Performers */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
+      <div className="db-row db-2">
         {/* City-wise */}
         <div className="card" style={{ borderRadius: 16 }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
@@ -566,7 +548,7 @@ export default function Dashboard() {
       </div>
 
       {/* Row 5: Overdue Follow-ups + Recent Leads */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18, marginBottom: 18 }}>
+      <div className="db-row db-2">
         {/* Overdue */}
         <div className="card" style={{ borderRadius: 16, borderLeft: overdueFollowUps.length > 0 ? '4px solid #ef4444' : undefined }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
@@ -613,7 +595,7 @@ export default function Dashboard() {
       </div>
 
       {/* Row 6: Installation Progress + Stock Alerts + Reminders */}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 18, marginBottom: 18 }}>
+      <div className="db-row db-3">
         <div className="card" style={{ borderRadius: 16 }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -703,7 +685,7 @@ export default function Dashboard() {
       )}
 
       {/* Quick Actions */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 18 }}>
+      <div className="db-quick">
         {[
           { label: 'Add Lead', icon: 'person_add', color: '#6366f1', path: '/leads' },
           { label: 'Customers', icon: 'people', color: '#22c55e', path: '/customers' },
@@ -712,17 +694,13 @@ export default function Dashboard() {
           { label: 'Retailers', icon: 'storefront', color: '#ec4899', path: '/retailers' },
           { label: 'Influencers', icon: 'campaign', color: '#8b5cf6', path: '/influencers' }
         ].map(a => (
-          <div key={a.label} onClick={() => navigate(a.path)} style={{
-            background: '#fff', borderRadius: 12, padding: '16px 14px', textAlign: 'center',
-            cursor: 'pointer', border: '1px solid #e5e7eb', transition: 'all .3s',
-            boxShadow: '0 1px 3px rgba(0,0,0,.05)'
-          }} onMouseEnter={e => { e.currentTarget.style.borderColor = a.color; e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = `0 4px 15px ${a.color}25`; }}
-             onMouseLeave={e => { e.currentTarget.style.borderColor = '#e5e7eb'; e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 1px 3px rgba(0,0,0,.05)'; }}>
-            <span className="material-icons-round" style={{ fontSize: 28, color: a.color, display: 'block', marginBottom: 6 }}>{a.icon}</span>
-            <span style={{ fontSize: '.78rem', fontWeight: 600, color: '#374151' }}>{a.label}</span>
+          <div key={a.label} className="db-qa" onClick={() => navigate(a.path)} role="button" tabIndex={0} style={{ '--qa': a.color }}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(a.path); } }}>
+            <span className="material-icons-round db-qa-ic" style={{ color: a.color, background: a.color + '14' }}>{a.icon}</span>
+            <span className="db-qa-l">{a.label}</span>
           </div>
         ))}
       </div>
-    </>
+    </div>
   );
 }
