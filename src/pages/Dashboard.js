@@ -82,7 +82,7 @@ export default function Dashboard() {
   // The dashboard counts only the leads this person is allowed to see, so the
   // figures match the Leads screen instead of the whole company's book.
   const leads = useMemo(() => allLeads.filter(l => canSeeLead(l, user, role, users, team, leadPOs)),
-    [allLeads, user, role, users, team]);
+    [allLeads, user, role, users, team, leadPOs]);
 
   const stats = useMemo(() => {
     const tl = leads.length;

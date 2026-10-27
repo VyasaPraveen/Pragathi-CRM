@@ -259,7 +259,11 @@ export function stockDispatchComplete(po) {
   if (po.stockDispatchedAt && !(Array.isArray(po.stockDispatches) && po.stockDispatches.length)) return true;
   const sent = finalDispatchLines(po, []);
   if (!sent.length) return false;
-  return sent.every(l => l.remaining <= 1e-9);
+  // Mirrors stock_dispatch_complete(): a line with a quantity is done when
+  // nothing remains; a line with no quantity only once something has gone
+  // out against it. (The two used to disagree, and the controls vanished on
+  // a PO whose only sent line had no quantity before it could be dispatched.)
+  return sent.every(l => (l.ordered > 0 ? l.remaining <= 1e-9 : l.done > 0));
 }
 
 // The final dispatch is open once the items have been sent, assigned and

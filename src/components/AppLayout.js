@@ -6,7 +6,7 @@ import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { hasAccess, moduleRoute } from '../services/helpers';
 import { useData } from '../context/DataContext';
-import { updateDocument } from '../services/firestore';
+import { markNotificationsRead } from '../services/firestore';
 import { notificationsForRoute } from '../services/badges';
 import { hasModule } from '../services/permissions';
 import { registerPush } from '../services/push';
@@ -65,8 +65,7 @@ export default function AppLayout() {
     const due = notificationsForRoute(notifications, user, pathname, moduleRoute).filter(n => !marking.current.has(n.id));
     if (!due.length) return;
     due.forEach(n => marking.current.add(n.id));
-    Promise.all(due.map(n => updateDocument('notifications', n.id, { read: true }).catch(() => {})))
-      .finally(() => due.forEach(n => marking.current.delete(n.id)));
+    markNotificationsRead(due.map(n => n.id)).finally(() => due.forEach(n => marking.current.delete(n.id)));
   }, [pathname, notifications, user]);
 
   // When a tapped push cannot navigate this tab itself, the service worker asks

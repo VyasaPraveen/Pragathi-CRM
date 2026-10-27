@@ -25,8 +25,14 @@ import { QT_STATUS } from './quotation';
 export const sitePhotoList = (v) => (Array.isArray(v) ? v.filter(p => p && String(p.url || '').trim()) : []);
 export function siteVisitPhotoIssue(form, prev) {
   if (!form || form.siteVisit !== 'Yes') return '';
-  if (prev && prev.siteVisit === 'Yes') return '';
-  if (sitePhotoList(form.siteVisitPhotos).length) return '';
+  const now = sitePhotoList(form.siteVisitPhotos).length;
+  if (prev && prev.siteVisit === 'Yes') {
+    // Already done: editable as before, but the photos it has cannot all be
+    // taken off while it stays "Yes" (set the visit back to "No" instead).
+    if (sitePhotoList(prev.siteVisitPhotos).length && !now) return 'A site visit marked done keeps at least one photo. To remove them all, set the Site Visit back to "No".';
+    return '';
+  }
+  if (now) return '';
   return 'Upload at least one site visit photo before marking the Site Visit as done. Until then it stays "No".';
 }
 

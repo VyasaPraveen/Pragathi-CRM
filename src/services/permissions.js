@@ -897,6 +897,17 @@ export const yardItemFrom = (material, quantity, by) => ({
   materialId: material.id, materialName: material.name, unit: material.unit || '', quantity: Number(quantity) || 0,
   specification: material.category || '', addedBy: by || '', addedAt: new Date().toISOString(),
 });
+// A yard item added after Stock OK starts unmarked, and nobody but the
+// Operation Manager is left to mark it. An unmarked line is left out of the
+// handover and the dispatch, so the Approval for Dispatch waits until each
+// yard item is marked available (Yes) or given a reason.
+export function yardApprovalIssue(po, marks) {
+  const items = poLines(po);
+  const ms = Array.isArray(marks) ? marks : dispatchMarks(po);
+  const open = items.map((it, i) => (it.yard && !(ms[i] && ms[i].dispatched) && !String((ms[i] && ms[i].note) || '').trim()) ? (it.materialName || `Item ${i + 1}`) : '').filter(Boolean);
+  if (!open.length) return '';
+  return `Mark the yard item${open.length === 1 ? '' : 's'} ${open.join(', ')} as available (Yes), or say why not, before giving the Approval for Dispatch — otherwise ${open.length === 1 ? 'it is' : 'they are'} left out of the handover and the dispatch.`;
+}
 
 // The Operation Manager (or above) assigns, once the warehouse has sent the
 // list and until the items have been received. Re-assigning before receipt is

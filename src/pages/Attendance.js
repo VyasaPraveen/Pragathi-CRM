@@ -90,7 +90,7 @@ export default function Attendance() {
   // first check-in, the last check-out and the hours between them.
   const myDays = useMemo(
     () => foldAttendanceDays(attendance, { email: myEmail, name: myName }, rules),
-    [attendance, myEmail, myName]);
+    [attendance, myEmail, myName, rules]);
 
   const monthDays = applyDateFilter(myDays, myFilter, ATTENDANCE_DATE_FIELDS);
   // Where the employee stands right now — the question they actually open this

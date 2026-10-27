@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { hasAccess, moduleRoute, isSameUser, formatDateTime } from '../services/helpers';
-import { updateDocument } from '../services/firestore';
+import { markNotificationsRead } from '../services/firestore';
 
 const titles = {
   '/': 'Dashboard', '/leads': 'Lead Management', '/customers': 'Customers',
@@ -70,9 +70,7 @@ export default function Topbar({ onMenuClick }) {
     return () => document.removeEventListener('mousedown', handler);
   }, [showPanel]);
 
-  const markAsRead = async (id) => {
-    try { await updateDocument('notifications', id, { read: true }); } catch (e) { console.warn('Failed to mark notification read:', e.message); }
-  };
+  const markAsRead = (id) => markNotificationsRead([id]);
 
   // Open the screen a notification is about, and mark it read on the way.
   const openNotification = (n) => {
@@ -82,11 +80,7 @@ export default function Topbar({ onMenuClick }) {
     if (to !== '/') navigate(to);
   };
 
-  const markAllRead = async () => {
-    await Promise.all(myNotifications.filter(n => !n.read).map(n =>
-      updateDocument('notifications', n.id, { read: true }).catch(e => console.warn('Failed to mark notification read:', e.message))
-    ));
-  };
+  const markAllRead = () => markNotificationsRead(myNotifications.filter(n => !n.read).map(n => n.id));
 
   return (
     <header className="tb">

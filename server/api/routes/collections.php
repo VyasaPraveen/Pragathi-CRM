@@ -419,11 +419,19 @@ function enforce_lead_edit(array $claims, array $patch, array $lead): void {
 // edited; the UI mirrors this in LeadModal. Mirrors siteVisitPhotoIssue() in
 // src/services/leadNotify.js.
 function enforce_site_visit_photos(array $patch, array $existing): void {
-  if (($patch['siteVisit'] ?? '') !== 'Yes') return;
-  if (($existing['siteVisit'] ?? '') === 'Yes') return;
-  $photos = array_key_exists('siteVisitPhotos', $patch) ? $patch['siteVisitPhotos'] : ($existing['siteVisitPhotos'] ?? []);
-  $photos = is_array($photos) ? array_filter($photos, fn($p) => is_array($p) && trim((string)($p['url'] ?? '')) !== '') : [];
-  if (!$photos) fail(422, 'Upload at least one site visit photo before marking the Site Visit as done. Until then the Site Visit stays "No".');
+  $live = fn($v) => is_array($v) ? array_filter($v, fn($p) => is_array($p) && trim((string)($p['url'] ?? '')) !== '') : [];
+  $wasYes = ($existing['siteVisit'] ?? '') === 'Yes';
+  $isYes = array_key_exists('siteVisit', $patch) ? ($patch['siteVisit'] ?? '') === 'Yes' : $wasYes;
+  if (!$isYes) return;
+  $had = $live($existing['siteVisitPhotos'] ?? []);
+  $now = array_key_exists('siteVisitPhotos', $patch) ? $live($patch['siteVisitPhotos']) : $had;
+  if ($wasYes) {
+    // Already done: still editable, but the photos it has cannot all be taken
+    // off while it stays "Yes" — set the visit back to "No" to drop them.
+    if ($had && !$now) fail(422, 'A site visit marked done keeps at least one photo. To remove them all, set the Site Visit back to "No".');
+    return;
+  }
+  if (!$now) fail(422, 'Upload at least one site visit photo before marking the Site Visit as done. Until then the Site Visit stays "No".');
 }
 
 // Who may CREATE in a given collection.

@@ -9,12 +9,12 @@ import {
   DISPATCH_STATUS, DISPATCH_CONFIRM_ROLES, dispatchOpen, canUpdateDispatch, canConfirmDispatch,
   dispatchMarks, dispatchSummary, dispatchCompleteIssue, dispatchNotifyUsers, warehouseUsers,
   canAssignDispatch, dispatchedItemNames, dispatchHandoverState, dispatchSent, normalizeRole, poLines,
-  canAddYardItems, yardItemFrom,
+  canAddYardItems, yardItemFrom, yardApprovalIssue,
 } from '../services/permissions';
 import { directoryPeople } from '../services/people';
 import {
   finalDispatchOpen, canFinalDispatch, finalDispatchLines, finalDispatchIssue, finalDispatchBody, dispatchDraftBody, finalDispatchState,
-  stockDispatched, stockDispatches, stockDispatchComplete, isPartialDispatch, activeDispatchLines, extraDispatchLine, qtyText,
+  stockDispatched, stockDispatches, isPartialDispatch, activeDispatchLines, extraDispatchLine, qtyText,
   canRecordReturn, poReturns, STOCK_STATUS,
 } from '../services/stock';
 import { confirmFinalDispatch, saveDispatchDraft, submitStockReturn, newClientRef } from '../services/stockApi';
@@ -230,6 +230,9 @@ export default function DispatchPanel({ po, lead }) {
 
   // "Approval for Dispatch" — the Operation Manager's review.
   const confirm = async () => {
+    if (dirty) { toast('Save the verification marks first, then give the Approval for Dispatch', 'er'); return; }
+    const yardIssue = yardApprovalIssue(po, marks);
+    if (yardIssue) { toast(yardIssue, 'er'); return; }
     if (!window.confirm(`Approval for Dispatch — accept the verified material for ${label} as reviewed?`)) return;
     setBusy(true);
     try {

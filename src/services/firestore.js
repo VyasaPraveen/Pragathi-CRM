@@ -111,6 +111,19 @@ export async function deleteDocument(col, id) {
 }
 
 // ── Notifications (stored in the notifications collection) ────────────────────
+// Mark notifications read: a few at a time (a first login can have hundreds
+// unread for one section), one refresh at the end, and no activity-log line —
+// reading a notification is not an action worth recording. A failure on one
+// is skipped; the next poll shows what stuck.
+export async function markNotificationsRead(ids, batch = 6) {
+  const list = (ids || []).filter(Boolean);
+  for (let i = 0; i < list.length; i += batch) {
+    await Promise.all(list.slice(i, i + batch).map(id =>
+      apiPatch('/collections/notifications/' + encodeURIComponent(id), { read: true }).catch(() => {})));
+  }
+  if (list.length) pingRefresh('notifications');
+}
+
 export async function createNotification({ forUser, title, message, type = 'info', module = '', relatedId = '' }) {
   try {
     const me = getMe();
