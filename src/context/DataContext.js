@@ -100,7 +100,12 @@ export function DataProvider({ children }) {
       clearTimeout(refreshTimer);
       refreshTimer = setTimeout(fetchAll, 300);
     };
+    // On a phone the installed app is "resumed" rather than focused, and a
+    // lost connection coming back is worth a refetch too (PWA, 28-Oct).
+    const onVisible = () => { if (!stopped && document.visibilityState === 'visible') fetchAll(); };
     window.addEventListener('focus', onFocus);
+    window.addEventListener('online', onFocus);
+    document.addEventListener('visibilitychange', onVisible);
     window.addEventListener('pps:refresh', onRefresh);
     tick();
 
@@ -109,6 +114,8 @@ export function DataProvider({ children }) {
       if (pollTimer) clearTimeout(pollTimer);
       if (refreshTimer) clearTimeout(refreshTimer);
       window.removeEventListener('focus', onFocus);
+      window.removeEventListener('online', onFocus);
+      document.removeEventListener('visibilitychange', onVisible);
       window.removeEventListener('pps:refresh', onRefresh);
     };
   }, [user]);

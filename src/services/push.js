@@ -26,7 +26,9 @@ export async function registerPush(onForeground) {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') return;
 
-    const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+    // One worker serves the app shell and push: sw.js imports the messaging
+    // handlers. Registering the same script again just returns it.
+    const swReg = await navigator.serviceWorker.register('/sw.js');
     const token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
     if (!token) return;
 

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Topbar from './Topbar';
@@ -10,34 +10,39 @@ import { markNotificationsRead } from '../services/firestore';
 import { notificationsForRoute } from '../services/badges';
 import { hasModule } from '../services/permissions';
 import { registerPush } from '../services/push';
+import { canInstall, onInstallChange, promptInstall, isStandalone, isIOS, installHint, installDismissed, dismissInstall, isOnline } from '../services/pwa';
 import DueAlerts from './DueAlerts';
 
+// Each page is its own file, loaded the first time it is opened, so the
+// phone downloads only what it needs to show the first screen (the sidebar,
+// the dashboard) and the rest as it goes. Dashboard stays in the main bundle
+// because it is the first thing everyone sees.
 import Dashboard from '../pages/Dashboard';
-import Leads from '../pages/Leads';
-import Customers from '../pages/Customers';
-import Installations from '../pages/Installations';
-import OngoingWork from '../pages/OngoingWork';
-import Materials from '../pages/Materials';
-import Revenue from '../pages/Revenue';
-import Expenditure from '../pages/Expenditure';
-import PaymentRequests from '../pages/PaymentRequests';
-import Reports from '../pages/Reports';
-import Team from '../pages/Team';
-import Reminders from '../pages/Reminders';
-import About from '../pages/About';
-import Gallery from '../pages/Gallery';
-import Settings from '../pages/Settings';
-import PurchaseOrders from '../pages/PurchaseOrders';
-import Retailers from '../pages/Retailers';
-import Influencers from '../pages/Influencers';
-import EmployeeTasks from '../pages/EmployeeTasks';
-import UserManagement from '../pages/UserManagement';
-import ActivityLog from '../pages/ActivityLog';
-import Leave from '../pages/Leave';
-import Attendance from '../pages/Attendance';
-import Tracking from '../pages/Tracking';
-import MyReports from '../pages/MyReports';
-import AssignedMaterials from '../pages/AssignedMaterials';
+const Leads = lazy(() => import('../pages/Leads'));
+const Customers = lazy(() => import('../pages/Customers'));
+const Installations = lazy(() => import('../pages/Installations'));
+const OngoingWork = lazy(() => import('../pages/OngoingWork'));
+const Materials = lazy(() => import('../pages/Materials'));
+const Revenue = lazy(() => import('../pages/Revenue'));
+const Expenditure = lazy(() => import('../pages/Expenditure'));
+const PaymentRequests = lazy(() => import('../pages/PaymentRequests'));
+const Reports = lazy(() => import('../pages/Reports'));
+const Team = lazy(() => import('../pages/Team'));
+const Reminders = lazy(() => import('../pages/Reminders'));
+const About = lazy(() => import('../pages/About'));
+const Gallery = lazy(() => import('../pages/Gallery'));
+const Settings = lazy(() => import('../pages/Settings'));
+const PurchaseOrders = lazy(() => import('../pages/PurchaseOrders'));
+const Retailers = lazy(() => import('../pages/Retailers'));
+const Influencers = lazy(() => import('../pages/Influencers'));
+const EmployeeTasks = lazy(() => import('../pages/EmployeeTasks'));
+const UserManagement = lazy(() => import('../pages/UserManagement'));
+const ActivityLog = lazy(() => import('../pages/ActivityLog'));
+const Leave = lazy(() => import('../pages/Leave'));
+const Attendance = lazy(() => import('../pages/Attendance'));
+const Tracking = lazy(() => import('../pages/Tracking'));
+const MyReports = lazy(() => import('../pages/MyReports'));
+const AssignedMaterials = lazy(() => import('../pages/AssignedMaterials'));
 
 // Blocks a page when the role floor (`minRole`) or the user's own Admin-managed
 // permission (`perm`) does not allow it — the same rules the sidebar uses, so a
@@ -49,6 +54,46 @@ function GuardedRoute({ minRole, perm, children }) {
   return children;
 }
 
+// While a page's file is on its way.
+function PageLoading() {
+  return <div className="page-loading" role="status" aria-live="polite"><div className="spin" /><span>Loading…</span></div>;
+}
+
+// "Install Pragathi CRM on this phone" — shown until installed or dismissed
+// for a week. Android/desktop browsers give a one-tap install; iPhone needs
+// Share → Add to Home Screen, so it gets that hint instead.
+function InstallBanner() {
+  const [installable, setInstallable] = useState(canInstall);
+  const [dismissed, setDismissed] = useState(installDismissed);
+  useEffect(() => onInstallChange(setInstallable), []);
+  const hint = installHint({ installable, standalone: isStandalone(), ios: isIOS(), dismissed });
+  if (!hint) return null;
+  const notNow = () => { dismissInstall(); setDismissed(true); };
+  return (
+    <div className="pwa-banner" role="region" aria-label="Install the app">
+      <span className="material-icons-round" style={{ fontSize: 22 }}>install_mobile</span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <strong>Install Pragathi CRM on this phone</strong>
+        <div className="pwa-sub">{hint === 'ios' ? 'In Safari tap Share, then "Add to Home Screen".' : 'Opens full screen from your home screen, like an app.'}</div>
+      </div>
+      {hint === 'prompt' && <button className="btn bsm bp" onClick={() => promptInstall().then(r => { if (r === 'dismissed') notNow(); })}>Install</button>}
+      <button className="btn bsm bo" onClick={notNow} aria-label="Not now">Not now</button>
+    </div>
+  );
+}
+
+// "You are offline" — the data cannot be saved until the connection returns.
+function OfflineBar() {
+  const [online, setOnline] = useState(isOnline);
+  useEffect(() => {
+    const up = () => setOnline(true); const down = () => setOnline(false);
+    window.addEventListener('online', up); window.addEventListener('offline', down);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+  }, []);
+  if (online) return null;
+  return <div className="offline-bar" role="status"><span className="material-icons-round" style={{ fontSize: 18 }}>cloud_off</span> You are offline — you can read what was already loaded; changes will not save until the connection returns.</div>;
+}
+
 export default function AppLayout() {
   const [sbOpen, setSbOpen] = useState(false);
   const { toast } = useToast();
@@ -56,6 +101,13 @@ export default function AppLayout() {
   const { pathname } = useLocation();
   const { user } = useAuth();
   const { notifications } = useData();
+
+  // A newer version of the app has taken over (deployed while this was open).
+  useEffect(() => {
+    const onUpdated = () => toast('Pragathi CRM was updated to the latest version — reload when convenient.');
+    window.addEventListener('pps:updated', onUpdated);
+    return () => window.removeEventListener('pps:updated', onUpdated);
+  }, [toast]);
 
   // Req 7 (27-Oct): opening a section reads its notifications, so the
   // sidebar count for it goes to zero and stays there. Only this person's
@@ -93,7 +145,10 @@ export default function AppLayout() {
         <Topbar onMenuClick={() => setSbOpen(!sbOpen)} />
         {/* Quotation approvals, sharing deadlines and follow-up reminders */}
         <DueAlerts />
+        <OfflineBar />
         <div className="pc fin">
+          <InstallBanner />
+          <Suspense fallback={<PageLoading />}>
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/leads" element={<GuardedRoute perm="leads"><Leads /></GuardedRoute>} />
@@ -123,6 +178,7 @@ export default function AppLayout() {
             <Route path="/activity-log" element={<GuardedRoute minRole="admin"><ActivityLog /></GuardedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
+          </Suspense>
         </div>
       </div>
     </div>

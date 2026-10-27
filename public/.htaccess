@@ -59,13 +59,13 @@
   </FilesMatch>
   # The service worker is NOT fingerprinted — it must never be pinned for a year
   # or devices keep running an old copy. Placed after the immutable rule so it wins.
-  <FilesMatch "^firebase-messaging-sw\.js$">
+  <FilesMatch "^(firebase-messaging-sw|sw)\.js$">
     Header set Cache-Control "public, max-age=0, must-revalidate"
   </FilesMatch>
   # Root-level, non-fingerprinted assets must revalidate (otherwise a changed
   # logo/favicon would stay cached for up to a year). Placed after the immutable
   # rule so it wins for these specific filenames.
-  <FilesMatch "^(logo\.png|logo-full\.png|favicon\.ico|manifest\.json|asset-manifest\.json|robots\.txt)$">
+  <FilesMatch "^(logo\.png|logo-full\.png|favicon\.ico|favicon-32\.png|icon-192\.png|icon-512\.png|icon-maskable-512\.png|apple-touch-icon\.png|manifest\.json|asset-manifest\.json|robots\.txt)$">
     Header set Cache-Control "public, max-age=86400, must-revalidate"
   </FilesMatch>
 </IfModule>

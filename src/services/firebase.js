@@ -4,8 +4,17 @@
 // Messaging is initialised lazily so the app works even where it's unsupported.
 // ============================================================================
 
-import { initializeApp } from 'firebase/app';
-import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging';
+// The Firebase SDK is loaded on demand (PWA, 28-Oct): it is the largest
+// library in the app and only push registration needs it, so it stays out
+// of the bundle the phone downloads to show the first screen.
+let sdk = null;
+async function load() {
+  if (!sdk) {
+    const [app, messaging] = await Promise.all([import('firebase/app'), import('firebase/messaging')]);
+    sdk = { initializeApp: app.initializeApp, getMessaging: messaging.getMessaging, getToken: messaging.getToken, onMessage: messaging.onMessage, isSupported: messaging.isSupported };
+  }
+  return sdk;
+}
 
 const firebaseConfig = {
   apiKey: process.env.REACT_APP_FB_API_KEY,
@@ -24,8 +33,9 @@ let messaging = null;
 // Returns a messaging instance, or null if unsupported / not configured.
 export async function initMessaging() {
   try {
-    if (!(await isSupported())) return null;
     if (!firebaseConfig.apiKey || !firebaseConfig.messagingSenderId) return null;
+    const { isSupported, initializeApp, getMessaging } = await load();
+    if (!(await isSupported())) return null;
     if (!app) app = initializeApp(firebaseConfig);
     if (!messaging) messaging = getMessaging(app);
     return messaging;
@@ -34,4 +44,5 @@ export async function initMessaging() {
   }
 }
 
-export { getToken, onMessage };
+export const getToken = async (...args) => (await load()).getToken(...args);
+export const onMessage = async (...args) => (await load()).onMessage(...args);

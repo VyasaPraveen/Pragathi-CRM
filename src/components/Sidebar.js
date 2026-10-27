@@ -1,10 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
 import { getInitials, hasAccess } from '../services/helpers';
 import { hasModule } from '../services/permissions';
 import { badgeCounts } from '../services/badges';
+import { canInstall, onInstallChange, promptInstall } from '../services/pwa';
 
 // `perm` = the per-user permission key an Admin can switch off for an individual
 // user (Settings → Permission Management). `minRole` is the role floor.
@@ -52,6 +53,9 @@ export default function Sidebar({ open, onClose }) {
   const data = useData();
   // Q3 fix: use React state instead of outerHTML for logo fallback
   const [logoError, setLogoError] = useState(false);
+  // "Install app" (PWA): shown while the browser offers to install it.
+  const [installable, setInstallable] = useState(canInstall);
+  useEffect(() => onInstallChange(setInstallable), []);
 
   // Each count covers only what this person can actually open, so the number
   // always matches the list behind it.
@@ -98,6 +102,11 @@ export default function Sidebar({ open, onClose }) {
           })}
         </nav>
         <div className="sb-f">
+          {installable && (
+            <button type="button" className="sb-install" onClick={() => promptInstall()}>
+              <span className="material-icons-round" style={{ fontSize: 18 }}>install_mobile</span> Install app on this device
+            </button>
+          )}
           <div className="ui">
             <div className="ua">{getInitials(user?.displayName || user?.email || 'U')}</div>
             <div className="ud">
