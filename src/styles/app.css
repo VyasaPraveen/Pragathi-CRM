@@ -295,6 +295,13 @@ button,a,.ni,.fc,label{touch-action:manipulation}
   .tw-m>table>tbody>tr>td[colspan]{grid-column:1/-1}
   .tw-m>table>tbody>tr>td:empty{display:none}
 }
+/* The notification panel: under the bell on a desktop, a sheet across the screen on a phone. */
+.np{position:absolute;top:100%;right:0;width:380px;max-height:480px;background:#fff;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.15);z-index:1000;overflow:hidden;border:1px solid rgba(0,0,0,.08)}
+.np-list{max-height:400px;overflow-y:auto}
+@media(max-width:768px){
+  .np{position:fixed;left:10px;right:10px;top:calc(64px + env(safe-area-inset-top));width:auto;max-height:calc(100vh - 84px);max-height:calc(100dvh - 84px)}
+  .np-list{max-height:calc(100vh - 140px);max-height:calc(100dvh - 140px)}
+}
 /* B5 fix: overlay uses .active class instead of sibling selector */
 .sbo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99}
 @media(max-width:768px){.sbo.active{display:block}}

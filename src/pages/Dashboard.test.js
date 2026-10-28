@@ -59,3 +59,27 @@ test('an executive with nothing at all still renders', () => {
   expect(host.querySelector('.db-row.db-1')).not.toBeNull();
   unmount();
 });
+
+test('Top Performers ranks by conversions, and dates read as "02 Oct 2026"', () => {
+  mockAuth = { role: 'super_admin', designation: 'Owner', user: { email: 'o@x.com', displayName: 'Owner' } };
+  mockData = { ...empty(),
+    leads: [{ id: 'a1', name: 'A', status: 'Interested', assignedTo: 'Revanth Reddy', dateGenerated: '2026-10-01', nextFollowUpDate: '2026-01-01', city: 'Tirupathi' },
+            { id: 'a2', name: 'B', status: 'Interested', assignedTo: 'Revanth Reddy', dateGenerated: '2026-10-02', city: 'tirupathi' },
+            { id: 'a3', name: 'C', status: 'Converted', assignedTo: 'Revanth Reddy', dateGenerated: '2026-10-03', city: 'Tirupathi ' },
+            { id: 'a4', name: 'D', status: 'Converted', assignedTo: 'Mahesh', dateGenerated: '2026-10-04', city: 'Kadapa' },
+            { id: 'a5', name: 'E', status: 'Converted', assignedTo: 'Mahesh', dateGenerated: '2026-10-05', city: 'Kadapa' },
+            { id: 'a6', name: 'F', status: 'Converted', assignedTo: 'Sarath', dateGenerated: '2026-10-06', city: 'Kadapa' }],
+  };
+  const { host, unmount } = mount(<Dashboard />);
+  const names = [...host.querySelectorAll('.db-top tbody tr')].map(tr => tr.querySelector('td:nth-child(2)').textContent.trim());
+  // Two conversions beat one; among one each, the full rate beats one in three.
+  expect(names).toEqual(['Mahesh', 'Sarath', 'Revanth Reddy']);
+  // The overdue follow-up and the recent leads print the date as day, month name, year.
+  expect(host.textContent).toContain('01 Jan 2026');
+  expect(host.textContent).toContain('05 Oct 2026');
+  expect(host.textContent).not.toContain('2026-01-01');
+  // One city however it was typed.
+  const cities = [...host.querySelectorAll('.db-city .mbc-l')].map(e => e.textContent);
+  expect(cities).toEqual(['Tirupath', 'Kadapa']);
+  unmount();
+});

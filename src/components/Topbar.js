@@ -96,11 +96,7 @@ export default function Topbar({ onMenuClick }) {
           </button>
 
           {showPanel && (
-            <div style={{
-              position: 'absolute', top: '100%', right: 0, width: 380, maxHeight: 480,
-              background: '#fff', borderRadius: 12, boxShadow: '0 8px 32px rgba(0,0,0,.15)',
-              zIndex: 1000, overflow: 'hidden', border: '1px solid rgba(0,0,0,.08)'
-            }}>
+            <div className="np">
               {/* Header */}
               <div style={{ padding: '14px 16px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <span style={{ fontWeight: 700, fontSize: '.95rem' }}>Notifications</span>
@@ -117,7 +113,7 @@ export default function Topbar({ onMenuClick }) {
               </div>
 
               {/* Notification list */}
-              <div style={{ maxHeight: 400, overflowY: 'auto' }}>
+              <div className="np-list">
                 {myNotifications.length === 0 ? (
                   <div style={{ padding: 32, textAlign: 'center', color: '#9ca3af' }}>
                     <span className="material-icons-round" style={{ fontSize: 40, opacity: 0.4 }}>notifications_none</span>

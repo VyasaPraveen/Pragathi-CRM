@@ -48,7 +48,7 @@ function MiniBarChart({ data, height = 130, barColor }) {
             background: barColor || `linear-gradient(180deg, ${COLORS[i % COLORS.length]}, ${COLORS[i % COLORS.length]}aa)`,
             transition: 'height .6s ease', boxShadow: d.value > 0 ? '0 2px 8px rgba(0,0,0,.1)' : 'none'
           }} />
-          <span style={{ fontSize: '.62rem', color: '#9ca3af', fontWeight: 500 }}>{d.label}</span>
+          <span className="mbc-l" style={{ fontSize: '.62rem', color: '#9ca3af', fontWeight: 500 }}>{d.label}</span>
         </div>
       ))}
     </div>
@@ -164,7 +164,9 @@ export default function Dashboard() {
       map[a].total++;
       if (l.status === 'Converted') map[a].converted++;
     });
-    return Object.values(map).sort((a, b) => b.total - a.total).slice(0, 5);
+    // Conversions first; at a tie the better rate, then the bigger book.
+    const rate = (p) => (p.total ? p.converted / p.total : 0);
+    return Object.values(map).sort((a, b) => (b.converted - a.converted) || (rate(b) - rate(a)) || (b.total - a.total)).slice(0, 5);
   }, [leads]);
 
   // Overdue follow-ups
@@ -203,8 +205,14 @@ export default function Dashboard() {
   // City-wise lead distribution
   const cityData = useMemo(() => {
     const map = {};
-    leads.forEach(l => { const c = l.city || 'Unknown'; map[c] = (map[c] || 0) + 1; });
-    return Object.entries(map).sort((a, b) => b[1] - a[1]).slice(0, 8);
+    // "Tirupathi", "tirupathi" and "Tirupathi " are one city.
+    leads.forEach(l => {
+      const raw = String(l.city || '').trim();
+      const key = raw.toLowerCase() || 'unknown';
+      if (!map[key]) map[key] = [raw ? raw[0].toUpperCase() + raw.slice(1) : 'Unknown', 0];
+      map[key][1]++;
+    });
+    return Object.values(map).sort((a, b) => b[1] - a[1]).slice(0, 8);
   }, [leads]);
 
   // Payment type donut
@@ -496,7 +504,7 @@ export default function Dashboard() {
       {/* Row 4: City Distribution + Top Performers */}
       <div className="db-row db-2">
         {/* City-wise */}
-        <div className="card" style={{ borderRadius: 16 }}>
+        <div className="card db-city" style={{ borderRadius: 16 }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="material-icons-round" style={{ color: '#14b8a6', fontSize: 22 }}>location_city</span>
@@ -505,7 +513,7 @@ export default function Dashboard() {
           </div>
           <div className="cb">
             {cityData.length > 0 ? (
-              <MiniBarChart data={cityData.map(([city, count]) => ({ label: city.slice(0, 6), value: count }))} height={140} />
+              <MiniBarChart data={cityData.map(([city, count]) => ({ label: city.slice(0, 8), value: count }))} height={140} />
             ) : (
               <p style={{ color: '#9ca3af', fontSize: '.84rem', textAlign: 'center' }}>No city data</p>
             )}
@@ -513,7 +521,7 @@ export default function Dashboard() {
         </div>
 
         {/* Top Performers */}
-        <div className="card" style={{ borderRadius: 16 }}>
+        <div className="card db-top" style={{ borderRadius: 16 }}>
           <div className="ch" style={{ borderBottom: '2px solid #f3f4f6' }}>
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="material-icons-round" style={{ color: '#f59e0b', fontSize: 22 }}>emoji_events</span>
@@ -565,7 +573,7 @@ export default function Dashboard() {
                 <tr key={l.id}>
                   <td style={{ fontWeight: 600 }}>{l.name}</td>
                   <td style={{ fontSize: '.82rem' }}>{l.phone}</td>
-                  <td style={{ fontSize: '.82rem', color: '#ef4444', fontWeight: 700 }}>{l.nextFollowUpDate}</td>
+                  <td style={{ fontSize: '.82rem', color: '#ef4444', fontWeight: 700, whiteSpace: 'nowrap' }}>{formatDate(l.nextFollowUpDate)}</td>
                   <td><StatusBadge status={l.followUpStatus || l.status} /></td>
                 </tr>
               ))}
@@ -586,7 +594,7 @@ export default function Dashboard() {
           <div className="cb" style={{ padding: 0 }}>
             <div className="tw"><table><thead><tr><th>Name</th><th>Status</th><th>Priority</th><th>Date</th></tr></thead><tbody>
               {leads.slice(0, 5).map(l => (
-                <tr key={l.id}><td><strong>{l.name}</strong><br /><span style={{ fontSize: '.78rem', color: '#9ca3af' }}>{l.phone}</span></td><td><StatusBadge status={l.status} /></td><td><StatusBadge status={l.priority} /></td><td style={{ fontSize: '.82rem' }}>{formatDate(l.dateGenerated)}</td></tr>
+                <tr key={l.id}><td><strong>{l.name}</strong><br /><span style={{ fontSize: '.78rem', color: '#9ca3af' }}>{l.phone}</span></td><td><StatusBadge status={l.status} /></td><td><StatusBadge status={l.priority} /></td><td style={{ fontSize: '.82rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td></tr>
               ))}
               {!leads.length && <tr><td colSpan="4" style={{ textAlign: 'center', padding: 20, color: '#9ca3af' }}>No leads yet</td></tr>}
             </tbody></table></div>
