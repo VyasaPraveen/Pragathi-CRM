@@ -18,18 +18,17 @@ export function DateFilter({ value, onChange, records, fields, compact }) {
   const month = f.mode === 'month' ? f.month : '';
   const date = f.mode === 'date' ? f.date : '';
   const thisMonth = today.slice(0, 7);
-  const small = { padding: compact ? '4px 8px' : '5px 10px', fontSize: '.78rem', width: 'auto' };
   return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }} title="Show records from one month or one day">
+    <div className={`df${compact ? ' cmp' : ''}`} title="Show records from one month or one day">
       <span className="material-icons-round" style={{ fontSize: 17, color: isDateFiltered(f) ? 'var(--pri)' : 'var(--muted)' }}>calendar_month</span>
-      <span className={`fc ${f.mode === 'all' ? 'act' : ''}`} style={{ padding: '4px 10px', fontSize: '.74rem' }} onClick={() => onChange(DATE_FILTER_ALL)}>All</span>
-      <span className={`fc ${month === thisMonth ? 'act' : ''}`} style={{ padding: '4px 10px', fontSize: '.74rem' }} onClick={() => onChange(thisMonthFilter(today))}>This Month</span>
-      <select className="fi" style={small} value={month} aria-label="Month"
+      <span className={`fc ${f.mode === 'all' ? 'act' : ''}`} onClick={() => onChange(DATE_FILTER_ALL)}>All</span>
+      <span className={`fc ${month === thisMonth ? 'act' : ''}`} onClick={() => onChange(thisMonthFilter(today))}>This Month</span>
+      <select className="fi" value={month} aria-label="Month"
         onChange={e => onChange(e.target.value ? { mode: 'month', month: e.target.value, date: '' } : DATE_FILTER_ALL)}>
         <option value="">Month…</option>
         {months.map(m => <option key={m} value={m}>{monthName(m)}</option>)}
       </select>
-      <input type="date" className="fi" style={{ ...small, minWidth: 130 }} value={date} aria-label="Day"
+      <input type="date" className="fi" value={date} aria-label="Day"
         onChange={e => onChange(e.target.value ? { mode: 'date', date: e.target.value, month: '' } : DATE_FILTER_ALL)} />
       {isDateFiltered(f) && (
         <button type="button" className="btn bsm bo" style={{ padding: '3px 8px' }} title="Clear the date filter" onClick={() => onChange(DATE_FILTER_ALL)}>

@@ -104,42 +104,44 @@ export default function Materials() {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 12 }}>
-        {tabButton('materials', 'Materials', 'inventory_2')}
-        {(mayReview || mayApprove || mayEnter) && tabButton('approvals', 'Approvals', 'fact_check', myPending.length)}
-        {tabButton('ledger', 'Stock History', 'receipt_long')}
-        <span style={{ flex: 1 }} />
+      <div className="tl-r" style={{ marginBottom: 12 }}>
+        <div className="chips">
+          {tabButton('materials', 'Materials', 'inventory_2')}
+          {(mayReview || mayApprove || mayEnter) && tabButton('approvals', 'Approvals', 'fact_check', myPending.length)}
+          {tabButton('ledger', 'Stock History', 'receipt_long')}
+        </div>
+        <span className="tl-sp" style={{ flex: 1 }} />
         <DateFilter value={dateFilter} onChange={setDateFilter} records={tab === 'materials' ? materials : stockTransactions} fields={tab === 'materials' ? MATERIAL_DATE_FIELDS : STOCK_DATE_FIELDS} compact />
       </div>
 
       {tab === 'materials' && (
         <>
           <div className="sb-x" style={{ marginBottom: 10 }}><span className="material-icons-round">search</span><input type="text" placeholder="Search materials..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-          <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+          <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
             <th>Material</th><th>Stock</th><th>Dispatched</th><th>Installed</th><th>Balance</th><th>Pending</th><th>Unit</th><th>Status</th><th>Actions</th>
           </tr></thead><tbody>
             {shown.map(m => {
               const s = summaries[m.id] || materialSummary(m, []);
               return (
                 <tr key={m.id}>
-                  <td style={{ fontWeight: 600 }}>
+                  <td className="m-h" style={{ fontWeight: 600 }}>
                     <button className="btn bsm bo" style={{ border: 'none', padding: 0, fontWeight: 600, color: 'var(--dark)' }} onClick={() => setModal({ kind: 'detail', id: m.id })} title="Open the stock history">{m.name}</button>
                     {m.category ? <div style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}>{m.category}</div> : null}
                   </td>
-                  <td>{m.stock}</td><td>{m.dispatched}</td><td>{m.installed}</td>
-                  <td style={{ fontWeight: 700 }}>{m.balance}</td>
-                  <td>{s.pendingReceiptQty || s.pendingAdjustmentCount
+                  <td data-l="Stock">{m.stock}</td><td data-l="Dispatched">{m.dispatched}</td><td data-l="Installed">{m.installed}</td>
+                  <td data-l="Balance" style={{ fontWeight: 700 }}>{m.balance}</td>
+                  <td data-l="Pending">{s.pendingReceiptQty || s.pendingAdjustmentCount
                     ? <span style={{ color: '#d68910', fontSize: '.8rem' }} title="Awaiting approval — not yet in the balance">
                         {s.pendingReceiptQty ? `+${qtyText(s.pendingReceiptQty)} receipt` : ''}{s.pendingReceiptQty && s.pendingAdjustmentCount ? ', ' : ''}{s.pendingAdjustmentCount ? `${s.pendingAdjustmentCount} correction${s.pendingAdjustmentCount > 1 ? 's' : ''}` : ''}
                       </span>
                     : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
-                  <td>{m.unit}</td>
-                  <td><StatusBadge status={stockStatusOf(m.balance)} /></td>
-                  <td><div style={{ display: 'flex', gap: 4 }}>
-                    <button className="btn bsm bo" onClick={() => setModal({ kind: 'detail', id: m.id })} title="Stock history"><span className="material-icons-round" style={{ fontSize: 16 }}>history</span></button>
-                    {mayEnter && <button className="btn bsm bo" onClick={() => setModal({ kind: 'receipt', materialId: m.id })} title="Receive stock of this material"><span className="material-icons-round" style={{ fontSize: 16 }}>move_to_inbox</span></button>}
-                    {canAdd && <button className="btn bsm bo" onClick={() => setModal({ kind: 'material', data: m, id: m.id })} title="Edit the name, unit or category"><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                    {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(m)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }} title="Delete (only a material with no stock history)"><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                  <td data-l="Unit">{m.unit}</td>
+                  <td data-l="Status"><StatusBadge status={stockStatusOf(m.balance)} /></td>
+                  <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                    <button className="btn bsm bo" onClick={() => setModal({ kind: 'detail', id: m.id })} title="Stock history" data-m="History"><span className="material-icons-round" style={{ fontSize: 16 }}>history</span></button>
+                    {mayEnter && <button className="btn bsm bo" onClick={() => setModal({ kind: 'receipt', materialId: m.id })} title="Receive stock of this material" data-m="Receive"><span className="material-icons-round" style={{ fontSize: 16 }}>move_to_inbox</span></button>}
+                    {canAdd && <button className="btn bsm bo" onClick={() => setModal({ kind: 'material', data: m, id: m.id })} title="Edit the name, unit or category" data-m="Edit"><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                    {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(m)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }} title="Delete (only a material with no stock history)" data-m="Delete"><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
                   </div></td>
                 </tr>
               );
@@ -568,23 +570,23 @@ function LedgerTable({ txns, showMaterial }) {
     return chain.join(' → ');
   };
   return (
-    <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table style={{ fontSize: '.8rem' }}><thead><tr>
+    <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table style={{ fontSize: '.8rem' }}><thead><tr>
       <th>Date</th>{showMaterial && <th>Material</th>}<th>Type</th><th>Qty</th><th>Balance</th><th>Status</th><th>By</th><th>Reference</th><th>Remarks</th>
     </tr></thead><tbody>
       {sorted.map(t => (
         <tr key={t.id} style={{ opacity: t.status === STOCK_STATUS.REJECTED ? .6 : 1 }}>
-          <td style={{ whiteSpace: 'nowrap' }}>{when(t)}<div style={{ fontSize: '.7rem', color: 'var(--muted)' }}>logged {formatDateTime(t.submittedAt)}</div></td>
-          {showMaterial && <td style={{ fontWeight: 600 }}>{t.materialName}</td>}
-          <td>{stockTypeLabel(t.type)}</td>
-          <td style={{ fontWeight: 700, color: t.type === STOCK_TYPES.DISPATCH ? '#c0392b' : toNumber(t.quantity) < 0 ? '#c0392b' : '#1e8449', whiteSpace: 'nowrap' }} title={t.type === STOCK_TYPES.RETURN ? 'Returned material added back to stock' : t.type === STOCK_TYPES.DISPATCH ? 'Dispatched — taken out of stock' : ''}>
+          <td className="m-h" style={{ whiteSpace: 'nowrap' }}>{when(t)}<div style={{ fontSize: '.7rem', color: 'var(--muted)' }}>logged {formatDateTime(t.submittedAt)}</div></td>
+          {showMaterial && <td data-l="Material" style={{ fontWeight: 600 }}>{t.materialName}</td>}
+          <td data-l="Type">{stockTypeLabel(t.type)}</td>
+          <td data-l="Qty" style={{ fontWeight: 700, color: t.type === STOCK_TYPES.DISPATCH ? '#c0392b' : toNumber(t.quantity) < 0 ? '#c0392b' : '#1e8449', whiteSpace: 'nowrap' }} title={t.type === STOCK_TYPES.RETURN ? 'Returned material added back to stock' : t.type === STOCK_TYPES.DISPATCH ? 'Dispatched — taken out of stock' : ''}>
             {t.type === STOCK_TYPES.DISPATCH ? `−${qtyText(t.quantity, t.unit)}` : signedQty(t.quantity, t.unit)}
             {t.extraItem ? <div style={{ fontSize: '.68rem', color: 'var(--muted)', fontWeight: 400 }}>added at dispatch</div> : null}
           </td>
-          <td style={{ whiteSpace: 'nowrap' }}>{t.appliedAt ? `${qtyText(t.previousBalance, '')} → ${qtyText(t.newBalance, '')}` : isStockOpen(t) ? <span style={{ color: '#d68910' }}>not yet applied</span> : '—'}</td>
-          <td><StatusBadge status={t.status} /></td>
-          <td style={{ fontSize: '.74rem' }}>{who(t)}</td>
-          <td style={{ fontSize: '.74rem' }}><div>{t.reference}</div><div style={{ color: 'var(--muted)' }}>{refText(t)}</div></td>
-          <td style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{t.type === STOCK_TYPES.ADJUSTMENT ? t.reason : t.remarks}{t.rejectReason ? <div style={{ color: '#c0392b' }}>Rejected: {t.rejectReason}</div> : null}</td>
+          <td data-l="Balance" style={{ whiteSpace: 'nowrap' }}>{t.appliedAt ? `${qtyText(t.previousBalance, '')} → ${qtyText(t.newBalance, '')}` : isStockOpen(t) ? <span style={{ color: '#d68910' }}>not yet applied</span> : '—'}</td>
+          <td data-l="Status"><StatusBadge status={t.status} /></td>
+          <td data-l="By" style={{ fontSize: '.74rem' }}>{who(t)}</td>
+          <td data-l="Reference" style={{ fontSize: '.74rem' }}><div>{t.reference}</div><div style={{ color: 'var(--muted)' }}>{refText(t)}</div></td>
+          <td data-l="Remarks" style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{t.type === STOCK_TYPES.ADJUSTMENT ? t.reason : t.remarks}{t.rejectReason ? <div style={{ color: '#c0392b' }}>Rejected: {t.rejectReason}</div> : null}</td>
         </tr>
       ))}
       {!sorted.length && <tr><td colSpan={showMaterial ? 9 : 8}><EmptyState icon="receipt_long" title="No stock movements" message="Receipts, corrections and dispatches appear here as they are recorded." /></td></tr>}

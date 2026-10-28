@@ -58,25 +58,25 @@ export default function Reminders() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search reminders..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...statusOptions].map(s => <span key={s} className={`fc ${filterStatus === s ? 'act' : ''}`} onClick={() => setFilterStatus(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Reminder</button>
         </div>
       </div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Type</th><th>Customer</th><th>Phone</th><th>Date</th><th>Message</th><th>Status</th><th>Actions</th></tr></thead><tbody>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Type</th><th>Customer</th><th>Phone</th><th>Date</th><th>Message</th><th>Status</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(r => (
           <tr key={r.id}>
-            <td style={{ fontWeight: 600 }}>{r.type}</td><td>{r.customer}</td>
-            <td style={{ fontSize: '.82rem' }}>{r.phone || '-'}</td>
-            <td style={{ fontSize: '.82rem' }}>{formatDate(r.date)}</td>
-            <td style={{ fontSize: '.85rem' }}>{r.message}</td>
-            <td><StatusBadge status={r.status} /></td>
-            <td><div style={{ display: 'flex', gap: 4 }}>
-              {r.status === 'Pending' && r.phone && <button className="btn bsm bs" onClick={() => { sendWhatsApp(r.phone, r.message); markSent(r.id); }}><span className="material-icons-round" style={{ fontSize: 16 }}>send</span></button>}
-              <button className="btn bsm bo" onClick={() => setModal({ data: r, id: r.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-              {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(r.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+            <td data-l="Type" style={{ fontWeight: 600 }}>{r.type}</td><td className="m-h">{r.customer}</td>
+            <td data-l="Phone" style={{ fontSize: '.82rem' }}>{r.phone || '-'}</td>
+            <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(r.date)}</td>
+            <td data-l="Message" style={{ fontSize: '.85rem' }}>{r.message}</td>
+            <td data-l="Status"><StatusBadge status={r.status} /></td>
+            <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+              {r.status === 'Pending' && r.phone && <button className="btn bsm bs" title="Send on WhatsApp" onClick={() => { sendWhatsApp(r.phone, r.message); markSent(r.id); }}><span className="material-icons-round" style={{ fontSize: 16 }}>send</span></button>}
+              <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: r, id: r.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+              {hasAccess(role, 'admin') && <button className="btn bsm bo" title="Delete" onClick={() => handleDelete(r.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
             </div></td>
           </tr>
         ))}

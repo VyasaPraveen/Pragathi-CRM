@@ -316,8 +316,8 @@ export default function PaymentRequests() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search payment requests..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {statuses.map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           {canRequest && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Generate Payment Request</button>}
@@ -341,7 +341,7 @@ export default function PaymentRequests() {
         ))}
       </div>
 
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>Payment For</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
       </tr></thead><tbody>
         {displayed.map(pr => {
@@ -350,7 +350,7 @@ export default function PaymentRequests() {
           const isOwner = isOwnRequest(pr, user);
           return (
             <tr key={pr.id}>
-              <td>
+              <td className="m-h">
                 <strong>{pr.purpose || '-'}</strong>
                 {pr.category && (
                   <span style={{ marginLeft: 6, fontSize: '.68rem', fontWeight: 700, color: 'var(--pri)', background: 'rgba(26,58,122,.08)', borderRadius: 10, padding: '1px 7px', verticalAlign: '1px' }}>{pr.category}</span>
@@ -373,22 +373,22 @@ export default function PaymentRequests() {
                     </div>
                   : <div style={{ fontSize: '.74rem', marginTop: 3, color: '#c0392b' }}>No Note — cannot be approved until one is added</div>}
               </td>
-              <td style={{ fontWeight: 700 }}>{formatCurrency(pr.amount)}</td>
-              <td style={{ fontSize: '.82rem' }}>{pr.requestedByName || pr.requestedBy || '-'}</td>
-              <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(pr.requestedDate)}</td>
-              <td><StatusBadge status={pr.status} /></td>
-              <td style={{ fontSize: '.74rem', color: 'var(--muted)', minWidth: 200, lineHeight: 1.6 }}>{trail(pr)}</td>
-              <td style={{ textAlign: 'right' }}>
+              <td data-l="Amount" style={{ fontWeight: 700 }}>{formatCurrency(pr.amount)}</td>
+              <td data-l="Requested by" style={{ fontSize: '.82rem' }}>{pr.requestedByName || pr.requestedBy || '-'}</td>
+              <td data-l="Date" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(pr.requestedDate)}</td>
+              <td data-l="Status"><StatusBadge status={pr.status} /></td>
+              <td data-l="Progress" style={{ fontSize: '.74rem', color: 'var(--muted)', minWidth: 200, lineHeight: 1.6 }}>{trail(pr)}</td>
+              <td className="m-a" style={{ textAlign: 'right' }}>
                 <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   {canAct && (
-                    <button className="btn bsm bp" onClick={() => advanceStage(pr)} title={`${stage.label} (${stage.by})`} style={{ padding: '4px 10px', fontSize: '.78rem' }}>
+                    <button className="btn bsm bp" data-m="" onClick={() => advanceStage(pr)} title={`${stage.label} (${stage.by})`} style={{ padding: '4px 10px', fontSize: '.78rem' }}>
                       <span className="material-icons-round" style={{ fontSize: 15 }}>arrow_forward</span> {stage.label}
                     </button>
                   )}
                   {/* The Accountant's shortcut for small amounts; the ordinary
                       approval buttons stay beside it for everyone else. */}
                   {canDirectPayPr(pr, user, role) && (
-                    <button className="btn bsm bo" onClick={() => directPay(pr)} title={`Below ₹${PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN')} — pay now without waiting for approval; the Owner is notified`}
+                    <button className="btn bsm bo" data-m="" onClick={() => directPay(pr)} title={`Below ₹${PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN')} — pay now without waiting for approval; the Owner is notified`}
                       style={{ padding: '4px 10px', fontSize: '.78rem', color: '#1e8449', borderColor: 'rgba(39,174,96,.4)' }}>
                       <span className="material-icons-round" style={{ fontSize: 15 }}>bolt</span> Pay Directly
                     </button>

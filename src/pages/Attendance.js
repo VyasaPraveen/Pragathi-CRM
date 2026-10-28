@@ -156,7 +156,7 @@ export default function Attendance() {
       </div>
 
       {/* My Attendance is the default view; managers can switch to the whole team. */}
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12, flexWrap: 'wrap' }}>
+      <div className="chips" style={{ marginBottom: 12 }}>
         {[
           ['mine', 'My Attendance'],
           canSeeTeam ? ['team', canSeeAll ? 'Team Attendance' : 'My Team'] : null,
@@ -230,20 +230,20 @@ export default function Attendance() {
             ))}
           </div>
           {monthDays.length ? (
-            <div className="tw"><table><thead><tr>
+            <div className="tw tw-m"><table><thead><tr>
               <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Check-In Location</th><th>Check-Out Location</th><th>Photo</th>
             </tr></thead><tbody>
               {monthDays.map(d => (
                 <tr key={d.date}>
-                  <td style={{ whiteSpace: 'nowrap', fontSize: '.82rem' }}>{formatDate(d.date)}</td>
-                  <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }}>{d.status}</span>
+                  <td className="m-h" style={{ whiteSpace: 'nowrap', fontSize: '.82rem' }}>{formatDate(d.date)}</td>
+                  <td data-l="Status"><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }}>{d.status}</span>
                     {d.standing && <span className={`st ${d.standing === FULL_DAY ? 'st-g' : d.standing === HALF_DAY ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.7rem', marginLeft: 4 }} title={`${d.hours} h worked — ${d.standing}${d.leaveCost ? ` (${d.leaveCost} day leave)` : ''}`}>{d.standing}</span>}</td>
-                  <td style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
-                  <td style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
-                  <td style={{ fontSize: '.82rem', fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>
-                  <td style={{ fontSize: '.8rem' }}><MarkLocation mark={d.in} /></td>
-                  <td style={{ fontSize: '.8rem' }}><MarkLocation mark={d.out} /></td>
-                  <td>{isSafeUrl(d.in?.photoUrl) ? <a href={d.in.photoUrl} target="_blank" rel="noreferrer"><img src={d.in.photoUrl} alt="" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
+                  <td data-l="Check in" style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
+                  <td data-l="Check out" style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
+                  <td data-l="Hours" style={{ fontSize: '.82rem', fontWeight: 600 }}>{d.hours != null ? d.hours + ' h' : '-'}</td>
+                  <td data-l="Check-in location" style={{ fontSize: '.8rem' }}><MarkLocation mark={d.in} /></td>
+                  <td data-l="Check-out location" style={{ fontSize: '.8rem' }}><MarkLocation mark={d.out} /></td>
+                  <td data-l="Photo">{isSafeUrl(d.in?.photoUrl) ? <a href={d.in.photoUrl} target="_blank" rel="noreferrer"><img src={d.in.photoUrl} alt="" style={{ width: 34, height: 34, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
                 </tr>
               ))}
             </tbody></table></div>
@@ -257,22 +257,22 @@ export default function Attendance() {
 
       {view === 'all' && (<>
       <div style={{ marginBottom: 10 }}><DateFilter value={allFilter} onChange={setAllFilter} records={attendance} fields={ATTENDANCE_DATE_FIELDS} /></div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>Employee</th><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Photo</th>{admin && <th style={{ textAlign: 'right' }}>Actions</th>}
       </tr></thead><tbody>
         {displayed.map(a => (
           <tr key={a.id}>
-            <td><strong>{a.employeeName || '-'}</strong></td>
-            <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(a.date)}</td>
-            <td style={{ fontSize: '.82rem' }}>{a.time || '-'}</td>
-            <td><span className="st" style={{ background: a.type === 'Check In' ? 'rgba(0,184,148,.12)' : 'rgba(232,131,12,.12)', color: a.type === 'Check In' ? '#00a381' : '#d68910' }}>{a.type}</span></td>
-            <td style={{ fontSize: '.8rem' }}>
+            <td className="m-h"><strong>{a.employeeName || '-'}</strong></td>
+            <td data-l="Date" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(a.date)}</td>
+            <td data-l="Time" style={{ fontSize: '.82rem' }}>{a.time || '-'}</td>
+            <td data-l="Type"><span className="st" style={{ background: a.type === 'Check In' ? 'rgba(0,184,148,.12)' : 'rgba(232,131,12,.12)', color: a.type === 'Check In' ? '#00a381' : '#d68910' }}>{a.type}</span></td>
+            <td data-l="Location" style={{ fontSize: '.8rem' }}>
               {a.lat && a.lng
                 ? <a href={a.mapLink || `https://www.google.com/maps?q=${a.lat},${a.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)', display: 'inline-flex', alignItems: 'center', gap: 3 }}><span className="material-icons-round" style={{ fontSize: 15 }}>place</span> View{a.accuracy ? ` (±${Math.round(a.accuracy)}m)` : ''}</a>
                 : '-'}
             </td>
-            <td>{isSafeUrl(a.photoUrl) ? <a href={a.photoUrl} target="_blank" rel="noreferrer"><img src={a.photoUrl} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
-            {admin && <td style={{ textAlign: 'right' }}><button className="btn bsm bo" onClick={() => handleDelete(a.id)} title="Delete" style={{ padding: '4px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button></td>}
+            <td data-l="Photo">{isSafeUrl(a.photoUrl) ? <a href={a.photoUrl} target="_blank" rel="noreferrer"><img src={a.photoUrl} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
+            {admin && <td className="m-a" style={{ textAlign: 'right' }}><div><button className="btn bsm bo" onClick={() => handleDelete(a.id)} title="Delete" style={{ padding: '4px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button></div></td>}
           </tr>
         ))}
         {!visible.length && <tr><td colSpan={admin ? 7 : 6}><EmptyState icon="location_off" title="No attendance yet" message="Mark attendance with your live location and a photo." /></td></tr>}

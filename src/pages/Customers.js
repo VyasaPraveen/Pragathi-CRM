@@ -116,8 +116,8 @@ export default function Customers() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...customerTypes].map(t => <span key={t} className={`fc ${typeFilter === t ? 'act' : ''}`} onClick={() => setTypeFilter(t)}>{t === 'all' ? 'All Types' : t}</span>)}
           </div>
           {areas.length > 0 && (
@@ -130,7 +130,7 @@ export default function Customers() {
         </div>
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={customers} fields={CUSTOMER_DATE_FIELDS} /></div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>Type</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Customer</th><th>Type</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(c => {
           const paid = c.paymentType === 'Finance'
             ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
@@ -138,16 +138,16 @@ export default function Customers() {
           const bal = toNumber(c.totalPrice) - paid;
           return (
             <tr key={c.id}>
-              <td><strong>{c.name}</strong><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{c.phone}</span>{c.email && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{c.email}</span></>}</td>
-              <td style={{ fontSize: '.82rem' }}>{c.customerType || '-'}</td>
-              <td>{c.kwRequired || '-'}</td>
-              <td><span className={`st ${c.paymentType === 'Finance' ? 'st-b' : 'st-g'}`}>{c.paymentType}</span></td>
-              <td style={{ fontWeight: 600 }}>{formatCurrency(c.totalPrice)}</td>
-              <td style={{ color: 'var(--ok)', fontWeight: 600 }}>{formatCurrency(paid)}</td>
-              <td style={{ color: bal > 0 ? 'var(--err)' : 'var(--ok)', fontWeight: 600 }}>{formatCurrency(bal)}</td>
-              <td><StatusBadge status={c.status} /></td>
-              <td><StatusBadge status={c.installationStatus || 'Pending'} /></td>
-              <td><div style={{ display: 'flex', gap: 4 }}>
+              <td className="m-h"><strong>{c.name}</strong><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{c.phone}</span>{c.email && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{c.email}</span></>}</td>
+              <td data-l="Type" style={{ fontSize: '.82rem' }}>{c.customerType || '-'}</td>
+              <td data-l="kW">{c.kwRequired || '-'}</td>
+              <td data-l="Payment"><span className={`st ${c.paymentType === 'Finance' ? 'st-b' : 'st-g'}`}>{c.paymentType}</span></td>
+              <td data-l="Total" style={{ fontWeight: 600 }}>{formatCurrency(c.totalPrice)}</td>
+              <td data-l="Paid" style={{ color: 'var(--ok)', fontWeight: 600 }}>{formatCurrency(paid)}</td>
+              <td data-l="Balance" style={{ color: bal > 0 ? 'var(--err)' : 'var(--ok)', fontWeight: 600 }}>{formatCurrency(bal)}</td>
+              <td data-l="Status"><StatusBadge status={c.status} /></td>
+              <td data-l="Installation"><StatusBadge status={c.installationStatus || 'Pending'} /></td>
+              <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn bsm bo" title="View Details" onClick={() => setDetailId(c.id)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span>
                 </button>
@@ -160,16 +160,16 @@ export default function Customers() {
                 <button className="btn bsm bo" title="Completion Report" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>description</span>
                 </button>
-                <button className="btn bsm bo" title="Share Report via WhatsApp" onClick={() => shareCompletionReportWhatsApp(c, leadPOs, installations, leads)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                <button className="btn bsm bo" title="Share Report via WhatsApp" data-m="Share report" onClick={() => shareCompletionReportWhatsApp(c, leadPOs, installations, leads)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>share</span>
                 </button>
                 {c.nextServiceDate && c.phone && (
-                  <button className="btn bsm bo" title="Send Service Reminder" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)}>
+                  <button className="btn bsm bo" title="Send Service Reminder" data-m="Service reminder" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>send</span>
                   </button>
                 )}
-                {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                {isOwner && <button className="btn bsm bo" onClick={() => handleDeleteCustomer(c)} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {canEdit && <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                {isOwner && <button className="btn bsm bo" onClick={() => handleDeleteCustomer(c)} title="Delete (Owner only)" data-m="Delete" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
           );

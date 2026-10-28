@@ -218,8 +218,8 @@ export default function Leave() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search leave..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {statuses.map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>event_available</span> Apply for Leave</button>
@@ -243,7 +243,7 @@ export default function Leave() {
         ))}
       </div>
 
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>Employee</th><th>Type</th><th>Dates</th><th>Days (count)</th><th>Replacement</th><th>Status</th><th style={{ textAlign: 'right' }}>Actions</th>
       </tr></thead><tbody>
         {displayed.map(lr => {
@@ -253,10 +253,10 @@ export default function Leave() {
           const canRecommend = canRecommendLeave(lr, user, role, users);
           return (
             <tr key={lr.id}>
-              <td><strong>{lr.employeeName || '-'}</strong></td>
-              <td style={{ fontSize: '.82rem' }}>{lr.leaveType === 'Other' ? (lr.leaveTypeOther || 'Other') : lr.leaveType}</td>
-              <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(lr.fromDate)}{lr.toDate && lr.toDate !== lr.fromDate ? ' – ' + formatDate(lr.toDate) : ''}</td>
-              <td style={{ fontSize: '.82rem' }}>
+              <td className="m-h"><strong>{lr.employeeName || '-'}</strong></td>
+              <td data-l="Type" style={{ fontSize: '.82rem' }}>{lr.leaveType === 'Other' ? (lr.leaveTypeOther || 'Other') : lr.leaveType}</td>
+              <td data-l="Dates" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(lr.fromDate)}{lr.toDate && lr.toDate !== lr.fromDate ? ' – ' + formatDate(lr.toDate) : ''}</td>
+              <td data-l="Days (count)" style={{ fontSize: '.82rem' }}>
                 {isShortLeave(lr.leaveType)
                   ? <><strong>{Number(lr.hours) || 0}</strong> hrs{lr.fromTime && lr.toTime ? <span style={{ color: 'var(--muted)', fontSize: '.74rem' }}> ({lr.fromTime}–{lr.toTime})</span> : null}</>
                   : <>
@@ -267,8 +267,8 @@ export default function Leave() {
                       )}
                     </>}
               </td>
-              <td style={{ fontSize: '.8rem' }}>{lr.replacementName || '-'}{lr.replacementStatus && <><br /><span style={{ fontSize: '.7rem', color: lr.replacementStatus === 'Accepted' ? 'var(--ok)' : lr.replacementStatus === 'Declined' ? 'var(--err)' : 'var(--muted)' }}>{lr.replacementStatus}</span></>}</td>
-              <td>
+              <td data-l="Replacement" style={{ fontSize: '.8rem' }}>{lr.replacementName || '-'}{lr.replacementStatus && <><br /><span style={{ fontSize: '.7rem', color: lr.replacementStatus === 'Accepted' ? 'var(--ok)' : lr.replacementStatus === 'Declined' ? 'var(--err)' : 'var(--muted)' }}>{lr.replacementStatus}</span></>}</td>
+              <td data-l="Status">
                 <StatusBadge status={lr.status} />
                 {lr.recommendedByName && (
                   <div title={lr.recommendNote || ''} style={{ fontSize: '.68rem', color: 'var(--ok)', marginTop: 3, display: 'flex', alignItems: 'center', gap: 3 }}>
@@ -277,20 +277,20 @@ export default function Leave() {
                   </div>
                 )}
               </td>
-              <td style={{ textAlign: 'right' }}>
+              <td className="m-a" style={{ textAlign: 'right' }}>
                 <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   {iAmReplacement && <>
                     <button className="btn bsm bp" onClick={() => acceptReplacement(lr)} style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>check</span> Accept</button>
-                    <button className="btn bsm bo" onClick={() => declineReplacement(lr)} style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>close</span></button>
+                    <button className="btn bsm bo" title="Decline" onClick={() => declineReplacement(lr)} style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>close</span></button>
                   </>}
                   {canRecommend && (
-                    <button className="btn bsm bo" onClick={() => recommend(lr)} title="Optional — the approver can act without it" style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>thumb_up</span> Recommend</button>
+                    <button className="btn bsm bo" data-m="" onClick={() => recommend(lr)} title="Optional — the approver can act without it" style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>thumb_up</span> Recommend</button>
                   )}
                   {canApprove && <>
                     <button className="btn bsm bp" onClick={() => approve(lr)} style={{ padding: '4px 10px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>done_all</span> Approve</button>
-                    <button className="btn bsm bo" onClick={() => reject(lr)} style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>block</span></button>
+                    <button className="btn bsm bo" title="Reject" onClick={() => reject(lr)} style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>block</span></button>
                   </>}
-                  {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: lr, id: lr.id })} title="Edit / reassign" style={{ padding: '4px 8px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>}
+                  {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: lr, id: lr.id })} title="Edit / reassign" data-m="Edit" style={{ padding: '4px 8px', fontSize: '.78rem' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>}
                   {(admin || (mine(lr) && lr.status === ST.AWAIT_REPLACEMENT)) && <button className="btn bsm bo" onClick={() => handleDelete(lr.id)} title="Delete" style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
                 </div>
               </td>

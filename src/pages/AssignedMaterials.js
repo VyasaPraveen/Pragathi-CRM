@@ -44,7 +44,7 @@ export default function AssignedMaterials() {
         <h3>Assigned Materials</h3>
         <DateFilter value={dateFilter} onChange={setDateFilter} records={mine} fields={ASSIGNED_DATE_FIELDS} compact />
       </div>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 12 }}>
+      <div className="chips" style={{ marginBottom: 12 }}>
         {chip('open', 'To deliver', openCount)}
         {chip('done', 'Delivered', mine.length - openCount)}
         {chip('all', 'All', mine.length)}

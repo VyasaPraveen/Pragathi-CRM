@@ -60,14 +60,14 @@ export default function Revenue() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 18 }}>
         <div className="card">
           <div className="ch"><h3 style={{ color: 'var(--ok)' }}>Income</h3>{canEdit && <button className="btn bsm bs" onClick={() => setModal({ type: 'income' })}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>}</div>
-          <div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
+          <div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
             {shownIncome.slice(0, incomeVisible).map(i => <tr key={i.id}>
-              <td>{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
-              <td style={{ fontWeight: 600, color: 'var(--ok)' }}>{formatCurrency(i.amount)}</td>
-              <td style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
-              {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn bsm bo" onClick={() => setModal({ type: 'income', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+              <td className="m-h">{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
+              <td data-l="Amount" style={{ fontWeight: 600, color: 'var(--ok)' }}>{formatCurrency(i.amount)}</td>
+              <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
+              {canEdit && <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title="Edit" onClick={() => setModal({ type: 'income', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" title="Delete" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
           </tbody></table></div>
@@ -76,14 +76,14 @@ export default function Revenue() {
         </div>
         <div className="card">
           <div className="ch"><h3 style={{ color: 'var(--err)' }}>Expenses</h3>{canEdit && <button className="btn bsm bs" onClick={() => setModal({ type: 'expenses' })}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>}</div>
-          <div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
+          <div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
             {shownExpenses.slice(0, expenseVisible).map(i => <tr key={i.id}>
-              <td>{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
-              <td style={{ fontWeight: 600, color: 'var(--err)' }}>{formatCurrency(i.amount)}</td>
-              <td style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
-              {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn bsm bo" onClick={() => setModal({ type: 'expenses', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+              <td className="m-h">{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
+              <td data-l="Amount" style={{ fontWeight: 600, color: 'var(--err)' }}>{formatCurrency(i.amount)}</td>
+              <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
+              {canEdit && <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title="Edit" onClick={() => setModal({ type: 'expenses', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" title="Delete" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
           </tbody></table></div>

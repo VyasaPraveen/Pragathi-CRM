@@ -121,8 +121,8 @@ export default function PurchaseOrders() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search POs..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...allStatuses].map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           <select className="fi" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)} style={{ width: 'auto', padding: '4px 28px 4px 8px', fontSize: '.78rem' }}>
@@ -143,30 +143,30 @@ export default function PurchaseOrders() {
         </div>
       </div>
 
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>PO #</th><th>Customer / Vendor</th><th>Date</th><th>Items</th><th>Value</th><th>Source</th><th>Status</th><th>Actions</th>
       </tr></thead><tbody>
         {displayed.map(po => (
           <React.Fragment key={po._source + '-' + po.id}>
             <tr>
-              <td style={{ fontWeight: 600 }}>{po.poNumber || '-'}</td>
-              <td>
+              <td data-l="PO #" style={{ fontWeight: 600 }}>{po.poNumber || '-'}</td>
+              <td className="m-h">
                 <strong>{po._source === 'lead' ? (po.customerName || po._leadName) : po.vendorName}</strong>
                 <br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>
                   {po._source === 'lead' ? ('Vendor: ' + (po.vendorName || '-')) : (po.vendorPhone || '')}
                 </span>
               </td>
-              <td style={{ fontSize: '.82rem' }}>{formatDate(po.poDate)}</td>
-              <td>{(po.items || []).length}</td>
-              <td style={{ fontWeight: 700 }}>{formatCurrency(po.agreedPrice || po.totalValue)}</td>
-              <td>
+              <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(po.poDate)}</td>
+              <td data-l="Items">{(po.items || []).length}</td>
+              <td data-l="Value" style={{ fontWeight: 700 }}>{formatCurrency(po.agreedPrice || po.totalValue)}</td>
+              <td data-l="Source">
                 {po._source === 'lead' ? (
                   <span style={{ background: 'rgba(99,102,241,.1)', color: '#6366f1', padding: '2px 8px', borderRadius: 10, fontSize: '.72rem', fontWeight: 600 }}>Lead</span>
                 ) : (
                   <span style={{ background: 'rgba(100,116,139,.1)', color: '#64748b', padding: '2px 8px', borderRadius: 10, fontSize: '.72rem', fontWeight: 600 }}>Standalone</span>
                 )}
               </td>
-              <td>
+              <td data-l="Status">
                 <StatusBadge status={po.status} />
                 {/* An approved lead PO is the warehouse's to dispatch; say how far it has got. */}
                 {po._source === 'lead' && po.status === PO_STATUS.APPROVED && (() => {
@@ -187,12 +187,12 @@ export default function PurchaseOrders() {
                   );
                 })()}
               </td>
-              <td><div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn bsm bo" onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
+              <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title={expanded === (po._source + po.id) ? 'Hide items' : 'Show items'} onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? sharePOWhatsApp(po) : shareLeadPO(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
-                {canEdit && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                {role === 'super_admin' && <button className="btn bsm bo" onClick={() => handleDelete(po)} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {canEdit && po._source === 'standalone' && <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                {role === 'super_admin' && <button className="btn bsm bo" onClick={() => handleDelete(po)} title="Delete (Owner only)" data-m="Delete" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
             {expanded === (po._source + po.id) && (

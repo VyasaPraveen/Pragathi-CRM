@@ -112,8 +112,8 @@ export default function EmployeeTasks() {
 
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search tasks..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...taskStatuses].map(s => <span key={s} className={`fc ${filterStatus === s ? 'act' : ''}`} onClick={() => setFilterStatus(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           <select className="fi" style={{ width: 'auto', padding: '7px 12px', fontSize: '.82rem' }} value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}>
@@ -125,22 +125,22 @@ export default function EmployeeTasks() {
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={employeeTasks} fields={TASK_DATE_FIELDS} /></div>
 
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>Task</th><th>Assigned To</th><th>Assigned Date</th><th>Due Date</th><th>Priority</th><th>Category</th><th>Status</th><th>Actions</th>
       </tr></thead><tbody>
         {displayed.map(t => (
           <tr key={t.id}>
-            <td><strong>{t.title}</strong>{t.relatedCustomer && <><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{t.relatedCustomer}</span></>}{t.description && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{t.description.slice(0, 60)}{t.description.length > 60 ? '...' : ''}</span></>}</td>
-            <td style={{ fontSize: '.82rem' }}>{t.assignedTo || <span style={{ color: 'var(--muted)' }}>Unassigned</span>}</td>
-            <td style={{ fontSize: '.82rem' }}>{formatDate(t.assignedDate)}</td>
-            <td style={{ fontSize: '.82rem' }}>{formatDate(t.dueDate)}</td>
-            <td><span className={`st ${priorityClass(t.priority)}`}>{t.priority}</span></td>
-            <td style={{ fontSize: '.82rem' }}>{t.category || '-'}</td>
-            <td><StatusBadge status={t.status} /></td>
-            <td><div style={{ display: 'flex', gap: 4 }}>
+            <td className="m-h"><strong>{t.title}</strong>{t.relatedCustomer && <><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{t.relatedCustomer}</span></>}{t.description && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{t.description.slice(0, 60)}{t.description.length > 60 ? '...' : ''}</span></>}</td>
+            <td data-l="Assigned To" style={{ fontSize: '.82rem' }}>{t.assignedTo || <span style={{ color: 'var(--muted)' }}>Unassigned</span>}</td>
+            <td data-l="Assigned" style={{ fontSize: '.82rem' }}>{formatDate(t.assignedDate)}</td>
+            <td data-l="Due" style={{ fontSize: '.82rem' }}>{formatDate(t.dueDate)}</td>
+            <td data-l="Priority"><span className={`st ${priorityClass(t.priority)}`}>{t.priority}</span></td>
+            <td data-l="Category" style={{ fontSize: '.82rem' }}>{t.category || '-'}</td>
+            <td data-l="Status"><StatusBadge status={t.status} /></td>
+            <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
               <button className="btn bsm bo" onClick={() => setDetailModal(t)} title="View Details"><span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span></button>
-              {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: t, id: t.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-              {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+              {canEdit && <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: t, id: t.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+              {hasAccess(role, 'admin') && <button className="btn bsm bo" title="Delete" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
             </div></td>
           </tr>
         ))}

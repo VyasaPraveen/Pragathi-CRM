@@ -278,7 +278,7 @@ export default function UserManagement() {
         </div>
       ) : (
         <div className="card">
-          <div className="tbl-wrap">
+          <div className="tbl-wrap tw-m">
             <table className="tbl">
               <thead>
                 <tr>
@@ -296,7 +296,7 @@ export default function UserManagement() {
                   const isSelf = u.id === currentUser?.uid;
                   return (
                     <tr key={u.id} style={{ cursor: 'pointer' }} onClick={() => setDetailModal(u)}>
-                      <td style={{ fontWeight: 600 }}>
+                      <td className="m-h" style={{ fontWeight: 600 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <div style={{ width: 32, height: 32, borderRadius: '50%', background: u.approved ? 'linear-gradient(135deg,var(--pri),var(--pri-l))' : 'var(--bor)', color: u.approved ? '#fff' : 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '.72rem', fontWeight: 700, flexShrink: 0 }}>
                             {(u.displayName || '?').split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2)}
@@ -307,9 +307,9 @@ export default function UserManagement() {
                           </div>
                         </div>
                       </td>
-                      <td style={{ fontSize: '.84rem' }}>{u.email}</td>
-                      <td style={{ fontSize: '.84rem' }}>{u.phone || '-'}</td>
-                      <td>
+                      <td data-l="Email" style={{ fontSize: '.84rem' }}>{u.email}</td>
+                      <td data-l="Phone" style={{ fontSize: '.84rem' }}>{u.phone || '-'}</td>
+                      <td data-l="Designation">
                         {isSelf ? (
                           <span style={{ fontWeight: 500, fontSize: '.84rem' }}>{u.designation || u.role}</span>
                         ) : (
@@ -321,17 +321,17 @@ export default function UserManagement() {
                           </select>
                         )}
                       </td>
-                      <td>
+                      <td data-l="Status">
                         {u.approved ? (
                           <span style={{ background: 'rgba(39,174,96,.1)', color: '#27ae60', padding: '3px 10px', borderRadius: 12, fontSize: '.78rem', fontWeight: 600 }}>Approved</span>
                         ) : (
                           <span style={{ background: 'rgba(232,131,12,.1)', color: '#e8830c', padding: '3px 10px', borderRadius: 12, fontSize: '.78rem', fontWeight: 600 }}>Pending</span>
                         )}
                       </td>
-                      <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>
+                      <td data-l="Joined" style={{ fontSize: '.82rem', color: 'var(--muted)' }}>
                         {u.createdAt ? new Date(u.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}
                       </td>
-                      <td style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
+                      <td className="m-a" style={{ textAlign: 'right' }} onClick={e => e.stopPropagation()}>
                         {isSelf ? (
                           <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>-</span>
                         ) : (
@@ -344,7 +344,7 @@ export default function UserManagement() {
                             <button className="btn" onClick={() => setEditModal(u)} style={{ padding: '4px 10px', fontSize: '.78rem' }} title="Edit User">
                               <span className="material-icons-round" style={{ fontSize: 15 }}>edit</span>
                             </button>
-                            <button className="btn" onClick={() => setPwdModal(u)} style={{ padding: '4px 10px', fontSize: '.78rem', color: '#6c5ce7' }} title="Set / reset password">
+                            <button className="btn" onClick={() => setPwdModal(u)} style={{ padding: '4px 10px', fontSize: '.78rem', color: '#6c5ce7' }} title="Set / reset password" data-m="Password">
                               <span className="material-icons-round" style={{ fontSize: 15 }}>key</span>
                             </button>
                             {u.approved && (

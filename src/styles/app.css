@@ -248,6 +248,53 @@ button,a,.ni,.fc,label{touch-action:manipulation}
   .db-legend>div{background:#f8fafc;border-radius:10px;padding:8px 10px}
   .db-legend>div>span:nth-child(2){min-width:0!important;flex:1}
 }
+/* ── Lists on the phone (29-Oct) ────────────────────────────────────────
+   Every section shares one toolbar: the search, a chip strip, the action
+   button, the date strip. On a phone the strips scroll sideways on one
+   line, so the filters line up on every page, and the table turns into
+   cards: each cell carries its heading, the record's buttons sit under
+   its own details with their names, and nothing scrolls sideways. */
+/* The main column never grows past the window for a wide table: the table's wrapper scrolls instead. */
+.mc{min-width:0}
+.tl-r{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.df{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.df .fc{padding:4px 10px;font-size:.74rem}
+.df .fi{padding:5px 10px;font-size:.78rem;width:auto}
+.df.cmp .fi{padding:4px 8px}
+.df input[type=date]{min-width:130px}
+@media(max-width:768px){
+  .tl{gap:10px;margin-bottom:12px}
+  /* Chrome sizes a column-flex child by its content unless min-width is 0, so the strips are told their width outright. */
+  .tl>*,.tl-r,.tl-r>*{min-width:0}.tl-r{width:100%}
+  .chips,.df{flex:0 0 auto;width:calc(100% + 28px);flex-wrap:nowrap;overflow-x:auto;gap:6px;margin:0 -14px;padding:2px 14px 4px;scrollbar-width:none;-webkit-overflow-scrolling:touch;scroll-snap-type:x proximity}
+  .chips::-webkit-scrollbar,.df::-webkit-scrollbar{display:none}
+  .chips>*,.df>*{flex:0 0 auto;scroll-snap-align:start}
+  .chips .fc,.df .fc{display:inline-flex;align-items:center;min-height:36px;padding:0 14px;font-size:.8rem;line-height:1.15;white-space:nowrap}
+  .chips .btn{min-height:36px;padding:0 14px}
+  .df .fi{min-height:36px;padding:0 8px;max-width:160px}.df select.fi{padding-right:26px}
+  .df .btn{min-height:36px}
+  .tl-r>.btn{flex:1 1 150px;justify-content:center;min-height:42px}
+  .tl-r>select.fi{flex:1 1 140px;width:auto!important;min-height:42px;padding:0 30px 0 12px!important;font-size:.9rem!important}
+  .tl-sp{display:none}
+  .tw-m>table{display:block}
+  .tw-m>table>thead{display:none}
+  .tw-m>table>tbody{display:block}
+  .tw-m>table>tbody>tr{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px 12px;padding:12px 14px;border-bottom:1px solid var(--bor);align-items:start}
+  .tw-m>table>tbody>tr:last-child{border-bottom:none}
+  .tw-m>table>tbody>tr>td{display:block;padding:0!important;border:none;min-width:0!important;max-width:none!important;white-space:normal!important;text-align:left!important;font-size:.84rem!important;line-height:1.35;overflow-wrap:anywhere}
+  .tw-m>table>tbody>tr>td[data-l]::before{content:attr(data-l);display:block;font-size:.62rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--light);margin-bottom:2px;line-height:1.2}
+  .tw-m>table>tbody>tr>td.m-h{grid-column:1/-1;order:-1;font-size:.92rem!important}
+  .tw-m>table>tbody>tr>td.m-h strong{font-size:.95rem!important}
+  .tw-m>table>tbody>tr>td.m-a{grid-column:1/-1;order:99;margin-top:2px;padding-top:10px!important;border-top:1px dashed var(--bor)}
+  .tw-m>table>tbody>tr>td.m-a>div{display:grid!important;grid-template-columns:repeat(auto-fit,minmax(64px,1fr));gap:6px}
+  .tw-m .m-a .btn{display:flex;flex-direction:column;justify-content:center;gap:3px;width:100%;min-height:50px;padding:7px 4px!important;border-radius:10px;font-size:.68rem!important;font-weight:600;line-height:1.15;white-space:normal;text-align:center}
+  .tw-m .m-a .btn .material-icons-round{font-size:20px!important}
+  .tw-m .m-a .btn[data-m]::after{content:attr(data-m)}
+  .tw-m .m-a .btn[title]:not([data-m]):has(>.material-icons-round:only-child)::after{content:attr(title)}
+  .tw-m>table>tbody>tr>td[colspan]{grid-column:1/-1}
+  .tw-m>table>tbody>tr>td:empty{display:none}
+}
 /* B5 fix: overlay uses .active class instead of sibling selector */
 .sbo{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:99}
 @media(max-width:768px){.sbo.active{display:block}}

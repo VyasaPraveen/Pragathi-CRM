@@ -298,8 +298,8 @@ export default function Leads() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search leads..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...sts, PENDING_FOLLOWUP].map(s => (
               <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>
                 {s === 'all' ? 'All' : s}
@@ -311,18 +311,18 @@ export default function Leads() {
         </div>
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={myLeads} fields={LEAD_DATE_FIELDS} /></div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table style={{ fontSize: '.82rem' }}><thead><tr><th>Name / Phone</th><th>Address</th><th>Source</th><th>Priority</th><th>Assigned</th><th style={{ textAlign: 'center' }}>Visit</th><th style={{ textAlign: 'center' }}>Quote</th><th style={{ textAlign: 'center' }}>Advance</th><th>Status</th><th>Date</th><th>Age</th><th>Actions</th></tr></thead><tbody>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table style={{ fontSize: '.82rem' }}><thead><tr><th>Name / Phone</th><th>Address</th><th>Source</th><th>Priority</th><th>Assigned</th><th style={{ textAlign: 'center' }}>Visit</th><th style={{ textAlign: 'center' }}>Quote</th><th style={{ textAlign: 'center' }}>Advance</th><th>Status</th><th>Date</th><th>Age</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(l => (
           <tr key={l.id}>
-            <td style={{ minWidth: 120 }}><strong style={{ fontSize: '.84rem' }}>{l.name}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{l.phone}</span></td>
-            <td style={{ maxWidth: 130, fontSize: '.78rem' }}>{l.address || '-'}</td>
-            <td style={{ fontSize: '.78rem' }}>{l.leadReference || '-'}</td>
-            <td>{l.priority ? <span className={`st ${priorityClass(l.priority)}`} style={{ padding: '3px 8px', fontSize: '.72rem' }}>{l.priority}</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
-            <td style={{ fontSize: '.78rem' }}>{l.assignedTo || '-'}</td>
-            <td style={{ textAlign: 'center' }}>{l.siteVisit === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Done</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td style={{ textAlign: 'center' }}>{l.quotationSent === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Sent</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td style={{ textAlign: 'center' }}>{l.advancePaid === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Paid</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td>
+            <td className="m-h" style={{ minWidth: 120 }}><strong style={{ fontSize: '.84rem' }}>{l.name}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{l.phone}</span></td>
+            <td data-l="Address" style={{ maxWidth: 130, fontSize: '.78rem' }}>{l.address || '-'}</td>
+            <td data-l="Source" style={{ fontSize: '.78rem' }}>{l.leadReference || '-'}</td>
+            <td data-l="Priority">{l.priority ? <span className={`st ${priorityClass(l.priority)}`} style={{ padding: '3px 8px', fontSize: '.72rem' }}>{l.priority}</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+            <td data-l="Assigned" style={{ fontSize: '.78rem' }}>{l.assignedTo || '-'}</td>
+            <td data-l="Visit" style={{ textAlign: 'center' }}>{l.siteVisit === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Done</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
+            <td data-l="Quote" style={{ textAlign: 'center' }}>{l.quotationSent === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Sent</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
+            <td data-l="Advance" style={{ textAlign: 'center' }}>{l.advancePaid === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Paid</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
+            <td data-l="Status">
               <StatusBadge status={l.status} />
               {l.pendingFollowUp && l.status !== 'Converted' && (() => {
                 // Two days ahead of the follow-up date the chip turns red, which
@@ -337,9 +337,9 @@ export default function Leads() {
                 );
               })()}
             </td>
-            <td style={{ fontSize: '.76rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td>
-            <td style={{ fontSize: '.78rem', fontWeight: 600 }}>{daysSince(l.dateGenerated) != null ? daysSince(l.dateGenerated) + 'd' : '-'}</td>
-            <td><div style={{ display: 'flex', gap: 3 }}>
+            <td data-l="Date" style={{ fontSize: '.76rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td>
+            <td data-l="Age" style={{ fontSize: '.78rem', fontWeight: 600 }}>{daysSince(l.dateGenerated) != null ? daysSince(l.dateGenerated) + 'd' : '-'}</td>
+            <td className="m-a"><div style={{ display: 'flex', gap: 3 }}>
               {l.phone && <button className="btn bsm bo" onClick={() => makeCall(l.phone)} title="Call" style={{ padding: '5px 8px', color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>call</span></button>}
               {l.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(l.phone, `Hi ${l.name}, this is from Pragathi Power Solutions regarding your solar enquiry.`)} title="WhatsApp" style={{ padding: '5px 8px', color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>chat</span></button>}
               <button className="btn bsm bo" onClick={() => setDetailId(l.id)} title="View Details" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>visibility</span></button>

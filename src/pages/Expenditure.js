@@ -167,8 +167,8 @@ export default function Expenditure() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search expenditures..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {statuses.map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           {canRequest && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New Request</button>}
@@ -192,7 +192,7 @@ export default function Expenditure() {
         ))}
       </div>
 
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>Type of Payment / Category</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
       </tr></thead><tbody>
         {displayed.map(exp => {
@@ -200,12 +200,12 @@ export default function Expenditure() {
           const canAct = stage && can(role, stage.action);
           return (
             <tr key={exp.id}>
-              <td><strong>{expLabel(exp)}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{exp.category || '-'}{exp.vendor ? ' · ' + exp.vendor : ''}</span></td>
-              <td style={{ fontWeight: 700 }}>{formatCurrency(exp.amount)}</td>
-              <td style={{ fontSize: '.82rem' }}>{exp.requestedBy || '-'}</td>
-              <td style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(exp.requestedDate)}</td>
-              <td>{stageBadge(exp.status)}</td>
-              <td style={{ fontSize: '.76rem', color: 'var(--muted)', minWidth: 150 }}>
+              <td className="m-h"><strong>{expLabel(exp)}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{exp.category || '-'}{exp.vendor ? ' · ' + exp.vendor : ''}</span></td>
+              <td data-l="Amount" style={{ fontWeight: 700 }}>{formatCurrency(exp.amount)}</td>
+              <td data-l="Requested by" style={{ fontSize: '.82rem' }}>{exp.requestedBy || '-'}</td>
+              <td data-l="Date" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(exp.requestedDate)}</td>
+              <td data-l="Status">{stageBadge(exp.status)}</td>
+              <td data-l="Progress" style={{ fontSize: '.76rem', color: 'var(--muted)', minWidth: 150 }}>
                 {[
                   exp.recommendedBy && 'Recommended',
                   exp.verifiedBy && 'Accountant Reviewed',
@@ -213,10 +213,10 @@ export default function Expenditure() {
                   exp.releasedBy && 'Paid',
                 ].filter(Boolean).join(' → ') || 'Awaiting recommendation'}
               </td>
-              <td style={{ textAlign: 'right' }}>
+              <td className="m-a" style={{ textAlign: 'right' }}>
                 <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                   {canAct && (
-                    <button className="btn bsm bp" onClick={() => advanceStage(exp)} title={stage.label} style={{ padding: '4px 10px', fontSize: '.78rem' }}>
+                    <button className="btn bsm bp" data-m="" onClick={() => advanceStage(exp)} title={stage.label} style={{ padding: '4px 10px', fontSize: '.78rem' }}>
                       <span className="material-icons-round" style={{ fontSize: 15 }}>arrow_forward</span> {stage.label}
                     </button>
                   )}
