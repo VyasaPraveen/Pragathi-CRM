@@ -9,7 +9,7 @@
 // which is text and has no layout to share.
 // ============================================================================
 
-import { formatDate } from './helpers';
+import { formatDate, shareWhatsApp } from './helpers';
 import { openPoPdf, downloadPoPdf } from './poShare';
 
 // The same two pages under the four names the screens already call, because
@@ -57,11 +57,5 @@ export function sharePOWhatsApp(po) {
     '\nDate: ' + (po.approvalDate ? formatDate(po.approvalDate) : '-') +
     '\n\n_Pragathi Power Solutions_';
 
-  if (po.customerPhone) {
-    const phone = String(po.customerPhone).replace(/\D/g, '');
-    const num = phone.length === 10 ? '91' + phone : phone;
-    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  } else {
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-  }
+  shareWhatsApp(po.customerPhone, msg);
 }

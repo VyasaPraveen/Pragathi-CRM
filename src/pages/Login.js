@@ -55,6 +55,19 @@ function PasswordField({ label, value, onChange, placeholder, autoComplete, onCa
   );
 }
 
+// An icon on the left of a field. Defined once, at module level: a component
+// created inside a render is a new type on every render, so React remounted
+// it — and the focus left the field — on every keystroke.
+function Field({ label, icon, hint, children }) {
+  return (
+    <div className="fg">
+      <label>{label}</label>
+      <div className="lg-ic"><span className="material-icons-round lg-icon" aria-hidden="true">{icon}</span>{children}</div>
+      {hint && <small className="lg-hint">{hint}</small>}
+    </div>
+  );
+}
+
 export default function Login() {
   const { login, signup, resetPassword } = useAuth();
   const [mode, setMode] = useState('login'); // 'login' | 'signup' | 'reset'
@@ -180,14 +193,6 @@ export default function Login() {
       ? 'Register for access — an admin will approve your account.'
       : 'Enter your email and your reset request will be sent to an administrator.';
 
-  // An icon on the left of a field.
-  const Field = ({ label, icon, hint, children }) => (
-    <div className="fg">
-      <label>{label}</label>
-      <div className="lg-ic"><span className="material-icons-round lg-icon" aria-hidden="true">{icon}</span>{children}</div>
-      {hint && <small className="lg-hint">{hint}</small>}
-    </div>
-  );
   const year = new Date().getFullYear();
 
   return (

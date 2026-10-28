@@ -90,11 +90,64 @@ export function indianWhatsAppNumber(phone) {
   return '91' + digits.slice(-10);
 }
 
+// Why a number cannot be used for WhatsApp, in words — or '' when it can.
+// Indian mobiles are ten digits starting 6–9; the last ten digits are what
+// count, so a leading 0 or +91 is fine (28-Oct, Req 3).
+export function indianMobileIssue(phone) {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return 'This record has no mobile number.';
+  if (digits.length < 10) return `"${raw}" is not a 10-digit mobile number — correct it on the record first.`;
+  const ten = digits.slice(-10);
+  if (!/^[6-9]/.test(ten)) return `"${raw}" is not an Indian mobile number (mobiles start with 6, 7, 8 or 9) — WhatsApp cannot open it.`;
+  return '';
+}
+// The wa.me link: with the number when it is usable, otherwise the
+// "pick a contact" form so the text is not lost.
+export function whatsAppUrl(phone, msg) {
+  const num = indianMobileIssue(phone) ? '' : indianWhatsAppNumber(phone);
+  return 'https://wa.me/' + (num ? num : '') + '?text=' + encodeURIComponent(msg || '');
+}
+// A message for the person from code that has no toast hook (the app's
+// ToastProvider listens for this). Falls back to alert() outside the app.
+export function notify(message, type = 'er') {
+  try {
+    if (typeof window !== 'undefined' && window.__ppsToast) { window.__ppsToast(message, type); return; }
+  } catch (e) { /* fall through */ }
+  if (typeof alert === 'function') alert(message);
+}
+// Open a link in a new tab the way a tapped link does: an anchor click from
+// the user's gesture is never treated as a popup (window.open sometimes was,
+// and on a phone the installed app got a blank "popup blocked" alert).
+export function openExternal(url) {
+  try {
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 0);
+    return true;
+  } catch (e) {
+    const w = window.open(url, '_blank');
+    if (!w) notify('Could not open WhatsApp — allow pop-ups for this site and try again.');
+    return !!w;
+  }
+}
+
+// A chat with this one number: refused, with the reason, when the number is
+// not usable, so WhatsApp never opens on a number it does not know.
 export function sendWhatsApp(phone, msg) {
-  const num = indianWhatsAppNumber(phone);
-  if (!num) return;
-  const w = window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  if (!w) alert('Popup blocked — please allow popups for WhatsApp sharing.');
+  const issue = indianMobileIssue(phone);
+  if (issue) { notify(issue); return false; }
+  return openExternal(whatsAppUrl(phone, msg));
+}
+// A share: with the number when it is usable; when a number is there but
+// unusable the person is told, and WhatsApp opens on its contact list so the
+// text can still be sent to the right person.
+export function shareWhatsApp(phone, msg) {
+  const issue = String(phone || '').trim() ? indianMobileIssue(phone) : '';
+  if (issue) notify(issue + ' WhatsApp will open on your contacts instead — pick the person there.', 'warn');
+  return openExternal(whatsAppUrl(phone, msg));
 }
 
 export const statusClass = (s) => {

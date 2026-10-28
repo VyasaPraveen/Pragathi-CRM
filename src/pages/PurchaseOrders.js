@@ -3,7 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely, todayStr } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely, todayStr, shareWhatsApp } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
@@ -108,11 +108,13 @@ export default function PurchaseOrders() {
     } catch (e) { toast(e.message, 'er'); }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Delete this purchase order permanently?')) {
-      try { await deleteDocument('purchaseOrders', id); toast('Purchase order deleted'); }
-      catch (e) { toast(e.message, 'er'); }
-    }
+  // Req 1 (28-Oct): deleting a purchase order — a vendor PO or a lead's PO —
+  // is the Owner's alone; the API refuses everyone else.
+  const handleDelete = async (po) => {
+    const what = po._source === 'lead' ? `the PO ${po.poNumber || ''} for "${po.customerName || po._leadName || ''}"` : 'this purchase order';
+    if (!window.confirm(`Delete ${what} permanently? This cannot be undone.`)) return;
+    try { await deleteDocument(po._source === 'lead' ? 'leadPOs' : 'purchaseOrders', po.id); toast('Purchase order deleted'); }
+    catch (e) { toast(e.message, 'er'); }
   };
 
   return (
@@ -190,7 +192,7 @@ export default function PurchaseOrders() {
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? sharePOWhatsApp(po) : shareLeadPO(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
                 {canEdit && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                {hasAccess(role, 'admin') && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => handleDelete(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {role === 'super_admin' && <button className="btn bsm bo" onClick={() => handleDelete(po)} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
             {expanded === (po._source + po.id) && (
@@ -440,13 +442,5 @@ function sharePOWhatsApp(po) {
     (po.notes ? '\n\nNotes: ' + po.notes : '') +
     '\n\n_Pragathi Power Solutions_';
 
-  let url;
-  if (po.vendorPhone) {
-    const phone = po.vendorPhone.replace(/\D/g, '');
-    url = 'https://wa.me/' + (phone.length === 10 ? '91' + phone : phone) + '?text=' + encodeURIComponent(msg);
-  } else {
-    url = 'https://wa.me/?text=' + encodeURIComponent(msg);
-  }
-  const win = window.open(url, '_blank');
-  if (!win) alert('Popup blocked — please allow popups for WhatsApp sharing.');
+  shareWhatsApp(po.vendorPhone, msg);
 }

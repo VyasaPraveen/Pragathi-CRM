@@ -250,10 +250,17 @@ export function dispatchedSoFar(po) {
   return out;
 }
 
-// Has every sent line of the PO been dispatched in full?
+// A PO goes out in at most this many confirmations (Req 2, 28-Oct): the
+// third is final whatever is entered. Mirrors STOCK_MAX_DISPATCHES.
+export const MAX_DISPATCHES = 3;
+export const dispatchesLeft = (po) => Math.max(0, MAX_DISPATCHES - stockDispatches(po).length);
+
+// Has every sent line of the PO been dispatched in full — or has it had its
+// three dispatches?
 export function stockDispatchComplete(po) {
   if (!po) return false;
   if (po.stockDispatchComplete === true) return true;
+  if (stockDispatches(po).length >= MAX_DISPATCHES) return true;
   // A PO dispatched before 27-Oct went out in one confirmation that was final
   // by definition; it is never reopened.
   if (po.stockDispatchedAt && !(Array.isArray(po.stockDispatches) && po.stockDispatches.length)) return true;
@@ -347,8 +354,10 @@ export function finalDispatchIssue(lines, materials) {
   return short.length ? `Not enough stock — ${short.join('; ')}.` : '';
 }
 
-// Is this confirmation only part of what remains?
-export function isPartialDispatch(lines) {
+// Is this confirmation only part of what remains? On the last of the three
+// allowed rounds it is final whatever is entered.
+export function isPartialDispatch(lines, po) {
+  if (po && dispatchesLeft(po) <= 1) return false;
   const all = (lines || []).filter(l => !l.extra);
   return all.some(l => {
     const q = l.materialId ? toNumber(l.quantity) : 0;
@@ -374,8 +383,11 @@ export const dispatchDraftBody = (po, lines, extra = {}) => ({
 export function finalDispatchState(po) {
   if (!po) return { step: 'none', text: '' };
   const done = stockDispatches(po);
-  if (stockDispatchComplete(po)) return { step: 'done', text: `All items dispatched — ${done.length} confirmation${done.length === 1 ? '' : 's'}, last by ${done.length ? done[done.length - 1].by || '-' : '-'}` };
-  if (done.length) return { step: 'partial', text: `${done.length} partial dispatch${done.length === 1 ? '' : 'es'} confirmed — the remaining quantities await the next` };
+  if (stockDispatchComplete(po)) {
+    const closed = po.stockDispatchClosedBy === 'limit' ? ` — closed after the ${MAX_DISPATCHES} dispatches allowed` : '';
+    return { step: 'done', text: `All dispatched — ${done.length} confirmation${done.length === 1 ? '' : 's'}${closed}, last by ${done.length ? done[done.length - 1].by || '-' : '-'}` };
+  }
+  if (done.length) return { step: 'partial', text: `${done.length} of ${MAX_DISPATCHES} dispatches confirmed — the remaining quantities await the next (${dispatchesLeft(po)} left)` };
   if (finalDispatchOpen(po)) return { step: 'open', text: `Items received by ${po.dispatchReceivedBy || po.dispatchAssignedTo} — awaiting the dispatch confirmation` };
   return { step: 'waiting', text: '' };
 }

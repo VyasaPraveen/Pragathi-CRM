@@ -14,7 +14,7 @@ import {
 import { directoryPeople } from '../services/people';
 import {
   finalDispatchOpen, canFinalDispatch, finalDispatchLines, finalDispatchIssue, finalDispatchBody, dispatchDraftBody, finalDispatchState,
-  stockDispatched, stockDispatches, isPartialDispatch, activeDispatchLines, extraDispatchLine, qtyText,
+  stockDispatched, stockDispatches, isPartialDispatch, activeDispatchLines, extraDispatchLine, qtyText, dispatchesLeft, MAX_DISPATCHES,
   canRecordReturn, poReturns, STOCK_STATUS,
 } from '../services/stock';
 import { confirmFinalDispatch, saveDispatchDraft, submitStockReturn, newClientRef } from '../services/stockApi';
@@ -55,6 +55,61 @@ const PHOTO_QUALITY = 0.8;
 // stock ledger), so the history at the bottom is the record itself. The PO's
 // own status is never touched here.
 // ============================================================================
+// One Yes / No row set, used for both handovers. Module-level on purpose:
+// created inside the panel's render they were a new component type on every
+// render, so each keystroke in a note remounted the input and dropped the
+// focus (on a phone the keyboard closed after every character).
+function HandoverTable({ lines: hl, setMarksState, yesLabel, noLabel, disabled }) {
+  return (
+    <div className="tw">
+      <table style={{ fontSize: '.8rem' }}>
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th style={{ width: 170 }}>{yesLabel} / {noLabel}</th><th>Notes / reason</th></tr></thead>
+        <tbody>
+          {hl.map(l => (
+            <tr key={l.index} style={{ background: l.ok === true ? 'rgba(39,174,96,.06)' : l.ok === false ? 'rgba(231,76,60,.06)' : 'transparent' }}>
+              <td>{l.index + 1}</td>
+              <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}</td>
+              <td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
+              <td>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  <button type="button" className={`btn bsm ${l.ok === true ? 'bp' : 'bo'}`} style={l.ok === true ? { background: '#1e8449' } : {}} disabled={disabled}
+                    onClick={() => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || {}), ok: true }; return n; })}>Yes</button>
+                  <button type="button" className={`btn bsm ${l.ok === false ? 'bp' : 'bo'}`} style={l.ok === false ? { background: '#c0392b' } : {}} disabled={disabled}
+                    onClick={() => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || {}), ok: false }; return n; })}>No</button>
+                </div>
+              </td>
+              <td>
+                <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={l.note} disabled={disabled}
+                  placeholder={l.ok === false ? 'What is wrong? (required)' : 'Optional note'}
+                  onChange={e => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || { ok: null }), note: e.target.value }; return n; })} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+// The same rows read-only, once recorded.
+function RecordedTable({ lines: hl, yesLabel, noLabel }) {
+  return (
+    <div className="tw">
+      <table style={{ fontSize: '.78rem' }}>
+        <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th>{yesLabel} / {noLabel}</th><th>Notes</th></tr></thead>
+        <tbody>
+          {hl.map(l => (
+            <tr key={l.index}>
+              <td>{l.index + 1}</td><td>{l.name}</td><td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
+              <td>{l.ok === true ? <span style={{ color: '#1e8449', fontWeight: 600 }}>{yesLabel}</span> : l.ok === false ? <span style={{ color: '#c0392b', fontWeight: 600 }}>{noLabel}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
+              <td style={{ color: 'var(--muted)' }}>{l.note || '—'}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export default function DispatchPanel({ po, lead }) {
   const { users, materials, stockTransactions } = useData();
   const { role, user } = useAuth();
@@ -127,7 +182,8 @@ export default function DispatchPanel({ po, lead }) {
   const materialByName = (name) => stockList.find(x => x.name === name) || null;
   const finalLines = lines || finalDispatchLines(po, stockList);
   const finalIssue = finalDispatchIssue(finalLines, stockList);
-  const partial = isPartialDispatch(finalLines);
+  const partial = isPartialDispatch(finalLines, po);
+  const lastRound = finalDispatchOpen(po) && dispatchesLeft(po) <= 1;
   const materialName = (id) => { const m = stockList.find(x => x.id === id); return m ? m.name : ''; };
   const defaultDestination = [leadName, po.customerAddress || (lead && lead.address) || ''].filter(Boolean).join(', ');
   const stockOkLocked = po.dispatchStatus === DISPATCH_STATUS.COMPLETED && !po.dispatchConfirmedAt && !isConfirmer;
@@ -349,7 +405,8 @@ export default function DispatchPanel({ po, lead }) {
     const chosen = activeDispatchLines(finalLines);
     const list = chosen.map(l => `${materialName(l.materialId)} −${qtyText(l.quantity, l.unit)}`).join('\n');
     const kind = partial ? 'PARTIAL DISPATCH' : 'FINAL DISPATCH';
-    if (!window.confirm(`Confirm the ${kind} for ${label}?\n\nThis deducts the stock now:\n${list}${partial ? '\n\nThe remaining quantities stay for a later dispatch.' : ''}`)) return;
+    const round = `dispatch ${stockDispatches(po).length + 1} of ${MAX_DISPATCHES}`;
+    if (!window.confirm(`Confirm the ${kind} (${round}) for ${label}?\n\nThis deducts the stock now:\n${list}${partial ? '\n\nThe remaining quantities stay for a later dispatch.' : (lastRound && stockDispatches(po).length ? '\n\nThis is the last dispatch allowed on this purchase order; anything not entered now stays undispatched.' : '')}`)) return;
     setBusy(true);
     try {
       const res = await confirmFinalDispatch(finalDispatchBody(po, finalLines, { destination: (destination || defaultDestination).trim(), note: dispatchNote.trim(), clientRef: dispatchClientRef }));
@@ -385,54 +442,6 @@ export default function DispatchPanel({ po, lead }) {
       : po.dispatchStatus === DISPATCH_STATUS.PARTIAL
         ? `Being verified — ${summary.dispatched} of ${summary.total} items available`
         : 'Awaiting the warehouse material verification';
-
-  // One Yes / No row set, used for both handovers.
-  const HandoverTable = ({ lines: hl, setMarksState, yesLabel, noLabel, disabled }) => (
-    <div className="tw">
-      <table style={{ fontSize: '.8rem' }}>
-        <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th style={{ width: 170 }}>{yesLabel} / {noLabel}</th><th>Notes / reason</th></tr></thead>
-        <tbody>
-          {hl.map(l => (
-            <tr key={l.index} style={{ background: l.ok === true ? 'rgba(39,174,96,.06)' : l.ok === false ? 'rgba(231,76,60,.06)' : 'transparent' }}>
-              <td>{l.index + 1}</td>
-              <td>{l.name}{l.spec ? <span style={{ color: 'var(--muted)' }}> · {l.spec}</span> : null}</td>
-              <td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
-              <td>
-                <div style={{ display: 'flex', gap: 6 }}>
-                  <button type="button" className={`btn bsm ${l.ok === true ? 'bp' : 'bo'}`} style={l.ok === true ? { background: '#1e8449' } : {}} disabled={disabled}
-                    onClick={() => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || {}), ok: true }; return n; })}>Yes</button>
-                  <button type="button" className={`btn bsm ${l.ok === false ? 'bp' : 'bo'}`} style={l.ok === false ? { background: '#c0392b' } : {}} disabled={disabled}
-                    onClick={() => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || {}), ok: false }; return n; })}>No</button>
-                </div>
-              </td>
-              <td>
-                <input className="fi" style={{ padding: '4px 6px', fontSize: '.78rem' }} value={l.note} disabled={disabled}
-                  placeholder={l.ok === false ? 'What is wrong? (required)' : 'Optional note'}
-                  onChange={e => setMarksState(ms => { const n = [...ms]; n[l.index] = { ...(n[l.index] || { ok: null }), note: e.target.value }; return n; })} />
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-  // The same rows read-only, once recorded.
-  const RecordedTable = ({ lines: hl, yesLabel, noLabel }) => (
-    <div className="tw">
-      <table style={{ fontSize: '.78rem' }}>
-        <thead><tr><th style={{ width: 34 }}>#</th><th>Material</th><th>Qty</th><th>{yesLabel} / {noLabel}</th><th>Notes</th></tr></thead>
-        <tbody>
-          {hl.map(l => (
-            <tr key={l.index}>
-              <td>{l.index + 1}</td><td>{l.name}</td><td style={{ whiteSpace: 'nowrap' }}>{l.quantity} {l.unit}</td>
-              <td>{l.ok === true ? <span style={{ color: '#1e8449', fontWeight: 600 }}>{yesLabel}</span> : l.ok === false ? <span style={{ color: '#c0392b', fontWeight: 600 }}>{noLabel}</span> : <span style={{ color: 'var(--muted)' }}>—</span>}</td>
-              <td style={{ color: 'var(--muted)' }}>{l.note || '—'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
 
   return (
     <div style={{ marginTop: 12, border: '1px solid var(--bor)', borderRadius: 10, padding: '10px 12px', background: '#fff' }}>
@@ -765,6 +774,7 @@ export default function DispatchPanel({ po, lead }) {
               </div>
               <div style={{ fontSize: '.76rem', color: finalIssue ? '#c0392b' : 'var(--muted)', marginTop: 6 }}>
                 {finalIssue || `${activeDispatchLines(finalLines).length} item${activeDispatchLines(finalLines).length === 1 ? '' : 's'} will be deducted now${partial ? '; the rest stays for a later dispatch' : ''}.`}
+                {' '}Dispatch {stockDispatches(po).length + 1} of {MAX_DISPATCHES}{lastRound && stockDispatches(po).length ? ' — the last allowed on this purchase order; anything not entered now stays undispatched' : ''}.
               </div>
             </>
           ) : (

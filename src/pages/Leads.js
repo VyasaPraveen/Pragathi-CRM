@@ -5,7 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
 import { apiUpload } from '../services/api';
 import { assignableNames, supportingNames } from '../services/people';
-import { formatCurrency, formatDate, formatDateTime, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr, compressImage, isSafeUrl } from '../services/helpers';
+import { formatCurrency, formatDate, formatDateTime, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr, compressImage, isSafeUrl, shareWhatsApp } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect, DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import { sharePOWhatsApp } from '../services/poUtils';
@@ -1171,9 +1171,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span>
                           </button>
                         )}
-                        {/* Delete: admin only */}
-                        {hasAccess(role, 'admin') && (
-                          <button className="btn bsm bo" onClick={() => handleDeletePO(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+                        {/* Delete: the Owner only (Req 1, 28-Oct) */}
+                        {role === 'super_admin' && (
+                          <button className="btn bsm bo" onClick={() => handleDeletePO(po.id)} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>delete</span>
                           </button>
                         )}
@@ -1788,13 +1788,7 @@ function shareLeadWhatsApp(lead) {
     (lead.notes ? '\n\nNotes: ' + lead.notes : '') +
     '\n\n_Pragathi Power Solutions_';
 
-  if (lead.phone) {
-    const phone = String(lead.phone).replace(/\D/g, '');
-    const num = phone.length === 10 ? '91' + phone : phone;
-    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  } else {
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-  }
+  shareWhatsApp(lead.phone, msg);
 }
 
 /* ============ WHATSAPP SHARE - FOLLOW-UP HISTORY ============ */
@@ -1813,11 +1807,5 @@ function shareFollowUpWhatsApp(lead) {
     '*History:*\n' + historyText +
     '\n\n_Pragathi Power Solutions_';
 
-  if (lead.phone) {
-    const phone = String(lead.phone).replace(/\D/g, '');
-    const num = phone.length === 10 ? '91' + phone : phone;
-    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  } else {
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-  }
+  shareWhatsApp(lead.phone, msg);
 }

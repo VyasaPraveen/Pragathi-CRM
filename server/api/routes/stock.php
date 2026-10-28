@@ -46,6 +46,10 @@ const STOCK_REVIEW_ROLES = ['operation_manager', 'admin', 'management', 'super_a
 // the Owner, Management, Admin, the Operation Manager and the warehouse.
 // Mirrors FINAL_DISPATCH_ROLES in stock.js.
 const STOCK_DISPATCH_ROLES = ['operation_manager', 'admin', 'management', 'super_admin', 'warehouse_admin'];
+// A purchase order is dispatched in at most this many confirmations (Req 2,
+// 28-Oct): the third closes it whatever is left. Mirrors MAX_DISPATCHES in
+// stock.js.
+const STOCK_MAX_DISPATCHES = 3;
 // Below this balance a material is "Low Stock" — the figure the Materials
 // page has always used. Mirrors STOCK_LOW in stock.js.
 const STOCK_LOW = 10;
@@ -80,7 +84,11 @@ function handle_stock(string $action, string $method): void {
   $claims = require_auth();
   if ($method !== 'POST') fail(405, 'Method not allowed');
   if (!(int)($claims['approved'] ?? 0)) fail(403, 'Account not approved');
-  if (!may_module($claims, 'materials')) fail(403, 'You do not have access to Materials & Inventory');
+  // The dispatch confirmation is the assigned person's step (an executive or
+  // technician who may well have no Materials section); who may confirm is
+  // decided inside by stock_dispatch_eligible(). Everything else here is the
+  // Materials section's own work.
+  if (!in_array($action, ['dispatch', 'dispatch-draft'], true) && !may_module($claims, 'materials')) fail(403, 'You do not have access to Materials & Inventory');
   $b = body();
   try {
     switch ($action) {
@@ -533,6 +541,7 @@ function stock_dispatched_so_far(array $po): array {
 // Has every sent line gone out in full?
 function stock_dispatch_complete(array $po): bool {
   if (!empty($po['stockDispatchComplete'])) return true;
+  if (count(stock_dispatches_of($po)) >= STOCK_MAX_DISPATCHES) return true;
   // A PO dispatched before 27-Oct went out in one confirmation that was final.
   if (!empty($po['stockDispatchedAt']) && empty($po['stockDispatches'])) return true;
   $lines = po_lines($po);
@@ -547,6 +556,20 @@ function stock_dispatch_complete(array $po): bool {
     if ($ordered <= 0 && !isset($done[$i])) return false;
   }
   return $any;
+}
+
+// Has every sent line with a quantity gone out in full? (The count limit aside.)
+function stock_lines_all_out(array $po): bool {
+  $lines = po_lines($po);
+  $marks = is_array($po['dispatchItems'] ?? null) ? $po['dispatchItems'] : [];
+  $done = stock_dispatched_so_far($po);
+  foreach ($lines as $i => $it) {
+    if (empty($marks[$i]['dispatched'])) continue;
+    $ordered = stock_leading_num($it['quantity'] ?? 0);
+    if ($ordered > 0 && ($done[$i] ?? 0) + 1e-9 < $ordered) return false;
+    if ($ordered <= 0 && !isset($done[$i])) return false;
+  }
+  return true;
 }
 
 // Save the dispatch as it stands, without deducting anything (Req 4C).
@@ -586,7 +609,10 @@ function stock_final_dispatch(array $claims, array $b): void {
     }
   }
 
-  if (stock_dispatch_complete($po)) fail(409, 'Everything on this purchase order has already been dispatched; nothing more can be deducted against it.');
+  if (stock_dispatch_complete($po)) {
+    if (count(stock_dispatches_of($po)) >= STOCK_MAX_DISPATCHES) fail(409, 'This purchase order has had its three dispatches, the most allowed; nothing more can be deducted against it.');
+    fail(409, 'Everything on this purchase order has already been dispatched; nothing more can be deducted against it.');
+  }
   $items = po_lines($po);
   $marks = is_array($po['dispatchItems'] ?? null) ? $po['dispatchItems'] : [];
   $done = stock_dispatched_so_far($po);
@@ -678,6 +704,8 @@ function stock_final_dispatch(array $claims, array $b): void {
   $po['stockDispatchRef'] = $ref; $po['stockDispatchDestination'] = $destination; $po['stockDispatchNote'] = $note;
   $po['stockDispatchItems'] = array_merge(...array_map(fn($d) => (array)($d['items'] ?? []), $dispatches));
   $po['stockDispatchComplete'] = stock_dispatch_complete($po);
+  // The third confirmation closes the PO even when quantities are left.
+  if ($po['stockDispatchComplete'] && count($dispatches) >= STOCK_MAX_DISPATCHES && !stock_lines_all_out($po)) { $po['stockDispatchClosedBy'] = 'limit'; $po['stockDispatchClosedAt'] = $entry['at']; }
   unset($po['stockDispatchDraft']);
   stock_save('lead_pos', $po['id'], $po, $actor['email']);
   db()->commit();
@@ -687,9 +715,11 @@ function stock_final_dispatch(array $claims, array $b): void {
   $list = implode(', ', array_map(fn($d) => $d['materialName'] . ' ' . stock_qty_text(stock_num($d['quantity']), $d['unit'])
     . ' (' . stock_qty_text(stock_num($d['previousBalance']), $d['unit']) . ' → ' . stock_qty_text(stock_num($d['newBalance']), $d['unit']) . ')', $written));
   $kind = $po['stockDispatchComplete'] ? 'Final dispatch' : 'Partial dispatch';
+  $round = count($dispatches) . ' of ' . STOCK_MAX_DISPATCHES;
   stock_notify(array_merge(stock_people_by_role(['super_admin', 'operation_manager']), [(string)($po['dispatchAssignedBy'] ?? '')]),
     "$kind — Stock Deducted", "{$actor['name']} confirmed a " . strtolower($kind) . " for $label (ref $ref). Stock deducted: $list." . ($destination !== '' ? " Destination: $destination." : '')
-    . ($po['stockDispatchComplete'] ? ' Everything on this purchase order has now been dispatched.' : ' The remaining quantities stay for a later dispatch.'),
+    . " (dispatch $round)." . (($po['stockDispatchClosedBy'] ?? '') === 'limit' ? ' This was the last of the three dispatches allowed; the purchase order is now closed for dispatch with quantities left.'
+      : ($po['stockDispatchComplete'] ? ' Everything on this purchase order has now been dispatched.' : ' The remaining quantities stay for a later dispatch.')),
     $po['id'], $actor);
   json_out(['ok' => true, 'reference' => $ref, 'transactions' => $written, 'po' => $po]);
 }

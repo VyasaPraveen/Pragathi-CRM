@@ -67,3 +67,18 @@ test('a refused sign-in shows the message with the shake', async () => {
   expect(host.querySelector('.aerr.lg-shake').textContent).toContain('Invalid email or password');
   unmount();
 });
+
+test('typing in the email field keeps the focus (the field wrapper is stable)', () => {
+  const { host, unmount } = mount(<Login />);
+  const input = host.querySelector('input[type="email"]');
+  act(() => { input.focus(); });
+  expect(document.activeElement).toBe(input);
+  act(() => {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'a');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  expect(document.activeElement).toBe(host.querySelector('input[type="email"]'));
+  expect(host.querySelector('input[type="email"]')).toBe(input);
+  unmount();
+});

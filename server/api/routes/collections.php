@@ -133,9 +133,10 @@ function handle_collections(string $collection, string $id, string $method): voi
     }
     // Req 2 (27-Oct): deleting a customer or an installation is the Owner's
     // alone — these sections had no delete before, and get one only for the
-    // Owner account. Leads, tasks and purchase orders keep their Admin delete.
-    if (in_array($collection, ['customers', 'installations'], true) && $role !== 'super_admin') {
-      fail(403, 'Only the Owner can delete a customer or an installation.');
+    // Owner account. Req 1 (28-Oct): purchase orders (vendor POs and lead POs)
+    // likewise. Leads and tasks keep their Admin delete.
+    if (in_array($collection, ['customers', 'installations', 'purchaseOrders', 'leadPOs'], true) && $role !== 'super_admin') {
+      fail(403, 'Only the Owner can delete ' . ($collection === 'customers' ? 'a customer' : ($collection === 'installations' ? 'an installation' : 'a purchase order')) . '.');
     }
     if (!has_access($role, 'admin')) {
       // A photo may only be removed by the person who uploaded it.

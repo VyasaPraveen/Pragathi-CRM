@@ -156,6 +156,31 @@ describe('DispatchPanel', () => {
     asUser('revanth@x.com', 'executive');
     expect(render(<DispatchPanel po={received} lead={lead} />)).not.toContain(RECEIVE_BUTTON);
   });
+
+  // 28-Oct: the Yes / No tables were components created inside the panel's
+  // render, so every keystroke in a note remounted the input and dropped the
+  // focus (on a phone the keyboard closed after each character).
+  test('typing a handover note keeps the focus', () => {
+    mockData = { users };
+    asUser('revanth@x.com', 'executive');
+    const assigned = po('Approved', { dispatchStatus: 'Completed', dispatchItems: [{ dispatched: true }], dispatchAssignedTo: 'Revanth Reddy', dispatchAssignedToEmail: 'revanth@x.com', dispatchAssignedBy: 'OM', dispatchAssignedAt: '2026-10-08T06:00:00Z' });
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    act(() => { root.render(<DispatchPanel po={assigned} lead={lead} />); });
+    const input = host.querySelector('input[placeholder="Optional note"]');
+    expect(input).not.toBeNull();
+    act(() => { input.focus(); });
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      setter.call(input, 'o');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    expect(host.querySelector('input[placeholder="Optional note"]')).toBe(input);
+    expect(document.activeElement).toBe(input);
+    act(() => { root.unmount(); });
+    host.remove();
+  });
 });
 
 describe('Installations page', () => {
@@ -318,7 +343,7 @@ describe('DispatchPanel — final dispatch', () => {
     expect(text).toContain('Dispatch 1');
     expect(text).toContain('DSP-261008-ZZZZZ');
     expect(text).toContain('16 → 10');
-    expect(text).toContain('All items dispatched');
+    expect(text).toContain('All dispatched');
     expect(text).not.toContain('Confirm Final Dispatch');
     expect(text).not.toContain('Confirm Partial Dispatch');
   });
@@ -419,7 +444,7 @@ describe('DispatchPanel — partial dispatch, returns and yard items', () => {
     expect(text).toContain('2 items will be deducted now');
     const partial = { ...received, stockDispatches: [{ ref: 'DSP-1', at: '2026-10-09T05:00:00Z', by: 'Revanth Reddy', items: [{ index: 0, materialId: 'M1', materialName: 'Solar PV Module', quantity: 2, unit: 'Nos', previousBalance: 12, newBalance: 10 }] }] };
     text = render(<DispatchPanel po={partial} lead={lead} />);
-    expect(text).toContain('1 partial dispatch confirmed');
+    expect(text).toContain('1 of 3 dispatches confirmed');
     expect(text).toContain('Dispatch 1');
     expect(text).toContain('12 → 10');
     expect(text).toContain('Confirm Final Dispatch');   // what remains is everything left, so the next one is final

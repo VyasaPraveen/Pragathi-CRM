@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, shareWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState, DateFilter , SearchSelect } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
@@ -1440,13 +1440,5 @@ function shareCompletionReportWhatsApp(customer, leadPOs, installations, leads) 
     (customer.feedback ? '\n*Feedback:* ' + customer.feedback + '\n' : '') +
     '\n_Pragathi Power Solutions_';
 
-  let url;
-  if (customer.phone) {
-    const phone = customer.phone.replace(/\D/g, '');
-    url = 'https://wa.me/' + (phone.length === 10 ? '91' + phone : phone) + '?text=' + encodeURIComponent(msg);
-  } else {
-    url = 'https://wa.me/?text=' + encodeURIComponent(msg);
-  }
-  const win = window.open(url, '_blank');
-  if (!win) alert('Popup blocked — please allow popups for WhatsApp sharing.');
+  shareWhatsApp(customer.phone, msg);
 }
