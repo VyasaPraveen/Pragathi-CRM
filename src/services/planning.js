@@ -15,6 +15,8 @@ export const SLOT_STATUS = {
   COMPLETED: 'completed',
   NOT_DONE: 'not_done',
   POSTPONED: 'postponed',
+  // Req 7.1 (30-Oct): done ahead of its slot.
+  PRE_COMPLETED: 'pre_completed',
 };
 
 export const STATUS_LABEL = {
@@ -22,15 +24,21 @@ export const STATUS_LABEL = {
   [SLOT_STATUS.COMPLETED]: 'Completed',
   [SLOT_STATUS.NOT_DONE]: 'Not completed',
   [SLOT_STATUS.POSTPONED]: 'Postponed',
+  [SLOT_STATUS.PRE_COMPLETED]: 'Pre-Completed',
 };
+// The two states that count as done.
+export const DONE_STATUSES = [SLOT_STATUS.COMPLETED, SLOT_STATUS.PRE_COMPLETED];
 
 const to12 = (h) => { const p = h >= 12 ? 'PM' : 'AM'; let hr = h % 12; if (hr === 0) hr = 12; return `${hr}:00 ${p}`; };
 
-// Hourly slots 6 AM → 8 PM, then one night block 8 PM → 6 AM.
+// Hourly slots 6 AM → 8 PM, then one night block 8 PM → 6 AM — and, first
+// (Req 7.4, 30-Oct), one whole-day block 6 AM → 6 PM with room for a fuller
+// account of the day.
 export const DAY_SLOTS = [];
 for (let h = 6; h <= 19; h++) DAY_SLOTS.push({ key: 'h' + h, label: `${to12(h)} – ${to12(h + 1)}` });
 export const NIGHT_SLOT = { key: 'night', label: '8:00 PM – 6:00 AM (Night)' };
-export const ALL_SLOTS = [...DAY_SLOTS, NIGHT_SLOT];
+export const WHOLE_DAY_SLOT = { key: 'day', label: '6:00 AM – 6:00 PM (Whole day)', whole: true };
+export const ALL_SLOTS = [WHOLE_DAY_SLOT, ...DAY_SLOTS, NIGHT_SLOT];
 
 export const slotLabel = (key) => (ALL_SLOTS.find(s => s.key === key) || {}).label || key;
 
@@ -99,14 +107,16 @@ export function planSummary(slots) {
   const rows = planRows(slots);
   const by = (st) => rows.filter(r => r.status === st).length;
   const done = by(SLOT_STATUS.COMPLETED);
+  const pre = by(SLOT_STATUS.PRE_COMPLETED);
   return {
     planned: rows.length,
     completed: done,
+    preCompleted: pre,
     notDone: by(SLOT_STATUS.NOT_DONE),
     postponed: by(SLOT_STATUS.POSTPONED),
     pending: by(SLOT_STATUS.PLANNED),
     // Out of the slots that were actually reported on, how many got done.
-    completionRate: rows.length ? Math.round((done / rows.length) * 100) : 0,
+    completionRate: rows.length ? Math.round(((done + pre) / rows.length) * 100) : 0,
   };
 }
 
@@ -151,3 +161,65 @@ export function firstFreeSlot(targetSlots) {
   const free = ALL_SLOTS.find(s => !readSlot((targetSlots || {})[s.key]).text);
   return free ? free.key : '';
 }
+
+// ── Submission (Req 7.6 / 7.7, 30-Oct) ──────────────────────────────────────
+// Save keeps a draft; Report submits it. A submitted report is read-only for
+// its author until a manager unlocks it for a correction, and every
+// submission is kept on the document (submissions[]) with the slots as they
+// were, so a correction never silently overwrites what was reported.
+
+export function submissionState(doc) {
+  if (!doc) return { submitted: false, label: 'Not started', at: '', by: '' };
+  if (doc.submitted) return { submitted: true, label: 'Submitted', at: doc.submittedAt || '', by: doc.submittedByName || doc.submittedBy || '' };
+  return { submitted: false, label: planRows(doc.slots).length ? 'Draft' : 'Not started', at: doc.updatedAt || '', by: '', unlocked: !!doc.unlockedAt };
+}
+
+// May this person edit the plan? Its author, while it is not submitted.
+export const canEditPlan = (doc, isSelf) => !!isSelf && !(doc && doc.submitted);
+
+// What a submission needs: at least one slot of work, each slot in order.
+export function submissionIssue(slots) {
+  const rows = planRows(slots);
+  if (!rows.length) return 'Enter the day\'s work in at least one slot before reporting it.';
+  for (const r of rows) { const p = validateSlot(r); if (p) return `${r.label}: ${p}`; }
+  return '';
+}
+
+// A submitted report as flat rows, one per slot, for the CSV.
+export function reportRows(doc) {
+  return planRows(doc && doc.slots).map(r => ({
+    employee: (doc && doc.employeeName) || '',
+    email: (doc && doc.employeeEmail) || '',
+    date: (doc && doc.date) || '',
+    submittedAt: (doc && doc.submittedAt) || '',
+    slot: r.label,
+    status: STATUS_LABEL[r.status] || r.status,
+    text: r.text,
+    reason: r.reason,
+    postponedTo: r.postponedDate ? r.postponedDate + (r.postponedSlot ? ' ' + slotLabel(r.postponedSlot) : '') : '',
+  }));
+}
+
+// Only reports actually submitted, for the work date (or month) asked for —
+// never a draft, never a plan for a day still to come.
+export function submittedReports(docs, { date = '', month = '' } = {}) {
+  return (docs || [])
+    .filter(d => d && d.submitted === true)
+    .filter(d => (date ? d.date === date : true) && (month ? String(d.date || '').startsWith(month) : true))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.employeeName || '').localeCompare(String(b.employeeName || '')));
+}
+
+// Everyone's standing for one work date: submitted (when), draft, or nothing.
+export function reportRoll(docs, people, date) {
+  return (people || []).map(p => {
+    const email = String(p.email || '').toLowerCase();
+    const doc = (docs || []).find(d => d && d.date === date && String(d.employeeEmail || '').toLowerCase() === email) || null;
+    const st = submissionState(doc);
+    return { email, name: p.displayName || p.email, designation: p.designation || '', doc, ...st, slots: planRows(doc && doc.slots).length };
+  }).sort((a, b) => (a.submitted === b.submitted ? a.name.localeCompare(b.name) : a.submitted ? 1 : -1));
+}
+
+export const REPORT_REMINDER = {
+  hour: 17,   // 5 PM, local (IST) — every day but Sunday
+  message: 'Your daily report is due. You have 1 hour remaining to submit your report.',
+};

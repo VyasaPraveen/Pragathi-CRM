@@ -58,6 +58,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     if ($collection === 'materials') enforce_materials_write('POST', $claims, $data, []);
     if ($collection === 'leads') enforce_site_visit_photos($data, []);
     if ($collection === 'attendance') enforce_attendance_write('POST', $claims, $data, []);
+    if ($collection === 'tracking') enforce_tracking_write('POST', $claims, $data, []);
     // Force the correct initial status for approval-chain collections so the
     // workflow can't be bypassed by POSTing an already-advanced status (the UI
     // always starts here; this stops the raw API from skipping stages).
@@ -130,6 +131,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     unset($patch['id'], $patch['createdAt'], $patch['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('PATCH', $claims, $patch, $existing);
     if ($collection === 'attendance') enforce_attendance_write('PATCH', $claims, $patch, $existing);
+    if ($collection === 'tracking') enforce_tracking_write('PATCH', $claims, $patch, $existing);
     if ($collection === 'leads') {
       enforce_lead_edit($claims, $patch, $existing + ['createdBy' => $existing['createdBy'] ?? (string)($row['created_by'] ?? '')]);
       enforce_site_visit_photos($patch, $existing);
@@ -182,6 +184,8 @@ function handle_collections(string $collection, string $id, string $method): voi
 function handle_batch(string $method): void {
   $claims = require_auth();
   if ($method !== 'GET') fail(405, 'Method not allowed');
+  // The 5 PM report reminder rides on the poll every client makes (Req 7.8).
+  maybe_daily_report_reminder();
   $names = array_filter(array_map('trim', explode(',', (string)($_GET['names'] ?? ''))));
   $out = [];
   foreach ($names as $name) {
@@ -216,6 +220,103 @@ function handle_batch(string $method): void {
 // Returns a test to apply to each row. The members reporting to this viewer are
 // looked up once here rather than per row, because this runs on the batch read
 // that every client repeats every 15 seconds.
+// ── Daily reports (Req 7, 30-Oct) ───────────────────────────────────────────
+// A plan is its author's draft until they report it. Reporting stamps the
+// submission here (the time and the person are the server's word, not the
+// client's) and keeps a copy of the slots as submitted. After that the
+// author cannot change it; a manager may unlock it for a correction, which
+// is itself recorded, and the author reports it again.
+const TRACKING_SUBMISSION_KEYS = ['submitted', 'submittedAt', 'submittedBy', 'submittedByName', 'submissions', 'unlockedAt', 'unlockedBy', 'unlockNote'];
+function enforce_tracking_write(string $method, array $claims, array &$data, array $existing): void {
+  $role = (string)($claims['role'] ?? '');
+  $email = strtolower(trim((string)($claims['email'] ?? '')));
+  $manager = has_access($role, 'manager');
+  if ($method === 'POST') {
+    // A plan is created as a draft, by its author.
+    foreach (TRACKING_SUBMISSION_KEYS as $k) unset($data[$k]);
+    if (!$manager) { $data['employeeEmail'] = $email; if (empty($data['employeeName'])) $data['employeeName'] = (string)($claims['name'] ?? $email); }
+    return;
+  }
+  $owner = strtolower(trim((string)($existing['employeeEmail'] ?? ''))) === $email;
+  $keys = array_keys($data);
+  $onlyUnlock = $keys && !array_diff($keys, ['submitted', 'unlockNote']) && array_key_exists('submitted', $data) && !$data['submitted'];
+  if (!empty($existing['submitted'])) {
+    // Locked. The one thing allowed is a manager's unlock.
+    if ($onlyUnlock) {
+      if (!$manager) fail(403, 'This report has been submitted and is locked. A manager can unlock it for a correction.');
+      $data['submitted'] = false;
+      $data['unlockedAt'] = gmdate('Y-m-d\TH:i:s\Z');
+      $data['unlockedBy'] = (string)($claims['name'] ?? $email);
+      $data['unlockNote'] = trim((string)($data['unlockNote'] ?? ''));
+      return;
+    }
+    fail(409, 'This report has been submitted and is locked. Ask a manager to unlock it if a correction is needed.');
+  }
+  // Not submitted yet: the author (or a manager) edits; only the author reports.
+  if (!$owner && !$manager) fail(403, 'This plan belongs to someone else.');
+  foreach (['submittedAt', 'submittedBy', 'submittedByName', 'submissions', 'unlockedAt', 'unlockedBy'] as $k) unset($data[$k]);
+  if (array_key_exists('submitted', $data)) {
+    if (!$data['submitted']) { unset($data['submitted']); return; }
+    if (!$owner) fail(403, 'Only the person whose report it is can submit it.');
+    $slots = array_key_exists('slots', $data) ? $data['slots'] : ($existing['slots'] ?? []);
+    $any = false;
+    foreach ((array)$slots as $v) { $t = is_array($v) ? trim((string)($v['text'] ?? '')) : trim((string)$v); if ($t !== '') { $any = true; break; } }
+    if (!$any) fail(422, 'Enter the day\'s work in at least one slot before reporting it.');
+    $now = gmdate('Y-m-d\TH:i:s\Z');
+    $data['submitted'] = true;
+    $data['submittedAt'] = $now;
+    $data['submittedBy'] = $email;
+    $data['submittedByName'] = (string)($claims['name'] ?? $email);
+    $history = array_values((array)($existing['submissions'] ?? []));
+    $history[] = ['at' => $now, 'by' => $email, 'slots' => $slots];
+    $data['submissions'] = $history;
+  }
+}
+
+// Is it time for today's reminder? 5 PM or later, local time, not a Sunday.
+function report_reminder_due(DateTimeInterface $local): bool {
+  return (int)$local->format('w') !== 0 && (int)$local->format('G') >= 17;
+}
+
+// Once a day, after 5 PM IST (Monday to Saturday), everyone who has not yet
+// submitted today's report is told they have an hour. The day is claimed in
+// the company settings first, so two overlapping polls never send it twice.
+function maybe_daily_report_reminder(): void {
+  try {
+    $local = new DateTime('now', new DateTimeZone('Asia/Kolkata'));
+    if (!report_reminder_due($local)) return;
+    $today = $local->format('Y-m-d');
+    $st = db()->prepare("SELECT data FROM company_settings WHERE id = 'settings' LIMIT 1");
+    $st->execute();
+    $row = $st->fetch();
+    $cur = ($row && $row['data']) ? json_decode($row['data'], true) : [];
+    if (!is_array($cur)) $cur = [];
+    if (($cur['reportReminderDate'] ?? '') === $today) return;
+    $cur['reportReminderDate'] = $today;
+    db()->prepare("INSERT INTO company_settings (id, data, updated_at) VALUES ('settings', ?, UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = UTC_TIMESTAMP()")
+      ->execute([json_encode($cur, JSON_UNESCAPED_UNICODE)]);
+    // Who has already reported today.
+    $done = [];
+    foreach (db()->query("SELECT data FROM `tracking`")->fetchAll() as $r) {
+      $d = $r['data'] ? json_decode($r['data'], true) : [];
+      if (is_array($d) && ($d['date'] ?? '') === $today && !empty($d['submitted'])) $done[strtolower(trim((string)($d['employeeEmail'] ?? '')))] = true;
+    }
+    $ins = db()->prepare('INSERT INTO notifications (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)');
+    $message = 'Your daily report is due. You have 1 hour remaining to submit your report.';
+    foreach (db()->query('SELECT email, display_name, data FROM users WHERE approved = 1')->fetchAll() as $u) {
+      $ud = $u['data'] ? json_decode($u['data'], true) : [];
+      if (is_array($ud) && in_array((string)($ud['status'] ?? 'active'), ['hold', 'deactivated'], true)) continue;
+      if (isset($done[strtolower(trim((string)$u['email']))])) continue;
+      $note = ['forUser' => (string)($u['display_name'] ?: $u['email']), 'title' => 'Daily report due — ' . $local->format('d M Y'), 'message' => $message,
+               'type' => 'reminder', 'module' => 'tracking', 'read' => false, 'fromUser' => 'System', 'reminderDate' => $today];
+      $ins->execute([gen_id(), json_encode($note, JSON_UNESCAPED_UNICODE), 'system']);
+      maybe_send_push($note);
+    }
+  } catch (Throwable $e) {
+    error_log('daily report reminder: ' . $e->getMessage());
+  }
+}
+
 // ── Attendance (Req 6, 30-Oct) ──────────────────────────────────────────────
 // A mark (Check In / Check Out, with the photo and the location) is the
 // person's own. An added record ("Manual": Present / Half Day / Absent on a

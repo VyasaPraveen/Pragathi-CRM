@@ -60,7 +60,7 @@ export default function Tracking() {
 
       <div style={{ marginTop: 12, fontSize: '.76rem', color: 'var(--muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <span className="material-icons-round" style={{ fontSize: 15 }}>info</span>
-        Hourly slots run 6 AM–8 PM, plus a night block. Everything you plan here also shows in My Reports &amp; Planning, where you can update it. Sales Executives and Sales Managers can view any member's plan.
+        Hourly slots run 6 AM–8 PM, plus a whole-day block (6 AM–6 PM) and a night block. Save keeps a draft; Report submits the day and locks it (a manager can unlock it for a correction). Everything you plan here also shows in My Reports &amp; Planning, where you can update it. Sales Executives and Sales Managers can view any member's plan.
       </div>
     </>
   );

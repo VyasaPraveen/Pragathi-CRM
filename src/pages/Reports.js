@@ -1,7 +1,11 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
-import { formatCurrency, toNumber, todayStr } from '../services/helpers';
-import { StatCard, ProgressBar } from '../components/SharedUI';
+import { useAuth } from '../context/AuthContext';
+import { formatCurrency, toNumber, todayStr, formatDate, formatDateTime, hasAccess } from '../services/helpers';
+import { StatCard, ProgressBar, DateInput, EmptyState } from '../components/SharedUI';
+import { teamMembersOf, normalizeRole } from '../services/permissions';
+import { submittedReports, reportRows, reportRoll } from '../services/planning';
+import { userStatus } from '../services/teams';
 
 function downloadCSV(filename, headers, rows) {
   const escape = (v) => {
@@ -15,6 +19,75 @@ function downloadCSV(filename, headers, rows) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(link.href);
+}
+
+// Daily reports (Req 7, 30-Oct): who has reported for a work date, and the
+// submitted reports as a CSV — never a draft, never a plan for another day.
+function DailyReports() {
+  const { tracking, users } = useData();
+  const { user, role } = useAuth();
+  const [date, setDate] = useState(todayStr());
+  // The higher authorities see everyone; a Team Leader their members.
+  const people = useMemo(() => {
+    const active = (users || []).filter(u => u.approved !== false && userStatus(u) !== 'deactivated');
+    if (hasAccess(role, 'manager') || normalizeRole(role) === 'sales_manager') return active;
+    return teamMembersOf(active, user?.email);
+  }, [users, user, role]);
+  const roll = useMemo(() => reportRoll(tracking, people, date), [tracking, people, date]);
+  const submitted = roll.filter(r => r.submitted).length;
+  if (!people.length) return null;
+
+  const exportDay = () => {
+    const docs = submittedReports(tracking, { date }).filter(d => people.some(p => String(p.email || '').toLowerCase() === String(d.employeeEmail || '').toLowerCase()));
+    if (!docs.length) { window.alert(`No submitted reports for ${formatDate(date)}.`); return; }
+    exportReports(docs, 'PPS_Daily_Reports_' + date + '.csv');
+  };
+  const exportMonth = () => {
+    const month = date.slice(0, 7);
+    const docs = submittedReports(tracking, { month }).filter(d => people.some(p => String(p.email || '').toLowerCase() === String(d.employeeEmail || '').toLowerCase()));
+    if (!docs.length) { window.alert('No submitted reports in that month.'); return; }
+    exportReports(docs, 'PPS_Daily_Reports_' + month + '.csv');
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 18 }}>
+      <div className="ch" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>fact_check</span>Daily Reports</h3>
+        <div className="df">
+          <DateInput value={date} onChange={e => setDate(e.target.value || todayStr())} />
+          <button className="btn bsm bo" onClick={exportDay} title="Only the reports submitted for this work date"><span className="material-icons-round" style={{ fontSize: 16 }}>download</span> Submitted ({submitted})</button>
+          <button className="btn bsm bo" onClick={exportMonth} title="Every report submitted in this month, by work date"><span className="material-icons-round" style={{ fontSize: 16 }}>download</span> Month</button>
+        </div>
+      </div>
+      <div className="cb" style={{ padding: 0 }}>
+        <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
+          <thead><tr><th>Employee</th><th>Work date</th><th>Status</th><th>Submitted at</th><th>Slots</th></tr></thead>
+          <tbody>
+            {roll.map(r => (
+              <tr key={r.email}>
+                <td className="m-h"><strong>{r.name}</strong>{r.designation && <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{r.designation}</div>}</td>
+                <td data-l="Work date" style={{ whiteSpace: 'nowrap' }}>{formatDate(date)}</td>
+                <td data-l="Status"><span className={`st ${r.submitted ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.submitted ? 'Submitted' : r.label === 'Draft' ? 'Draft / incomplete' : 'Missing'}</span></td>
+                <td data-l="Submitted at" style={{ fontSize: '.8rem' }}>{r.submitted && r.at ? formatDateTime(r.at) : '-'}</td>
+                <td data-l="Slots">{r.slots || '-'}</td>
+              </tr>
+            ))}
+            {!roll.length && <tr><td colSpan="5"><EmptyState icon="groups" title="Nobody to report" message="" /></td></tr>}
+          </tbody>
+        </table></div>
+        <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: 0, padding: '10px 16px' }}>
+          {submitted} of {roll.length} submitted for {formatDate(date)}. The CSV carries submitted reports only, by the work date they belong to; drafts and plans for other days are left out.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function exportReports(docs, filename) {
+  const headers = ['Employee', 'Email', 'Report Date', 'Submitted At', 'Status', 'Time Slot', 'Report Details', 'Notes', 'Postponed To'];
+  const rows = [];
+  docs.forEach(d => reportRows(d).forEach(r => rows.push([r.employee, r.email, formatDate(r.date), r.submittedAt ? formatDateTime(r.submittedAt) : '', r.status, r.slot, r.text, r.reason, r.postponedTo ? formatDate(r.postponedTo.slice(0, 10)) + r.postponedTo.slice(10) : ''])));
+  downloadCSV(filename, headers, rows);
 }
 
 export default function Reports() {
@@ -67,6 +140,8 @@ export default function Reports() {
         <StatCard color="or" icon="solar_power" value={installations.length} label="Installations" />
         <StatCard color="pu" icon="savings" value={formatCurrency(tI - tE)} label="Net Profit" />
       </div>
+
+      <DailyReports />
 
       {/* Export Section */}
       <div className="card" style={{ marginBottom: 18 }}>
