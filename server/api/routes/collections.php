@@ -97,6 +97,23 @@ function handle_collections(string $collection, string $id, string $method): voi
     json_out(['id' => $newId] + $data, 201);
   }
 
+  // ── Activity Log purge (Req 2, 30-Oct): the selected entries, or all of
+  //    them, for the Owner / Operation Manager / Management / Admin only.
+  if ($collection === 'activityLog' && $id === 'purge' && $method === 'POST') {
+    if (!activity_log_deleter($role)) fail(403, 'Only the Owner, the Operation Manager, Management or an Admin can delete activity log entries');
+    $b = body();
+    if (!empty($b['all'])) {
+      $n = db()->exec("DELETE FROM `$table`");
+      json_out(['ok' => true, 'deleted' => (int)$n]);
+    }
+    $ids = array_values(array_filter(array_map('strval', (array)($b['ids'] ?? [])), fn($v) => $v !== ''));
+    if (!$ids) fail(400, 'Choose the entries to delete');
+    $n = 0;
+    $del = db()->prepare("DELETE FROM `$table` WHERE id = ?");
+    foreach (array_unique($ids) as $pid) { $del->execute([$pid]); $n += $del->rowCount(); }
+    json_out(['ok' => true, 'deleted' => $n]);
+  }
+
   if ($id === '') fail(400, 'Document id required');
 
   // ── UPDATE (merge) ──
@@ -138,7 +155,8 @@ function handle_collections(string $collection, string $id, string $method): voi
     if (in_array($collection, ['customers', 'installations', 'purchaseOrders', 'leadPOs'], true) && $role !== 'super_admin') {
       fail(403, 'Only the Owner can delete ' . ($collection === 'customers' ? 'a customer' : ($collection === 'installations' ? 'an installation' : 'a purchase order')) . '.');
     }
-    if (!has_access($role, 'admin')) {
+    if ($collection === 'activityLog' && !activity_log_deleter($role)) fail(403, 'Only the Owner, the Operation Manager, Management or an Admin can delete activity log entries');
+    if (!has_access($role, 'admin') && !($collection === 'activityLog' && activity_log_deleter($role))) {
       // A photo may only be removed by the person who uploaded it.
       if ($collection !== 'gallery') fail(403, 'Only admins can delete');
       $st = db()->prepare("SELECT created_by FROM `$table` WHERE id = ? LIMIT 1");
@@ -196,6 +214,12 @@ function handle_batch(string $method): void {
 // Returns a test to apply to each row. The members reporting to this viewer are
 // looked up once here rather than per row, because this runs on the batch read
 // that every client repeats every 15 seconds.
+// Req 2 (30-Oct): who may delete activity log entries. Mirrors
+// ACTIVITY_DELETE_ROLES in src/pages/ActivityLog.js.
+function activity_log_deleter(string $role): bool {
+  return in_array(normalize_role($role), ['super_admin', 'operation_manager', 'management', 'admin'], true);
+}
+
 function pr_visibility_filter(array $claims): callable {
   $role  = $claims['role'] ?? '';
   $email = strtolower(trim((string)($claims['email'] ?? '')));

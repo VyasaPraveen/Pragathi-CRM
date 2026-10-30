@@ -18,7 +18,7 @@ import QuotationPanel from '../components/QuotationPanel';
 import DispatchPanel from '../components/DispatchPanel';
 import BcoOperationsPanel from '../components/BcoOperationsPanel';
 import { canViewBco, bcoProgress } from '../services/bco';
-import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef, bomFromLeadPOs } from '../services/quotation';
+import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef } from '../services/quotation';
 import { getOptions, withCurrent } from '../services/options';
 import { sortBomItems } from '../services/bomOrder';
 import { buildLeadNotice, leadNotifyTargets, siteVisitPhotoIssue, sitePhotoList } from '../services/leadNotify';
@@ -861,19 +861,10 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         approvedBy: user?.email || 'unknown',
         approvalDate: new Date().toISOString()
       });
-      // The quotation carried a default BOM while it was still a proposal — now
-      // that the PO is approved, the actual PO/BOM details take its place.
-      if (myQuote && (po.items || []).length) {
-        // Every PO raised against this lead, so a second PO's materials are
-        // added to the quotation instead of replacing the first one's.
-        const actual = bomFromLeadPOs(myPOs.map(p => (p.id === po.id ? { ...p, items: po.items } : p)), lead.id);
-        if (actual.length) {
-          try {
-            await updateDocument('quotations', myQuote.id, { bomItems: actual, bomSource: 'po', poId: po.id });
-            toast(`Quotation BOM updated — ${actual.length} materials from the approved purchase order(s)`);
-          } catch { /* the quotation is not blocked by this */ }
-        }
-      }
+      // Req 2 (30-Oct): the quotation keeps the BOM it was quoted with. The
+      // PO's materials are the PO's; they no longer replace the quotation's
+      // rows here. (The quotation's own "Use actual BOM" button still copies
+      // them across on request.)
       // Tell the PO creator it's approved, and notify admins for visibility.
       if (po.createdBy) createNotification({ forUser: po.createdBy, title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       notifyAdmins(users, { title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
@@ -1593,7 +1584,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
                       <th style={{ width: 110 }}>Model / Rating</th>
                       <th style={{ width: 74 }}>Qty (Est.)</th>
                       <th style={{ width: 74 }}>Actuals</th>
-                      <th style={{ width: 84 }}>Rate</th>
+                      <th style={{ width: 120 }}>Rate</th>
                       <th style={{ width: 96 }}>Amount</th>
                       <th style={{ width: 62, textAlign: 'center' }}>Pragathi</th>
                       <th style={{ width: 66, textAlign: 'center' }}>Customer</th>

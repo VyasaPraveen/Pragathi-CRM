@@ -43,8 +43,8 @@ const sections = [
     { to: '/about', icon: 'info', label: 'About', perm: 'about' },
     { to: '/gallery', icon: 'photo_library', label: 'Gallery', perm: 'gallery' },
     { to: '/user-management', icon: 'admin_panel_settings', label: 'User Management', minRole: 'admin' },
-    { to: '/activity-log', icon: 'history', label: 'Activity Log', minRole: 'admin' },
-    { to: '/settings', icon: 'settings', label: 'Settings', minRole: 'coordinator' },
+    { to: '/activity-log', icon: 'history', label: 'Activity Log', minRole: 'operation_manager' },
+    { to: '/settings', icon: 'settings', label: 'Settings', perm: 'settings' },
   ]},
 ];
 

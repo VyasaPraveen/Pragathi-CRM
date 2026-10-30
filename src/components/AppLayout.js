@@ -164,7 +164,7 @@ export default function AppLayout() {
             <Route path="/reminders" element={<GuardedRoute perm="reminders"><Reminders /></GuardedRoute>} />
             <Route path="/about" element={<GuardedRoute perm="about"><About /></GuardedRoute>} />
             <Route path="/gallery" element={<GuardedRoute perm="gallery"><Gallery /></GuardedRoute>} />
-            <Route path="/settings" element={<GuardedRoute minRole="coordinator"><Settings /></GuardedRoute>} />
+            <Route path="/settings" element={<GuardedRoute perm="settings"><Settings /></GuardedRoute>} />
             <Route path="/purchase-orders" element={<GuardedRoute perm="purchase_orders"><PurchaseOrders /></GuardedRoute>} />
             <Route path="/assigned-materials" element={<GuardedRoute perm="assigned_materials"><AssignedMaterials /></GuardedRoute>} />
             <Route path="/retailers" element={<GuardedRoute perm="retailers"><Retailers /></GuardedRoute>} />
@@ -175,7 +175,7 @@ export default function AppLayout() {
             <Route path="/tracking" element={<GuardedRoute perm="tracking"><Tracking /></GuardedRoute>} />
             <Route path="/my-reports" element={<GuardedRoute perm="my_reports"><MyReports /></GuardedRoute>} />
             <Route path="/user-management" element={<GuardedRoute minRole="admin"><UserManagement /></GuardedRoute>} />
-            <Route path="/activity-log" element={<GuardedRoute minRole="admin"><ActivityLog /></GuardedRoute>} />
+            <Route path="/activity-log" element={<GuardedRoute minRole="operation_manager"><ActivityLog /></GuardedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
           </Suspense>

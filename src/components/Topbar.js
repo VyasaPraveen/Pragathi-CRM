@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useData } from '../context/DataContext';
-import { hasAccess, moduleRoute, isSameUser, formatDateTime } from '../services/helpers';
+import { hasModule } from '../services/permissions';
+import { moduleRoute, isSameUser, formatDateTime } from '../services/helpers';
 import { markNotificationsRead } from '../services/firestore';
 
 const titles = {
@@ -161,7 +162,7 @@ export default function Topbar({ onMenuClick }) {
           )}
         </div>
 
-        {hasAccess(role, 'coordinator') && (
+        {hasModule(user, role, 'settings') && (
           <button className="tbtn" onClick={() => navigate('/settings')} title="Settings">
             <span className="material-icons-round">settings</span>
           </button>

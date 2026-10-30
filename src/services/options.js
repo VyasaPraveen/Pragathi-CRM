@@ -83,7 +83,20 @@ export const OPTION_LISTS = [
     locked: [],
     note: 'Extra materials added here appear in the PO material picker alongside the standard list.',
   },
+  // Req 1 (30-Oct): the category on a material is a managed list; "Others"
+  // opens a box for a category that is not on it yet.
+  {
+    key: 'materialCategory',
+    label: 'Material Category',
+    where: 'Materials → Add Material → Category',
+    defaults: ['Complete Kit', 'Inverter', 'Solar Panels', 'DC Cable', 'AC Cable', 'MMS Structure', 'Earthing', 'Protection (ACDB / DCDB / SPD)', 'Accessories', 'Others'],
+    locked: ['Others'],
+    lockedNote: '"Others" opens the box for typing a category that is not on the list.',
+  },
 ];
+
+// The value on the Category dropdown that opens the free-text box.
+export const OTHER_CATEGORY = 'Others';
 
 export const optionListByKey = (key) => OPTION_LISTS.find(l => l.key === key) || null;
 

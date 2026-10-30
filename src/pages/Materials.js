@@ -6,6 +6,7 @@ import { addDocument, updateDocument, deleteDocument } from '../services/firesto
 import { toNumber, hasAccess, formatDate, formatDateTime, todayStr } from '../services/helpers';
 import { Modal, EmptyState, DateFilter, StatusBadge, SearchSelect, DateInput } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { getOptions, OTHER_CATEGORY } from '../services/options';
 import {
   STOCK_TYPES, STOCK_STATUS, STOCK_DATE_FIELDS, isStockOpen,
   canEnterStock, canReviewStock, canApproveStock, canCorrectStockDirectly, canRecordReturn,
@@ -15,7 +16,6 @@ import {
 import { submitStockReceipt, submitStockAdjustment, submitStockReturn, reviewStockEntry, approveStockEntry, newClientRef } from '../services/stockApi';
 
 const MATERIAL_DATE_FIELDS = ['lastStockChangeAt', 'updatedAt', 'createdAt'];
-const MATERIAL_CATEGORIES = ['Complete Kit', 'Inverter', 'Solar Panels', 'DC Cable', 'AC Cable', 'MMS Structure', 'Earthing', 'Protection (ACDB / DCDB / SPD)', 'Accessories', 'Other'];
 
 // ============================================================================
 // Materials & Inventory.
@@ -175,8 +175,20 @@ export default function Materials() {
 
 // ── Add / edit a material: the name, unit and category; the figures are the ledger's ──
 function MaterialModal({ data, id, owner, onSave, onClose }) {
+  const { settings } = useData();
   const [f, setF] = useState({ name: data.name || '', unit: data.unit || 'pcs', category: data.category || '', openingStock: '', installed: data.installed ?? 0 });
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  // Req 1 (30-Oct): the list is the Admin's (Settings → Manage Options). A
+  // category typed under "Others" is kept as the material's category, and an
+  // existing one that is no longer on the list still shows as what it is.
+  const categories = getOptions(settings, 'materialCategory');
+  const onList = (v) => categories.some(c => c.toLowerCase() === String(v || '').trim().toLowerCase());
+  const [other, setOther] = useState(() => !!data.category && !onList(data.category) && data.category !== 'Other');
+  const listed = other ? OTHER_CATEGORY : (f.category === 'Other' ? OTHER_CATEGORY : f.category);
+  const pickCategory = (v) => {
+    if (v === OTHER_CATEGORY) { setOther(true); set('category', ''); }
+    else { setOther(false); set('category', v); }
+  };
   return (
     <Modal title={id ? 'Edit Material' : 'Add Material'} onClose={onClose}>
       <form onSubmit={e => { e.preventDefault(); onSave(f, id); }}>
@@ -187,11 +199,14 @@ function MaterialModal({ data, id, owner, onSave, onClose }) {
           </div>
           <div className="fr">
             <div className="fg"><label>Category</label>
-              <select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>
+              <select className="fi" value={listed} onChange={e => pickCategory(e.target.value)}>
                 <option value="">— none —</option>
-                {MATERIAL_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                {categories.map(c => <option key={c} value={c}>{c}</option>)}
               </select>
             </div>
+            {other && <div className="fg"><label>Category name *</label>
+              <input className="fi" value={f.category} onChange={e => set('category', e.target.value)} required placeholder="e.g. Mounting Structure" autoFocus />
+            </div>}
             {!id && owner && <div className="fg"><label>Opening Stock (Owner)</label><input type="number" min="0" step="any" className="fi" value={f.openingStock} onChange={e => set('openingStock', e.target.value)} placeholder="0" /></div>}
             {id && owner && <div className="fg"><label>Installed (Owner)</label><input type="number" min="0" step="any" className="fi" value={f.installed} onChange={e => set('installed', e.target.value)} /></div>}
           </div>

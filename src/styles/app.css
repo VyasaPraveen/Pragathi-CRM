@@ -186,7 +186,7 @@ button,a,.ni,.fc,label{touch-action:manipulation}
 .page-loading .spin{width:26px;height:26px;border-width:3px;border-color:rgba(26,58,122,.15);border-top-color:var(--sec)}
 .pwa-banner{display:flex;align-items:center;gap:12px;padding:12px 14px;margin-bottom:14px;border-radius:var(--r);background:linear-gradient(135deg,#0e2558,#1a3a7a);color:#fff;box-shadow:var(--shs)}
 .pwa-banner strong{font-size:.9rem;display:block}.pwa-banner .pwa-sub{font-size:.78rem;opacity:.85}
-.pwa-banner .btn.bo{color:#fff;border-color:rgba(255,255,255,.4)}.pwa-banner .btn.bp{background:var(--sec)}
+.pwa-banner .btn.bo{color:#fff;border-color:rgba(255,255,255,.4);background:transparent}.pwa-banner .btn.bp{background:var(--sec)}
 .offline-bar{display:flex;align-items:center;gap:8px;padding:9px 14px;background:#fff3cd;color:#7a5a00;font-size:.82rem;border-bottom:1px solid #ffe08a}
 .sb-install{display:flex;align-items:center;gap:8px;width:100%;padding:9px 12px;margin-bottom:10px;border-radius:var(--rs);border:1px solid rgba(255,255,255,.25);background:rgba(255,255,255,.08);color:#fff;font-size:.82rem;font-weight:600;cursor:pointer}
 .sb-install:hover{background:rgba(255,255,255,.16)}

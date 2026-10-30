@@ -208,6 +208,8 @@ function default_module_allowed(?string $role, string $key): bool {
   // granted to an individual by an Admin. Mirrors defaultModuleAllowed() in
   // permissions.js.
   if ($key === 'installations_manage') return has_access($r, 'manager');
+  // Settings (Req 3, 30-Oct): coordinator level and up by default, as before.
+  if ($key === 'settings') return has_access($r, 'coordinator');
   if ($r === 'technician') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true);
   if ($r === 'team_leader') return in_array($key, TECHNICIAN_DEFAULT_MODULES, true) || in_array($key, TEAM_LEADER_EXTRA_MODULES, true);
   return true;

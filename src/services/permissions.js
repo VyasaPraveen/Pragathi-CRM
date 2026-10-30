@@ -524,6 +524,8 @@ export const PERMISSION_MODULES = [
 
   { key: 'gallery', label: 'Gallery', icon: 'photo_library', group: 'Company' },
   { key: 'about', label: 'About', icon: 'info', group: 'Company' },
+  // Req 3 (30-Oct): the Settings button (Account details for most people).
+  { key: 'settings', label: 'Settings', icon: 'settings', group: 'Company' },
 ];
 
 export const PERMISSION_GROUPS = PERMISSION_MODULES
@@ -555,6 +557,10 @@ export function defaultModuleAllowed(role, key) {
   // default; an Admin grants it to an individual (P. Ganesh) in Settings →
   // Permission Management. Mirrors default_module_allowed() in lib.php.
   if (key === 'installations_manage') return hasAccess(r, 'manager');
+  // Settings (Req 3, 30-Oct): on by default from the coordinator level, as the
+  // button always was; the Owner switches it for anyone in Permission
+  // Management. Mirrors default_module_allowed() in lib.php.
+  if (key === 'settings') return hasAccess(r, 'coordinator');
   if (r === 'technician') return TECHNICIAN_DEFAULT_MODULES.includes(key);
   if (r === 'team_leader') return TEAM_LEADER_DEFAULT_MODULES.includes(key);
   // The Team options only mean anything to someone who has members assigned.

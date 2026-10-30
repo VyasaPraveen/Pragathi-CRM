@@ -1,7 +1,14 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { apiPost } from '../services/api';
 import { hasAccess, formatDateTime } from '../services/helpers';
+import { normalizeRole } from '../services/permissions';
+
+// Req 2 (30-Oct): who may delete entries — mirrors activity_log_deleter() on the server.
+export const ACTIVITY_DELETE_ROLES = ['super_admin', 'operation_manager', 'management', 'admin'];
+export const canDeleteActivity = (role) => ACTIVITY_DELETE_ROLES.includes(normalizeRole(role));
 
 const moduleColors = {
   leads: '#6366f1', customers: '#22c55e', installations: '#f59e0b', team: '#3b82f6',
@@ -15,17 +22,45 @@ const actionIcons = { Created: 'add_circle', Updated: 'edit', Deleted: 'delete',
 export default function ActivityLog() {
   const { role } = useAuth();
   const { activityLog } = useData();
+  const { toast } = useToast();
   const [filterModule, setFilterModule] = useState('all');
+  const [selected, setSelected] = useState(() => new Set());
+  const [busy, setBusy] = useState(false);
+  const canDelete = canDeleteActivity(role);
+  const toggle = (id) => setSelected(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  // Only the selected entries go; everything else stays exactly as it is.
+  const purge = async (payload, label) => {
+    setBusy(true);
+    try {
+      const res = await apiPost('/collections/activityLog/purge', payload);
+      setSelected(new Set());
+      window.dispatchEvent(new Event('pps:refresh'));
+      toast(`${res.deleted || 0} ${label} deleted`);
+    } catch (e) { toast(e.message, 'er'); }
+    finally { setBusy(false); }
+  };
+  const deleteSelected = () => {
+    const ids = [...selected];
+    if (!ids.length) return;
+    if (!window.confirm(`Delete the ${ids.length} selected activity log entr${ids.length === 1 ? 'y' : 'ies'}? The rest of the log stays as it is.`)) return;
+    purge({ ids }, ids.length === 1 ? 'entry' : 'entries');
+  };
+  const deleteAll = () => {
+    if (!activityLog.length) return;
+    if (!window.confirm(`Delete ALL ${activityLog.length} activity log entries? This clears the whole log and cannot be undone. No other CRM records are touched.`)) return;
+    purge({ all: true }, 'entries');
+  };
   const [filterUser, setFilterUser] = useState('all');
   const [search, setSearch] = useState('');
 
-  if (!hasAccess(role, 'admin')) {
+  // Admins as before, plus the Operation Manager, who may now delete entries (Req 2, 30-Oct).
+  if (!hasAccess(role, 'admin') && !canDeleteActivity(role)) {
     return (
       <div className="card">
         <div className="cb" style={{ textAlign: 'center', padding: 40 }}>
           <span className="material-icons-round" style={{ fontSize: 48, color: 'var(--err)', marginBottom: 12, display: 'block' }}>lock</span>
           <h3>Access Denied</h3>
-          <p style={{ color: 'var(--muted)' }}>Only admins can view the activity log.</p>
+          <p style={{ color: 'var(--muted)' }}>Only admins and the Operation Manager can view the activity log.</p>
         </div>
       </div>
     );
@@ -62,7 +97,23 @@ export default function ActivityLog() {
     <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <h3 style={{ margin: 0 }}>Activity Log</h3>
-        <span style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{filtered.length} activities</span>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{filtered.length} activities</span>
+          {canDelete && (
+            <>
+              <button className="btn bsm bo" disabled={busy || !filtered.length} title="Select every entry shown"
+                onClick={() => setSelected(prev => (prev.size === Math.min(filtered.length, 100) ? new Set() : new Set(filtered.slice(0, 100).map(a => a.id).filter(Boolean))))}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>checklist</span> {selected.size && selected.size === Math.min(filtered.length, 100) ? 'Clear selection' : 'Select shown'}
+              </button>
+              <button className="btn bsm bo" disabled={busy || !selected.size} onClick={deleteSelected} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>delete</span> Delete selected{selected.size ? ` (${selected.size})` : ''}
+              </button>
+              <button className="btn bsm bo" disabled={busy || !activityLog.length} onClick={deleteAll} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>delete_sweep</span> Delete all
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Filters */}
@@ -91,7 +142,8 @@ export default function ActivityLog() {
             </div>
           ) : (
             filtered.slice(0, 100).map((a, i) => (
-              <div key={a.id || i} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: i < filtered.length - 1 ? '1px solid var(--bor)' : 'none' }}>
+              <div key={a.id || i} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: i < filtered.length - 1 ? '1px solid var(--bor)' : 'none', background: selected.has(a.id) ? 'rgba(231,76,60,.05)' : undefined }}>
+                {canDelete && a.id && <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggle(a.id)} aria-label="Select this entry" style={{ marginTop: 9, width: 16, height: 16, flexShrink: 0 }} />}
                 <div style={{ width: 32, height: 32, borderRadius: '50%', background: (moduleColors[a.module] || '#64748b') + '18', color: moduleColors[a.module] || '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>{actionIcons[a.action] || 'history'}</span>
                 </div>
