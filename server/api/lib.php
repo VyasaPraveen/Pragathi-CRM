@@ -107,6 +107,91 @@ function jwt_verify(string $token): ?array {
   return $claims;
 }
 
+// ── One device at a time (Req 4, 30-Oct) ────────────────────────────────────
+// A login registers the device's session on the account
+// (users.data.activeSession = {id, device, at, seen, ua}) and the token
+// carries its id. Every request checks the two still agree, so a token from
+// a device that has since been signed out — by a logout, by an Admin, or by
+// a take-over — stops working at once. A session counts as active while it
+// has been used within SESSION_IDLE_SECONDS; after that a new device may
+// sign in without anyone's help, so a lost or dead phone never locks a
+// person out for good.
+const SESSION_IDLE_SECONDS = 12 * 3600;
+const SESSION_TAKEOVER_ROLES = ['super_admin', 'admin', 'management'];
+const SESSION_BUSY_MESSAGE = 'This account is already active on another device. Please log out from the existing device or contact the administrator for assistance.';
+
+function session_is_active(?array $s, int $now): bool {
+  if (!$s || empty($s['id'])) return false;
+  $seen = strtotime((string)($s['seen'] ?? $s['at'] ?? '')) ?: 0;
+  return ($now - $seen) < SESSION_IDLE_SECONDS;
+}
+
+// May this device sign in? ok = yes; busy = another device holds the account
+// (canForce says whether this person may take it over); otherwise the reason.
+function session_login_decision(?array $s, string $device, bool $force, string $role, int $now): array {
+  if (!session_is_active($s, $now)) return ['ok' => true, 'reason' => 'none'];
+  if ($device !== '' && ($s['device'] ?? '') === $device) return ['ok' => true, 'reason' => 'same-device'];
+  $canForce = in_array($role, SESSION_TAKEOVER_ROLES, true);
+  if ($force && $canForce) return ['ok' => true, 'reason' => 'forced'];
+  return ['ok' => false, 'reason' => 'busy', 'canForce' => $canForce];
+}
+
+function session_new(string $device, string $ua): array {
+  $now = gmdate('Y-m-d\TH:i:s\Z');
+  return ['id' => bin2hex(random_bytes(16)), 'device' => substr($device, 0, 64), 'at' => $now, 'seen' => $now, 'ua' => substr($ua, 0, 120)];
+}
+
+// Why the last current_user() refused the token, for a clearer 401.
+function auth_refusal(): string { global $PPS_AUTH_REFUSAL; return (string)($PPS_AUTH_REFUSAL ?? ''); }
+
+// Does the token's session still belong to the account? Old tokens (issued
+// before sessions existed) carry no sid: they stay valid until the account
+// is signed in somewhere, at which point the new session is the only one.
+function session_check(array $claims): bool {
+  global $PPS_AUTH_REFUSAL;
+  static $cache = [];
+  $uid = (string)($claims['sub'] ?? '');
+  if ($uid === '') return true;
+  if (!array_key_exists($uid, $cache)) {
+    try {
+      $st = db()->prepare('SELECT data FROM users WHERE id = ? LIMIT 1');
+      $st->execute([$uid]);
+      $r = $st->fetch();
+      $d = ($r && $r['data']) ? json_decode($r['data'], true) : [];
+      $cache[$uid] = is_array($d) ? $d : [];
+    } catch (Throwable $e) { return true; }   // the database, not the session, is the problem
+  }
+  $d = $cache[$uid];
+  // An account on hold or deactivated is refused whatever the token says (Req 5).
+  $status = (string)($d['status'] ?? 'active');
+  if ($status === 'hold') { $PPS_AUTH_REFUSAL = 'hold'; return false; }
+  if ($status === 'deactivated') { $PPS_AUTH_REFUSAL = 'deactivated'; return false; }
+  $s = $d['activeSession'] ?? null;
+  $sid = (string)($claims['sid'] ?? '');
+  if ($sid === '') {
+    if ($s && !empty($s['id'])) { $PPS_AUTH_REFUSAL = 'replaced'; return false; }
+    return true;
+  }
+  if (!$s || (string)($s['id'] ?? '') !== $sid) { $PPS_AUTH_REFUSAL = 'replaced'; return false; }
+  // Note the activity, at most once every five minutes, so "active" means used.
+  $seen = strtotime((string)($s['seen'] ?? '')) ?: 0;
+  if (time() - $seen > 300) {
+    $d['activeSession']['seen'] = gmdate('Y-m-d\TH:i:s\Z');
+    $cache[$uid] = $d;
+    try { db()->prepare('UPDATE users SET data = ? WHERE id = ?')->execute([json_encode($d, JSON_UNESCAPED_UNICODE), $uid]); } catch (Throwable $e) { /* best effort */ }
+  }
+  return true;
+}
+
+function auth_refusal_message(): string {
+  switch (auth_refusal()) {
+    case 'replaced': return 'Signed out: this account was signed in on another device.';
+    case 'hold': return 'This account is on hold. Please contact the Owner.';
+    case 'deactivated': return 'This account has been deactivated.';
+    default: return 'Not authenticated';
+  }
+}
+
 // Return the authenticated user's claims, or null. Enforces via Authorization: Bearer.
 function current_user(): ?array {
   $hdr = $_SERVER['HTTP_AUTHORIZATION'] ?? ($_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ?? '');
@@ -115,12 +200,14 @@ function current_user(): ?array {
     $hdr = $h['Authorization'] ?? ($h['authorization'] ?? '');
   }
   if (stripos($hdr, 'Bearer ') !== 0) return null;
-  return jwt_verify(trim(substr($hdr, 7)));
+  $claims = jwt_verify(trim(substr($hdr, 7)));
+  if ($claims && !session_check($claims)) return null;
+  return $claims;
 }
 
 function require_auth(): array {
   $u = current_user();
-  if (!$u) fail(401, 'Not authenticated');
+  if (!$u) fail(401, auth_refusal_message());
   return $u;
 }
 

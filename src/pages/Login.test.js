@@ -63,7 +63,7 @@ test('a refused sign-in shows the message with the shake', async () => {
   set('input[type="email"]', 'x@y.com');
   set('input[type="password"]', 'secret');
   await act(async () => { host.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
-  expect(mockAuth.login).toHaveBeenCalledWith('x@y.com', 'secret');
+  expect(mockAuth.login).toHaveBeenCalledWith('x@y.com', 'secret', false);
   expect(host.querySelector('.aerr.lg-shake').textContent).toContain('Invalid email or password');
   unmount();
 });
@@ -80,5 +80,51 @@ test('typing in the email field keeps the focus (the field wrapper is stable)', 
   });
   expect(document.activeElement).toBe(host.querySelector('input[type="email"]'));
   expect(host.querySelector('input[type="email"]')).toBe(input);
+  unmount();
+});
+
+test('a second device is refused with the message; the Owner may take over (Req 4, 30-Oct)', async () => {
+  const busy = Object.assign(new Error('This account is already active on another device. Please log out from the existing device or contact the administrator for assistance.'), { status: 409, data: { code: 'device_active', canForce: true } });
+  mockAuth.login = jest.fn(() => Promise.reject(busy));
+  const { host, unmount } = mount(<Login />);
+  const set = (sel, value) => act(() => {
+    const el = host.querySelector(sel);
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  set('input[type="email"]', 'o@y.com');
+  set('input[type="password"]', 'secret');
+  await act(async () => { host.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+  expect(host.querySelector('.aerr').textContent).toContain('already active on another device');
+  const force = [...host.querySelectorAll('button')].find(b => /Sign out the other device/.test(b.textContent));
+  expect(force).toBeTruthy();
+  expect(mockAuth.login).toHaveBeenLastCalledWith('o@y.com', 'secret', false);
+  await act(async () => { force.click(); });
+  expect(mockAuth.login).toHaveBeenLastCalledWith('o@y.com', 'secret', true);
+  unmount();
+});
+
+test('an ordinary user gets the message and no take-over button', async () => {
+  const busy = Object.assign(new Error('This account is already active on another device. Please log out from the existing device or contact the administrator for assistance.'), { status: 409, data: { code: 'device_active', canForce: false } });
+  mockAuth.login = jest.fn(() => Promise.reject(busy));
+  const { host, unmount } = mount(<Login />);
+  const set = (sel, value) => act(() => {
+    const el = host.querySelector(sel);
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(el, value);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  set('input[type="email"]', 'e@y.com');
+  set('input[type="password"]', 'secret');
+  await act(async () => { host.querySelector('form').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true })); });
+  expect(host.querySelector('.aerr').textContent).toContain('contact the administrator');
+  expect([...host.querySelectorAll('button')].some(b => /Sign out the other device/.test(b.textContent))).toBe(false);
+  unmount();
+});
+
+test('the sign-in screen explains a sign-out caused by another device', () => {
+  sessionStorage.setItem('pps:signout-reason', 'Signed out: this account was signed in on another device.');
+  const { host, unmount } = mount(<Login />);
+  expect(host.querySelector('.aerr').textContent).toContain('signed in on another device');
+  expect(sessionStorage.getItem('pps:signout-reason')).toBeNull();
   unmount();
 });

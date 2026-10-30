@@ -10,6 +10,12 @@ function public_user(array $row): array {
   // Shape sent to the client — never include password_hash.
   $extra = $row['data'] ? json_decode($row['data'], true) : [];
   if (!is_array($extra)) $extra = [];
+  // The session id never leaves the server; when it was last used may.
+  $session = $extra['activeSession'] ?? null;
+  unset($extra['activeSession']);
+  if (is_array($session) && !empty($session['id'])) {
+    $extra['session'] = ['at' => $session['at'] ?? null, 'seen' => $session['seen'] ?? null, 'ua' => $session['ua'] ?? '', 'active' => session_is_active($session, time())];
+  }
   return array_merge($extra, [
     'id'          => $row['id'],
     'uid'         => $row['id'],
@@ -51,9 +57,32 @@ function handle_auth(array $seg, string $method): void {
       $token = jwt_issue(['sub' => $u['id'], 'email' => $u['email'], 'role' => $u['role']]);
       json_out(['token' => $token, 'user' => public_user($u)]);
     }
-    db()->prepare('UPDATE users SET last_login = UTC_TIMESTAMP() WHERE id = ?')->execute([$u['id']]);
-    $token = jwt_issue(['sub' => $u['id'], 'email' => $u['email'], 'role' => $u['role'], 'name' => $u['display_name'], 'approved' => (int)$u['approved']]);
+    $d = $u['data'] ? json_decode($u['data'], true) : [];
+    if (!is_array($d)) $d = [];
+    // Hold / deactivated (Req 5): no sign-in at all.
+    $status = (string)($d['status'] ?? 'active');
+    if ($status === 'hold') fail(403, 'This account is on hold. Please contact the Owner.');
+    if ($status === 'deactivated') fail(403, 'This account has been deactivated. Please contact the Owner.');
+    // One device at a time (Req 4).
+    $device = substr(trim((string)($b['device'] ?? '')), 0, 64);
+    $decision = session_login_decision($d['activeSession'] ?? null, $device, !empty($b['force']), (string)$u['role'], time());
+    if (!$decision['ok']) {
+      json_out(['error' => SESSION_BUSY_MESSAGE, 'code' => 'device_active', 'canForce' => !empty($decision['canForce'])], 409);
+    }
+    $session = session_new($device, (string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    $d['activeSession'] = $session;
+    db()->prepare('UPDATE users SET last_login = UTC_TIMESTAMP(), data = ? WHERE id = ?')->execute([json_encode($d, JSON_UNESCAPED_UNICODE), $u['id']]);
+    if ($decision['reason'] === 'forced') audit_user_event($u, 'Signed out another device', $u['email'] . ' took the account over on a new device', $u);
+    $u['data'] = json_encode($d, JSON_UNESCAPED_UNICODE);
+    $token = jwt_issue(['sub' => $u['id'], 'email' => $u['email'], 'role' => $u['role'], 'name' => $u['display_name'], 'approved' => (int)$u['approved'], 'sid' => $session['id']]);
     json_out(['token' => $token, 'user' => public_user($u)]);
+  }
+
+  // ── LOGOUT: release this device's session so another may sign in ──
+  if ($action === 'logout' && $method === 'POST') {
+    $claims = current_user();
+    if ($claims && !empty($claims['sub'])) release_session((string)$claims['sub'], (string)($claims['sid'] ?? ''));
+    json_out(['ok' => true]);
   }
 
   // ── SIGNUP ──
@@ -201,6 +230,15 @@ function handle_auth(array $seg, string $method): void {
       json_out(['ok' => true]);
     }
 
+    // An Admin releases the device a person can no longer reach (Req 4).
+    if ($method === 'POST' && ($seg[3] ?? '') === 'release-session') {
+      $rowq = db()->prepare('SELECT * FROM users WHERE id = ? LIMIT 1'); $rowq->execute([$uid]); $target = $rowq->fetch();
+      if (!$target) fail(404, 'User not found');
+      release_session($uid, '');
+      audit_user_event($claims, 'Released device session', 'so the account can sign in on another device', $target);
+      json_out(['ok' => true]);
+    }
+
     if ($method === 'DELETE') {
       db()->prepare('DELETE FROM users WHERE id = ?')->execute([$uid]);
       json_out(['ok' => true]);
@@ -208,6 +246,35 @@ function handle_auth(array $seg, string $method): void {
   }
 
   fail(404, 'Unknown auth route');
+}
+
+// Clear the active session on an account. With a session id, only that
+// session is cleared (a stale logout from an old device never signs out the
+// new one); with '' the account is released whatever device holds it.
+function release_session(string $uid, string $sid): void {
+  $q = db()->prepare('SELECT data FROM users WHERE id = ? LIMIT 1'); $q->execute([$uid]); $r = $q->fetch();
+  if (!$r) return;
+  $d = $r['data'] ? json_decode($r['data'], true) : [];
+  if (!is_array($d)) $d = [];
+  $cur = $d['activeSession'] ?? null;
+  if (!$cur) return;
+  if ($sid !== '' && (string)($cur['id'] ?? '') !== $sid) return;
+  unset($d['activeSession']);
+  db()->prepare('UPDATE users SET data = ? WHERE id = ?')->execute([json_encode($d, JSON_UNESCAPED_UNICODE), $uid]);
+}
+
+// The audit trail of what was done to an account, in the Activity Log
+// (module "users"), by whom and when. Never a password or a token.
+function audit_user_event(array $actor, string $action, string $details, ?array $target = null, array $extra = []): void {
+  try {
+    $who = (string)($actor['name'] ?? $actor['display_name'] ?? $actor['email'] ?? 'System');
+    $t = $target ? ((string)($target['display_name'] ?? '') ?: (string)($target['email'] ?? '')) : '';
+    $note = ['user' => $who, 'userEmail' => (string)($actor['email'] ?? ''), 'action' => $action, 'module' => 'users',
+             'details' => trim(($t ? $t . ' — ' : '') . $details), 'timestamp' => gmdate('Y-m-d\TH:i:s\Z')] + $extra;
+    if ($target && !empty($target['id'])) $note['targetId'] = (string)$target['id'];
+    db()->prepare('INSERT INTO activity_log (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)')
+      ->execute([gen_id(), json_encode($note, JSON_UNESCAPED_UNICODE), (string)($actor['email'] ?? '')]);
+  } catch (Throwable $e) { error_log('audit: ' . $e->getMessage()); }
 }
 
 // Designation → role (mirror of helpers.js getRoleFromDesignation)

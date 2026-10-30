@@ -7,6 +7,20 @@
 
 const BASE = process.env.REACT_APP_API_BASE || '/api';
 const TOKEN_KEY = 'pps_crm_token';
+const DEVICE_KEY = 'pps_crm_device';
+
+// This browser / installed app, as a random id kept for good, so the server
+// can tell "the same phone signing in again" from "a second phone" (Req 4).
+export function deviceId() {
+  try {
+    let d = localStorage.getItem(DEVICE_KEY);
+    if (!d) {
+      d = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID().replace(/-/g, '') : Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem(DEVICE_KEY, d);
+    }
+    return d;
+  } catch { return ''; }
+}
 
 export function getToken() {
   try { return localStorage.getItem(TOKEN_KEY) || ''; } catch { return ''; }
@@ -54,6 +68,7 @@ async function request(path, { method = 'GET', body, auth = true, isForm = false
     const msg = (data && data.error) ? data.error : `Request failed (${res.status})`;
     const err = new Error(msg);
     err.status = res.status;
+    err.data = data || null;
     throw err;
   }
   return data;

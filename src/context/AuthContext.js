@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
-import { apiGet, apiPost, getToken, setToken, setMe, setUnauthorizedHandler } from '../services/api';
+import { apiGet, apiPost, getToken, setToken, setMe, setUnauthorizedHandler, deviceId } from '../services/api';
 import { unregisterPush } from '../services/push';
 
 const AuthContext = createContext();
@@ -44,7 +44,12 @@ export function AuthProvider({ children }) {
         await apiGet('/auth/me', { skipAuthHandler: true });
         // Still valid → the 401 was transient; keep the user where they are.
       } catch (e) {
-        if (e && e.status === 401) clear();   // session genuinely invalid
+        if (e && e.status === 401) {          // session genuinely invalid
+          // Say why on the sign-in screen when the account was taken over
+          // or put on hold (Req 4 / Req 5).
+          try { if (/another device|on hold|deactivated/i.test(e.message || '')) sessionStorage.setItem('pps:signout-reason', e.message); } catch { /* ignore */ }
+          clear();
+        }
       } finally {
         verifyingRef.current = false;
       }
@@ -63,8 +68,10 @@ export function AuthProvider({ children }) {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const login = async (email, password) => {
-    const res = await apiPost('/auth/login', { email, password }, { auth: false });
+  // `force` = sign the other device out and take the account over; offered
+  // only when the server says this person may (the Owner, an Admin).
+  const login = async (email, password, force = false) => {
+    const res = await apiPost('/auth/login', { email, password, device: deviceId(), force: !!force }, { auth: false });
     setToken(res.token);
     applyUser(res.user);
     return res.user;
@@ -79,7 +86,8 @@ export function AuthProvider({ children }) {
     return { approved: !!res.approved };
   };
 
-  const logout = () => { unregisterPush(); clear(); };
+  // The session is released on the server first, so another device may sign in straight away.
+  const logout = () => { unregisterPush(); apiPost('/auth/logout', {}, { skipAuthHandler: true }).catch(() => {}); clear(); };
 
   // Self-service reset routes a request to the admins (no mail server in play).
   const resetPassword = async (email) => {

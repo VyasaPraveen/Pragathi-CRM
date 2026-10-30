@@ -98,20 +98,32 @@ export default function Login() {
     if (typeof e.getModifierState === 'function') setCapsLock(e.getModifierState('CapsLock'));
   };
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+  // Another device holds this account (Req 4). The Owner / an Admin may
+  // sign that device out and carry on; everyone else is told what to do.
+  const [deviceBusy, setDeviceBusy] = useState(null);
+  const handleLogin = async (e, force = false) => {
+    if (e && e.preventDefault) e.preventDefault();
     setError('');
     setSuccess('');
+    setDeviceBusy(null);
     setLoading(true);
     try {
-      await login(email, password);
+      await login(email, password, force);
     } catch (err) {
       if (mounted.current) {
         setError(authErrorMessage(err));
+        if (err && err.data && err.data.code === 'device_active') setDeviceBusy({ canForce: !!err.data.canForce });
         setLoading(false);
       }
     }
   };
+  // Why the last session ended, when the app signed the person out itself.
+  useEffect(() => {
+    try {
+      const why = sessionStorage.getItem('pps:signout-reason');
+      if (why) { sessionStorage.removeItem('pps:signout-reason'); setError(why); }
+    } catch { /* ignore */ }
+  }, []);
 
   const handleSignup = async (e) => {
     e.preventDefault();
@@ -227,6 +239,11 @@ export default function Login() {
           <h2 className="lg-head">{heading}</h2>
           <p className="lg-subhead">{subheading}</p>
 
+          {deviceBusy && deviceBusy.canForce && (
+            <button type="button" className="btn bo" style={{ width: '100%', marginBottom: 10 }} disabled={loading} onClick={() => handleLogin(null, true)}>
+              <span className="material-icons-round" style={{ fontSize: 18 }}>phonelink_erase</span> Sign out the other device and continue
+            </button>
+          )}
           {error && (
             <div className="aerr show lg-shake" role="alert" key={error}>
               <span className="material-icons-round" style={{ fontSize: 18 }}>error</span>

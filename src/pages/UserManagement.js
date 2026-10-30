@@ -75,6 +75,16 @@ export default function UserManagement() {
     } catch (err) { toast('Failed to revoke: ' + err.message, 'er'); }
   };
 
+  // Req 4: the person lost the phone the account is signed in on.
+  const handleRelease = async (uid) => {
+    if (!window.confirm('Sign this account out of its current device so it can sign in on another one?')) return;
+    try {
+      await apiPost('/auth/users/' + uid + '/release-session', {});
+      await fetchUsers();
+      toast('Device released — the account can sign in again');
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+  };
+
   const handleDelete = async (uid) => {
     if (!window.confirm('Permanently delete this user account? This action cannot be undone.')) return;
     try {
@@ -376,7 +386,7 @@ export default function UserManagement() {
       {/* User Detail Modal */}
       {detailModal && (
         <Modal title="User Details" onClose={() => setDetailModal(null)}>
-          <UserDetailView user={detailModal} onEdit={() => { setEditModal(detailModal); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} onRevoke={() => handleRevoke(detailModal.id)} onApprove={() => { handleApprove(detailModal.id); setDetailModal(null); }} onPassword={() => { setPwdModal(detailModal); setDetailModal(null); }} isSelf={detailModal.id === currentUser?.uid} />
+          <UserDetailView user={detailModal} onRelease={() => handleRelease(detailModal.id)} onEdit={() => { setEditModal(detailModal); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} onRevoke={() => handleRevoke(detailModal.id)} onApprove={() => { handleApprove(detailModal.id); setDetailModal(null); }} onPassword={() => { setPwdModal(detailModal); setDetailModal(null); }} isSelf={detailModal.id === currentUser?.uid} />
         </Modal>
       )}
 
@@ -499,7 +509,7 @@ function EditUserModal({ user, onSave, onClose }) {
 }
 
 /* ── User Detail View ── */
-function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, onPassword, isSelf }) {
+function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, onPassword, onRelease, isSelf }) {
   const detailRow = (icon, label, value) => (
     <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '8px 0', borderBottom: '1px solid var(--bor)' }}>
       <span className="material-icons-round" style={{ fontSize: 18, color: 'var(--muted)', marginTop: 1 }}>{icon}</span>
@@ -536,6 +546,7 @@ function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, onPasswor
         {detailRow('location_on', 'Address', user.address)}
         {detailRow('calendar_today', 'Joined', user.createdAt ? new Date(user.createdAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : '-')}
         {detailRow('schedule', 'Last Login', user.lastLogin ? formatDateTime(user.lastLogin) : '-')}
+        {detailRow('devices', 'Signed-in device', user.session ? `${user.session.active ? 'Active' : 'Idle'} — last used ${user.session.seen ? formatDateTime(user.session.seen) : '-'}` : 'Not signed in')}
         {detailRow('key', 'Password', PASSWORD_NOTE)}
         {user.notes && detailRow('notes', 'Admin Notes', user.notes)}
       </div>
@@ -549,6 +560,11 @@ function UserDetailView({ user, onEdit, onDelete, onRevoke, onApprove, onPasswor
           <button className="btn" onClick={onPassword} style={{ padding: '6px 16px', fontSize: '.84rem', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.4)' }}>
             <span className="material-icons-round" style={{ fontSize: 16 }}>key</span> Set Password
           </button>
+          {user.session && onRelease && (
+            <button className="btn" onClick={onRelease} title="Sign the account out of its current device so it can sign in on another" style={{ padding: '6px 16px', fontSize: '.84rem', color: '#0e7490', borderColor: 'rgba(14,116,144,.4)' }}>
+              <span className="material-icons-round" style={{ fontSize: 16 }}>phonelink_erase</span> Release device
+            </button>
+          )}
           {!user.approved && (
             <button className="btn" onClick={onApprove} style={{ padding: '6px 16px', fontSize: '.84rem', color: '#27ae60', borderColor: '#27ae60' }}>
               <span className="material-icons-round" style={{ fontSize: 16 }}>check_circle</span> Approve
