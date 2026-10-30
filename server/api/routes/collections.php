@@ -1010,6 +1010,14 @@ function maybe_send_push(array $note): void {
     require_once __DIR__ . '/../lib/fcm.php';
     $target = (string)($note['forUser'] ?? '');
     if ($target === '') return;
+    // An account on hold or deactivated gets nothing (Req 5.8).
+    $st = db()->prepare('SELECT data FROM users WHERE display_name = ? OR email = ? LIMIT 1');
+    $st->execute([$target, strtolower($target)]);
+    $ur = $st->fetch();
+    if ($ur && $ur['data']) {
+      $ud = json_decode($ur['data'], true);
+      if (is_array($ud) && in_array((string)($ud['status'] ?? 'active'), ['hold', 'deactivated'], true)) return;
+    }
     $tokens = fcm_tokens_for([$target]);
     if (!$tokens) return;
     fcm_send($tokens, (string)($note['title'] ?? 'Pragathi Power CRM'), (string)($note['message'] ?? ''), [

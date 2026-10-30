@@ -125,6 +125,16 @@ export default function Settings() {
     }).catch((err) => { console.error('Failed to load users:', err.message); setLoading(false); });
   }, [isAdmin]);
 
+  // Opened from Total Users for one person (Req 5.6, 30-Oct): ?user=<id>.
+  useEffect(() => {
+    if (!users.length || selectedUser) return;
+    try {
+      const wanted = new URLSearchParams(window.location.search).get('user');
+      const hit = wanted && users.find(u => u.id === wanted);
+      if (hit) selectUser(hit);
+    } catch { /* ignore */ }
+  }, [users]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // When a user is selected, load their permissions
   const selectUser = (u) => {
     setSelectedUser(u);

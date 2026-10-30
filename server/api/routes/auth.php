@@ -132,6 +132,14 @@ function handle_auth(array $seg, string $method): void {
     $new = (string)($b['newPassword'] ?? '');
     if (strlen($new) < 6) fail(400, 'Password must be at least 6 characters');
     db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([password_hash($new, PASSWORD_DEFAULT), $claims['sub']]);
+    // A temporary password handed out by an Admin has now been replaced.
+    $rowq = db()->prepare('SELECT data FROM users WHERE id = ?'); $rowq->execute([$claims['sub']]); $r = $rowq->fetch();
+    $cur = ($r && $r['data']) ? json_decode($r['data'], true) : [];
+    if (is_array($cur) && !empty($cur['mustChangePassword'])) {
+      unset($cur['mustChangePassword']);
+      db()->prepare('UPDATE users SET data = ? WHERE id = ?')->execute([json_encode($cur, JSON_UNESCAPED_UNICODE), $claims['sub']]);
+    }
+    audit_user_event($claims, 'Password changed', 'by the account holder', ['id' => $claims['sub'], 'email' => $claims['email'] ?? '', 'display_name' => $claims['name'] ?? '']);
     json_out(['ok' => true]);
   }
 
@@ -163,14 +171,19 @@ function handle_auth(array $seg, string $method): void {
     // `teamLeader` travels with the directory so a Team Leader's own screen can
     // show the members assigned to them. No phone, permissions or profile data.
     $rows = db()->query('SELECT id, email, display_name, role, designation, approved, data FROM users WHERE approved = 1')->fetchAll();
-    $out = array_map(function ($r) {
+    $out = [];
+    foreach ($rows as $r) {
       $d = $r['data'] ? json_decode($r['data'], true) : [];
-      return [
+      if (!is_array($d)) $d = [];
+      $status = (string)($d['status'] ?? 'active');
+      if ($status === 'deactivated') continue;   // gone from every picker; their records keep their names
+      $out[] = [
         'id' => $r['id'], 'email' => $r['email'], 'displayName' => $r['display_name'],
         'role' => $r['role'], 'designation' => $r['designation'], 'approved' => (bool)$r['approved'],
-        'teamLeader' => is_array($d) && !empty($d['teamLeader']) ? $d['teamLeader'] : '',
+        'teamLeader' => !empty($d['teamLeader']) ? $d['teamLeader'] : '',
+        'status' => $status, 'teamName' => (string)($d['teamName'] ?? ''),
       ];
-    }, $rows);
+    }
     json_out(['users' => $out]);
   }
 
@@ -193,41 +206,143 @@ function handle_auth(array $seg, string $method): void {
       if ($email === '') fail(400, 'Email required');
       if (strlen($pass) < 6) fail(400, 'Password must be at least 6 characters');
       if (find_user_by_email($email)) fail(409, 'An account with this email already exists');
+      if (!filter_var($email, FILTER_VALIDATE_EMAIL)) fail(400, 'Enter a valid email address');
       $desig = trim($b['designation'] ?? 'Executive');
+      $role = role_from_designation($desig);
+      if ($role === 'super_admin' && (string)($claims['role'] ?? '') !== 'super_admin') fail(403, 'Only the Owner can create an Owner account.');
       $phone = substr(preg_replace('/\D/', '', (string)($b['phone'] ?? '')), -10);
+      $name = trim($b['displayName'] ?? '');
+      $data = [];
+      if (!empty($b['teamLeader'])) {
+        $tl = strtolower(trim((string)$b['teamLeader']));
+        if ($tl === $email) fail(400, 'A person cannot report to themselves');
+        if (!find_user_by_email($tl)) fail(404, 'That Team Leader has no account');
+        $data['teamLeader'] = $tl;
+      }
+      if (!empty($b['mustChangePassword'])) $data['mustChangePassword'] = true;
       $id = gen_id();
       db()->prepare('INSERT INTO users (id,email,password_hash,display_name,phone,role,designation,approved,data,created_at) VALUES (?,?,?,?,?,?,?,?,?,UTC_TIMESTAMP())')
-        ->execute([$id, $email, password_hash($pass, PASSWORD_DEFAULT), trim($b['displayName'] ?? ''), $phone, role_from_designation($desig), $desig, array_key_exists('approved', $b) ? ($b['approved'] ? 1 : 0) : 1, json_encode(new stdClass())]);
+        ->execute([$id, $email, password_hash($pass, PASSWORD_DEFAULT), $name, $phone, $role, $desig, array_key_exists('approved', $b) ? ($b['approved'] ? 1 : 0) : 1, json_encode($data ?: new stdClass(), JSON_UNESCAPED_UNICODE)]);
+      // The person appears in the Team section too (Req 5.9), once — never a
+      // second record for an email the directory already has.
+      if (!empty($b['addTeamRecord'])) {
+        $have = false;
+        foreach (db()->query('SELECT data FROM team')->fetchAll() as $tr) {
+          $td = $tr['data'] ? json_decode($tr['data'], true) : [];
+          if (is_array($td) && strcasecmp(trim((string)($td['email'] ?? '')), $email) === 0) { $have = true; break; }
+        }
+        if (!$have) {
+          $trow = ['name' => $name, 'email' => $email, 'phone' => $phone, 'role' => $desig, 'status' => 'Active', 'joiningDate' => gmdate('Y-m-d'), 'attendance' => 0];
+          db()->prepare('INSERT INTO team (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)')->execute([gen_id(), json_encode($trow, JSON_UNESCAPED_UNICODE), (string)($claims['email'] ?? '')]);
+        }
+      }
+      audit_user_event($claims, 'User created', $desig . (!empty($data['teamLeader']) ? ' under ' . $data['teamLeader'] : '') . (!empty($data['mustChangePassword']) ? '; temporary password' : ''), ['id' => $id, 'email' => $email, 'display_name' => $name]);
       json_out(['ok' => true, 'id' => $id], 201);
     }
 
     if ($uid === '') fail(404, 'User id required');
 
     if ($method === 'PATCH' || $method === 'PUT') {
+      require_once __DIR__ . '/users.php';
       $b = body();
-      $fields = []; $vals = [];
-      if (array_key_exists('approved', $b))    { $fields[] = 'approved = ?';    $vals[] = $b['approved'] ? 1 : 0; }
-      if (array_key_exists('designation', $b)) { $fields[] = 'designation = ?'; $vals[] = trim($b['designation']); $fields[] = 'role = ?'; $vals[] = role_from_designation(trim($b['designation'])); }
-      if (array_key_exists('displayName', $b)) { $fields[] = 'display_name = ?'; $vals[] = trim($b['displayName']); }
-      if (array_key_exists('phone', $b))       { $fields[] = 'phone = ?';       $vals[] = substr(preg_replace('/\D/', '', (string)$b['phone']), -10); }
-      if (array_key_exists('permissions', $b)) { $fields[] = 'permissions = ?'; $vals[] = json_encode($b['permissions']); }
-      if (array_key_exists('password', $b) && strlen((string)$b['password']) >= 6) { $fields[] = 'password_hash = ?'; $vals[] = password_hash((string)$b['password'], PASSWORD_DEFAULT); }
+      $target = user_row($uid);
+      if (!$target) fail(404, 'User not found');
+      // An Admin never changes an Owner account; nobody changes their own role.
+      if ((string)$target['role'] === 'super_admin' && (string)($claims['role'] ?? '') !== 'super_admin') fail(403, 'Only the Owner can change an Owner account.');
+      $fields = []; $vals = []; $audit = []; $after = [];
+      if (array_key_exists('approved', $b)) {
+        $want = $b['approved'] ? 1 : 0;
+        if ($want !== (int)$target['approved']) {
+          if (!$want) guard_owner($claims, $target, 'deactivate');
+          $fields[] = 'approved = ?'; $vals[] = $want; $audit[] = $want ? 'access approved' : 'access revoked';
+        }
+      }
+      if (array_key_exists('designation', $b)) {
+        $desig = trim((string)$b['designation']); $role = role_from_designation($desig);
+        if ($desig !== (string)$target['designation'] || $role !== (string)$target['role']) {
+          if ($role === 'super_admin' && (string)($claims['role'] ?? '') !== 'super_admin') fail(403, 'Only the Owner can make someone an Owner.');
+          guard_owner($claims, $target, (string)$target['role'] === 'super_admin' && $role !== 'super_admin' ? 'demote' : 'role');
+          $fields[] = 'designation = ?'; $vals[] = $desig; $fields[] = 'role = ?'; $vals[] = $role;
+          $audit[] = 'role: ' . ($target['designation'] ?: $target['role']) . ' → ' . $desig;
+        }
+      }
+      if (array_key_exists('displayName', $b)) {
+        $name = trim((string)$b['displayName']);
+        if ($name !== (string)$target['display_name']) {
+          $fields[] = 'display_name = ?'; $vals[] = $name;
+          $audit[] = 'name: ' . $target['display_name'] . ' → ' . $name;
+          $after[] = fn() => cascade_name((string)$target['display_name'], $name);
+        }
+      }
+      if (array_key_exists('email', $b)) {
+        $newEmail = strtolower(trim((string)$b['email']));
+        if ($newEmail !== strtolower((string)$target['email'])) {
+          if (!filter_var($newEmail, FILTER_VALIDATE_EMAIL)) fail(400, 'Enter a valid email address');
+          if (find_user_by_email($newEmail)) fail(409, 'An account with this email already exists');
+          $fields[] = 'email = ?'; $vals[] = $newEmail;
+          $audit[] = 'email: ' . $target['email'] . ' → ' . $newEmail;
+          $after[] = fn() => cascade_email((string)$target['email'], $newEmail);
+          // The signed-in device carries the old address in its token.
+          $after[] = function () use ($uid) { release_session($uid, ''); return 0; };
+        }
+      }
+      if (array_key_exists('phone', $b)) {
+        $phone = substr(preg_replace('/\D/', '', (string)$b['phone']), -10);
+        if ($phone !== (string)$target['phone']) { $fields[] = 'phone = ?'; $vals[] = $phone; $audit[] = 'phone: ' . ($target['phone'] ?: '-') . ' → ' . ($phone ?: '-'); }
+      }
+      if (array_key_exists('permissions', $b)) {
+        $fields[] = 'permissions = ?'; $vals[] = json_encode($b['permissions']);
+        $old = $target['permissions'] ? json_decode($target['permissions'], true) : [];
+        $new = is_array($b['permissions']) ? $b['permissions'] : [];
+        $diff = [];
+        foreach (array_unique(array_merge(array_keys(is_array($old) ? $old : []), array_keys($new))) as $k) {
+          if (($old[$k] ?? null) !== ($new[$k] ?? null)) $diff[] = $k . '=' . (($new[$k] ?? null) === null ? 'default' : ($new[$k] ? 'on' : 'off'));
+        }
+        $audit[] = 'permissions: ' . ($diff ? implode(', ', $diff) : 'unchanged');
+      }
+      if (array_key_exists('password', $b) && strlen((string)$b['password']) >= 6) {
+        $fields[] = 'password_hash = ?'; $vals[] = password_hash((string)$b['password'], PASSWORD_DEFAULT);
+        $audit[] = 'password reset' . (!empty($b['mustChangePassword']) ? ' (temporary — must be changed at next sign-in)' : '');
+        $after[] = function () use ($uid) { release_session($uid, ''); return 0; };
+      }
       // Extra profile fields live in the data JSON column (merged, not replaced).
       $extra = [];
       foreach (['address', 'department', 'notes'] as $k) { if (array_key_exists($k, $b)) $extra[$k] = $b[$k]; }
+      if ($extra) $audit[] = 'details: ' . implode(', ', array_keys($extra));
       // teamLeader is an email used as a key, so it is normalised; the free-text
       // fields above keep whatever casing the user typed.
-      if (array_key_exists('teamLeader', $b)) $extra['teamLeader'] = strtolower(trim((string)$b['teamLeader']));
-      if ($extra) {
-        $rowq = db()->prepare('SELECT data FROM users WHERE id = ?'); $rowq->execute([$uid]); $r = $rowq->fetch();
-        $cur = ($r && $r['data']) ? json_decode($r['data'], true) : [];
-        if (!is_array($cur)) $cur = [];
-        $fields[] = 'data = ?'; $vals[] = json_encode(array_merge($cur, $extra), JSON_UNESCAPED_UNICODE);
+      if (array_key_exists('teamLeader', $b)) {
+        $tl = strtolower(trim((string)$b['teamLeader']));
+        if ($tl !== '' && $tl === strtolower((string)$target['email'])) fail(400, 'A person cannot report to themselves');
+        $extra['teamLeader'] = $tl;
+        $was = strtolower(trim((string)(user_data($target)['teamLeader'] ?? '')));
+        if ($was !== $tl) $audit[] = 'team: ' . ($was ?: 'none') . ' → ' . ($tl ?: 'none');
       }
-      if (!$fields) fail(400, 'No changes');
-      $vals[] = $uid;
-      db()->prepare('UPDATE users SET ' . implode(', ', $fields) . ' WHERE id = ?')->execute($vals);
-      json_out(['ok' => true]);
+      if (array_key_exists('teamName', $b)) { $extra['teamName'] = trim((string)$b['teamName']); $audit[] = 'team name: ' . $extra['teamName']; }
+      if (array_key_exists('password', $b) && strlen((string)$b['password']) >= 6) {
+        if (!empty($b['mustChangePassword'])) $extra['mustChangePassword'] = true; else $extra['mustChangePassword'] = null;
+      }
+      if ($extra) {
+        $cur = user_data($target);
+        $merged = array_merge($cur, $extra);
+        foreach ($merged as $k => $v) { if ($v === null) unset($merged[$k]); }
+        $fields[] = 'data = ?'; $vals[] = json_encode($merged, JSON_UNESCAPED_UNICODE);
+      }
+      // Standing (hold / deactivated / active) goes through its own path so the
+      // guards and the sign-out apply.
+      if (array_key_exists('status', $b)) {
+        set_user_status($claims, $target, (string)$b['status'], (string)($b['statusNote'] ?? ''));
+        $target = user_row($uid);
+      }
+      if (!$fields && !array_key_exists('status', $b)) fail(400, 'No changes');
+      if ($fields) {
+        $vals[] = $uid;
+        db()->prepare('UPDATE users SET ' . implode(', ', $fields) . ' WHERE id = ?')->execute($vals);
+      }
+      $linked = 0;
+      foreach ($after as $fn) { $linked += (int)$fn(); }
+      if ($audit) audit_user_event($claims, 'Account updated', implode('; ', $audit) . ($linked ? "; $linked linked record(s) updated to match" : ''), $target);
+      json_out(['ok' => true, 'linked' => $linked]);
     }
 
     // An Admin releases the device a person can no longer reach (Req 4).
@@ -240,6 +355,12 @@ function handle_auth(array $seg, string $method): void {
     }
 
     if ($method === 'DELETE') {
+      require_once __DIR__ . '/users.php';
+      $target = user_row($uid);
+      if (!$target) fail(404, 'User not found');
+      guard_owner($claims, $target, 'delete');
+      audit_user_event($claims, 'Account deleted', 'the login was removed; the person\'s records keep their name', $target);
+      db()->prepare('DELETE FROM fcm_tokens WHERE user_id = ?')->execute([$uid]);
       db()->prepare('DELETE FROM users WHERE id = ?')->execute([$uid]);
       json_out(['ok' => true]);
     }

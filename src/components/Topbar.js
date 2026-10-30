@@ -10,7 +10,7 @@ const titles = {
   '/': 'Dashboard', '/leads': 'Lead Management', '/customers': 'Customers',
   '/installations': 'Installations', '/ongoing': 'Ongoing Work', '/materials': 'Materials & Inventory',
   '/revenue': 'Revenue', '/reports': 'Reports', '/team': 'Team Management',
-  '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings',
+  '/reminders': 'Reminders', '/about': 'About PPS', '/gallery': 'Gallery', '/settings': 'Settings', '/users': 'Total Users',
   '/purchase-orders': 'Purchase Orders', '/assigned-materials': 'Assigned Materials', '/retailers': 'Retailers', '/influencers': 'Influencers',
   '/tasks': 'Employee Tasks', '/user-management': 'User Management', '/activity-log': 'Activity Log',
   '/leave': 'Leave Management', '/attendance': 'Staff Attendance', '/tracking': 'Work Tracking',

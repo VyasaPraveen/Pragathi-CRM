@@ -73,6 +73,14 @@ try {
       handle_stock($seg[1] ?? '', $method);
       break;
 
+    // User & team management for the Owner (Req 5, 30-Oct): records linked
+    // to a person, team / role changes with the records' fate chosen, Team
+    // Leader changes, hold / deactivate, and each account's history.
+    case 'users':
+      require __DIR__ . '/routes/users.php';
+      handle_users($seg, $method);
+      break;
+
     case 'push':
       require __DIR__ . '/routes/push.php';
       handle_push($seg[1] ?? '', $method);

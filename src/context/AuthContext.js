@@ -89,13 +89,20 @@ export function AuthProvider({ children }) {
   // The session is released on the server first, so another device may sign in straight away.
   const logout = () => { unregisterPush(); apiPost('/auth/logout', {}, { skipAuthHandler: true }).catch(() => {}); clear(); };
 
+  // Re-read the signed-in account (e.g. once a temporary password is replaced).
+  const refresh = async () => {
+    const res = await apiGet('/auth/me');
+    applyUser(res.user);
+    return res.user;
+  };
+
   // Self-service reset routes a request to the admins (no mail server in play).
   const resetPassword = async (email) => {
     await apiPost('/auth/request-reset', { email }, { auth: false });
   };
 
   return (
-    <AuthContext.Provider value={{ user, role, designation, approved, loading, login, signup, logout, resetPassword }}>
+    <AuthContext.Provider value={{ user, role, designation, approved, loading, login, signup, logout, resetPassword, refresh }}>
       {children}
     </AuthContext.Provider>
   );

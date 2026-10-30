@@ -3,6 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
+import { teamLabelOf } from '../services/teams';
 import { formatCurrency, getInitials, toNumber, getDaysInMonth, hasAccess, DESIGNATIONS } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
@@ -150,6 +151,18 @@ export default function Team() {
                   Joined: {new Date(t.joiningDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}
                 </div>
               )}
+
+              {/* The team their login puts them in (Req 5.9, 30-Oct) */}
+              {(() => {
+                const login = loginOf(t);
+                const label = login ? teamLabelOf(users, login) : '';
+                return label ? (
+                  <div style={{ textAlign: 'center', padding: '6px 0 0', fontSize: '.76rem', color: 'var(--pri)' }}>
+                    <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: 'middle', marginRight: 3 }}>groups</span>
+                    {label}{login.teamLeader ? ' · reports to ' + ((users || []).find(u => String(u.email || '').toLowerCase() === String(login.teamLeader).toLowerCase())?.displayName || login.teamLeader) : ' · Team Leader'}
+                  </div>
+                ) : null;
+              })()}
 
               {/* Whether this person can sign in, and what an Admin can do about it */}
               {isAdmin && (() => {

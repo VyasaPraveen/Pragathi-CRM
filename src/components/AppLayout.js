@@ -9,6 +9,7 @@ import { useData } from '../context/DataContext';
 import { markNotificationsRead } from '../services/firestore';
 import { notificationsForRoute } from '../services/badges';
 import { hasModule } from '../services/permissions';
+import { apiPost } from '../services/api';
 import { registerPush } from '../services/push';
 import { canInstall, onInstallChange, promptInstall, isStandalone, isIOS, installHint, installDismissed, dismissInstall, isOnline } from '../services/pwa';
 import DueAlerts from './DueAlerts';
@@ -32,6 +33,7 @@ const Reminders = lazy(() => import('../pages/Reminders'));
 const About = lazy(() => import('../pages/About'));
 const Gallery = lazy(() => import('../pages/Gallery'));
 const Settings = lazy(() => import('../pages/Settings'));
+const TotalUsers = lazy(() => import('../pages/TotalUsers'));
 const PurchaseOrders = lazy(() => import('../pages/PurchaseOrders'));
 const Retailers = lazy(() => import('../pages/Retailers'));
 const Influencers = lazy(() => import('../pages/Influencers'));
@@ -78,6 +80,44 @@ function InstallBanner() {
       </div>
       {hint === 'prompt' && <button className="btn bsm bp" onClick={() => promptInstall().then(r => { if (r === 'dismissed') notNow(); })}>Install</button>}
       <button className="btn bsm bo" onClick={notNow} aria-label="Not now">Not now</button>
+    </div>
+  );
+}
+
+// A temporary password handed out by an Admin has to be replaced before any
+// work is done (Req 5.7, 30-Oct). The dialog cannot be dismissed.
+function ForcedPasswordChange() {
+  const { user, refresh } = useAuth();
+  const { toast } = useToast();
+  const [pwd, setPwd] = useState('');
+  const [again, setAgain] = useState('');
+  const [saving, setSaving] = useState(false);
+  if (!user || !user.mustChangePassword) return null;
+  const submit = async (e) => {
+    e.preventDefault();
+    if (pwd.length < 6) { toast('Use at least 6 characters', 'er'); return; }
+    if (pwd !== again) { toast('The two passwords differ', 'er'); return; }
+    setSaving(true);
+    try {
+      await apiPost('/auth/password', { newPassword: pwd });
+      await refresh();
+      toast('Password changed — welcome');
+    } catch (err) { toast(err.message, 'er'); }
+    finally { setSaving(false); }
+  };
+  return (
+    <div className="mo" role="dialog" aria-modal="true" aria-label="Set your password">
+      <div className="md" style={{ width: 440, maxWidth: '94vw' }}>
+        <div className="mh"><h3>Set your own password</h3></div>
+        <form onSubmit={submit}>
+          <div className="mb">
+            <p style={{ fontSize: '.86rem', marginTop: 0 }}>You signed in with a temporary password. Choose your own to continue.</p>
+            <div className="fg"><label>New password</label><input type="password" className="fi" value={pwd} onChange={e => setPwd(e.target.value)} autoFocus autoComplete="new-password" /></div>
+            <div className="fg"><label>Again</label><input type="password" className="fi" value={again} onChange={e => setAgain(e.target.value)} autoComplete="new-password" /></div>
+          </div>
+          <div className="mf"><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving…' : 'Save password'}</button></div>
+        </form>
+      </div>
     </div>
   );
 }
@@ -146,6 +186,7 @@ export default function AppLayout() {
         {/* Quotation approvals, sharing deadlines and follow-up reminders */}
         <DueAlerts />
         <OfflineBar />
+        <ForcedPasswordChange />
         <div className="pc fin">
           <InstallBanner />
           <Suspense fallback={<PageLoading />}>
@@ -174,6 +215,7 @@ export default function AppLayout() {
             <Route path="/attendance" element={<GuardedRoute perm="attendance"><Attendance /></GuardedRoute>} />
             <Route path="/tracking" element={<GuardedRoute perm="tracking"><Tracking /></GuardedRoute>} />
             <Route path="/my-reports" element={<GuardedRoute perm="my_reports"><MyReports /></GuardedRoute>} />
+            <Route path="/users" element={<GuardedRoute minRole="super_admin"><TotalUsers /></GuardedRoute>} />
             <Route path="/user-management" element={<GuardedRoute minRole="admin"><UserManagement /></GuardedRoute>} />
             <Route path="/activity-log" element={<GuardedRoute minRole="operation_manager"><ActivityLog /></GuardedRoute>} />
             <Route path="*" element={<Navigate to="/" replace />} />

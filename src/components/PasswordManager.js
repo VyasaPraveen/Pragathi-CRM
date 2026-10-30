@@ -49,6 +49,8 @@ export default function PasswordManager({ user, createFor, onClose, onDone }) {
   const [show, setShow] = useState(true);
   const [saving, setSaving] = useState(false);
   const [done, setDone] = useState(null);      // the password that was just set
+  // Req 5.7 (30-Oct): the person replaces it with their own at the next sign-in.
+  const [temporary, setTemporary] = useState(true);
 
   const who = user?.displayName || user?.email || createFor?.name || 'this person';
   const phone = user?.phone || createFor?.phone || '';
@@ -70,10 +72,11 @@ export default function PasswordManager({ user, createFor, onClose, onDone }) {
           phone: createFor.phone || '',
           designation,
           approved: true,
+          mustChangePassword: temporary,
         });
         toast('Login created');
       } else {
-        await apiPatch('/auth/users/' + user.id, { password: pwd.trim() });
+        await apiPatch('/auth/users/' + user.id, { password: pwd.trim(), mustChangePassword: temporary });
         toast('Password changed');
       }
       setDone(pwd.trim());
@@ -159,6 +162,10 @@ export default function PasswordManager({ user, createFor, onClose, onDone }) {
             </div>
             <small style={{ fontSize: '.74rem', color: 'var(--muted)' }}>At least 6 characters. You can type your own.</small>
           </div>
+          <label style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: '.84rem' }}>
+            <input type="checkbox" checked={temporary} onChange={e => setTemporary(e.target.checked)} />
+            Temporary — they must set their own password at the next sign-in
+          </label>
         </div>
         <div className="mf">
           <button type="button" className="btn bo" onClick={onClose} disabled={saving}>Cancel</button>
