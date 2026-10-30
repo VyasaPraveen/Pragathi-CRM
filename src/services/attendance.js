@@ -10,6 +10,21 @@
 
 export const CHECK_IN = 'Check In';
 export const CHECK_OUT = 'Check Out';
+// Req 6 (30-Oct): a day recorded by an authorised person rather than marked
+// on the phone — for a day that was missed, or to correct one. It belongs
+// to the date on it, whenever it was typed.
+export const MANUAL = 'Manual';
+export const MANUAL_STATUSES = ['Present', 'Half Day', 'Absent'];
+export const isManual = (r) => !!r && r.type === MANUAL;
+// A day counts as attended when it has a check-in or an added record that is
+// not "Absent".
+export const isPresenceMark = (r) => !!r && (r.type === CHECK_IN || (isManual(r) && r.status !== 'Absent'));
+
+// The added record on this date for this person, if any (one per day).
+export function manualRecordFor(records, email, date) {
+  const e = norm(email);
+  return (records || []).find(r => isManual(r) && r.date === date && norm(r.employeeEmail) === e) || null;
+}
 
 const norm = (v) => String(v || '').trim().toLowerCase();
 
@@ -76,17 +91,30 @@ export function foldAttendanceDays(records, who, rules) {
     const ordered = [...day.marks].sort(byTime);
     const inMark = ordered.find(m => m.type === CHECK_IN) || null;
     const outMark = [...ordered].reverse().find(m => m.type === CHECK_OUT) || null;
+    // The latest added record for the day, if an authorised person made one.
+    const manual = [...ordered].reverse().find(isManual) || null;
     let hours = null;
     if (inMark?.createdAt && outMark?.createdAt) {
       const diff = new Date(outMark.createdAt) - new Date(inMark.createdAt);
       // A check-out recorded before the check-in is bad data, not negative work.
       if (diff > 0) hours = Math.round((diff / 3600000) * 100) / 100;
     }
-    const status = inMark && outMark ? 'Complete'
+    if (manual && manual.hours != null && manual.hours !== '' && !isNaN(Number(manual.hours))) hours = Number(manual.hours);
+    let status = inMark && outMark ? 'Complete'
       : inMark ? 'Checked in'
         : outMark ? 'Check-out only' : '-';
-    const standing = dayStanding(hours, rules);
-    return { date: day.date, marks: ordered, in: inMark, out: outMark, hours, present: !!inMark, status, standing, leaveCost: leaveCostOf(standing) };
+    let present = !!inMark;
+    let absent = false;
+    let standing = dayStanding(hours, rules);
+    if (manual) {
+      // The added record is the authority's word on the day.
+      if (manual.status === 'Absent') { present = false; absent = true; status = 'Absent'; standing = null; hours = null; }
+      else if (manual.status === 'Half Day') { present = true; status = 'Half Day (added)'; standing = HALF_DAY; }
+      else { present = true; status = 'Present (added)'; standing = hours != null ? dayStanding(hours, rules) : FULL_DAY; }
+    }
+    // An absent day costs a day's leave, as a Short Day does.
+    const leaveCost = absent ? 1 : leaveCostOf(standing);
+    return { date: day.date, marks: ordered, in: inMark, out: outMark, manual, hours, present, absent, status, standing, leaveCost };
   }).sort((a, b) => (a.date < b.date ? 1 : -1));   // newest first
 }
 
@@ -102,7 +130,8 @@ export function attendanceSummary(days) {
   const shortDays = list.filter(d => d.standing === SHORT_DAY).length;
   return {
     present: list.filter(d => d.present).length,
-    incomplete: list.filter(d => d.present && !d.out).length,
+    absent: list.filter(d => d.absent).length,
+    incomplete: list.filter(d => d.present && !d.out && !d.manual).length,
     totalHours: Math.round(totalHours * 10) / 10,
     avgHours: worked.length ? Math.round((totalHours / worked.length) * 10) / 10 : 0,
     fullDays, halfDays, shortDays,
@@ -132,13 +161,25 @@ export function suggestedMarkType(todayMarks) {
 export function teamCounts(records, todayStr, who) {
   const all = records || [];
   const todays = all.filter(a => a.date === todayStr);
-  const mine = all.filter(a => isMine(a, who));
   const month = String(todayStr || '').slice(0, 7);
+  // Today, per person: present when a check-in or an added Present / Half
+  // Day is on the day and no added Absent overrides it.
+  const byPerson = new Map();
+  todays.forEach(a => {
+    const k = norm(a.employeeEmail) || norm(a.employeeName);
+    if (!k) return;
+    const cur = byPerson.get(k) || { present: false, absent: false };
+    if (isPresenceMark(a)) cur.present = true;
+    if (isManual(a) && a.status === 'Absent') cur.absent = true;
+    byPerson.set(k, cur);
+  });
+  // My own figures come off the folded days, the same as My Attendance.
+  const myDays = foldAttendanceDays(all, who);
   return {
-    presentToday: new Set(todays.filter(a => a.type === CHECK_IN).map(a => a.employeeEmail || a.employeeName)).size,
+    presentToday: [...byPerson.values()].filter(p => p.present && !p.absent).length,
     marksToday: todays.length,
-    myMonth: new Set(mine.filter(a => a.type === CHECK_IN && String(a.date || '').startsWith(month)).map(a => a.date)).size,
-    myTotal: mine.filter(a => a.type === CHECK_IN).length,
+    myMonth: myDays.filter(d => d.present && String(d.date || '').startsWith(month)).length,
+    myTotal: myDays.filter(d => d.present).length,
   };
 }
 
@@ -189,12 +230,35 @@ export function teamMonthReport(records, members, month, rules) {
     rows,
     present: rows.filter(r => r.present > 0).length,
     totalDays: rows.reduce((n, r) => n + r.present, 0),
+    absentDays: rows.reduce((n, r) => n + (r.absent || 0), 0),
     totalHours: Math.round(rows.reduce((n, r) => n + r.totalHours, 0) * 10) / 10,
     incomplete: rows.reduce((n, r) => n + r.incomplete, 0),
     fullDays: rows.reduce((n, r) => n + (r.fullDays || 0), 0),
     halfDays: rows.reduce((n, r) => n + (r.halfDays || 0), 0),
     shortDays: rows.reduce((n, r) => n + (r.shortDays || 0), 0),
     leaveCounter: Math.round(rows.reduce((n, r) => n + (r.leaveCounter || 0), 0) * 10) / 10,
+  };
+}
+
+// The whole company's month (Req 6.6, 30-Oct): every employee, from the
+// same folded days, with the totals the Owner asks for. A day with no record
+// is neither present nor absent — only a record makes it one or the other.
+export function monthOverview(records, users, month, rules) {
+  const rows = (users || []).map(u => ({
+    ...memberMonth(records, u, month, rules),
+    designation: u && u.designation,
+    team: u && u.teamName ? u.teamName : '',
+  }));
+  rows.sort((a, b) => a.name.localeCompare(b.name));
+  return {
+    month,
+    rows,
+    employees: rows.length,
+    presentEmployees: rows.filter(r => r.present > 0).length,
+    presentDays: rows.reduce((n, r) => n + r.present, 0),
+    absentDays: rows.reduce((n, r) => n + (r.absent || 0), 0),
+    notMarked: rows.filter(r => r.present === 0 && (r.absent || 0) === 0).length,
+    totalHours: Math.round(rows.reduce((n, r) => n + r.totalHours, 0) * 10) / 10,
   };
 }
 
@@ -209,20 +273,24 @@ export function teamToday(records, members, todayStr) {
       .sort(byTime);
     const inMark = marks.find(x => x.type === CHECK_IN) || null;
     const outMark = [...marks].reverse().find(x => x.type === CHECK_OUT) || null;
+    const manual = [...marks].reverse().find(isManual) || null;
+    let state = inMark && outMark ? 'Checked out' : inMark ? 'Checked in' : 'Not marked';
+    if (manual) state = manual.status === 'Absent' ? 'Absent' : manual.status === 'Half Day' ? 'Half Day (added)' : 'Present (added)';
     return {
       email: m && m.email,
       name: (m && (m.displayName || m.email)) || 'Unknown',
-      in: inMark, out: outMark, marks,
-      state: inMark && outMark ? 'Checked out' : inMark ? 'Checked in' : 'Not marked',
+      in: inMark, out: outMark, marks, manual,
+      state,
     };
   });
   rows.sort((a, b) => {
-    const order = { 'Not marked': 0, 'Checked in': 1, 'Checked out': 2 };
-    return (order[a.state] - order[b.state]) || a.name.localeCompare(b.name);
+    const order = { 'Not marked': 0, 'Absent': 1, 'Checked in': 2, 'Half Day (added)': 3, 'Checked out': 4, 'Present (added)': 5 };
+    return ((order[a.state] ?? 9) - (order[b.state] ?? 9)) || a.name.localeCompare(b.name);
   });
   return {
     rows,
-    marked: rows.filter(r => r.state !== 'Not marked').length,
+    marked: rows.filter(r => r.state !== 'Not marked' && r.state !== 'Absent').length,
+    absent: rows.filter(r => r.state === 'Absent').length,
     onSite: rows.filter(r => r.state === 'Checked in').length,
     notMarked: rows.filter(r => r.state === 'Not marked').length,
   };

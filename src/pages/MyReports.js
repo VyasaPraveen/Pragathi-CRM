@@ -51,7 +51,7 @@ export default function MyReports() {
 
   const converted = myLeads.filter(l => l.status === 'Converted').length;
   const pipelineValue = myLeads.reduce((s, l) => s + toNumber(l.expectedValue), 0);
-  const attendanceDaysThisMonth = new Set(myAttendance.filter(a => a.type === 'Check In' && (a.date || '').startsWith(thisMonth())).map(a => a.date)).size;
+  const attendanceDaysThisMonth = new Set(myAttendance.filter(a => (a.type === 'Check In' || (a.type === 'Manual' && a.status !== 'Absent')) && (a.date || '').startsWith(thisMonth())).map(a => a.date)).size;
   const leaveCounted = myLeave.filter(l => l.status === 'Approved').reduce((s, l) => s + (Number(l.countedDays) || 0), 0);
   // The plan being reported on — today by default, any day the user picks.
   const [planDate, setPlanDate] = useState(today());

@@ -9,6 +9,8 @@ import { Modal, EmptyState, MarkLocation, DateFilter } from '../components/Share
 import { DATE_FILTER_ALL, applyDateFilter, thisMonthFilter, isDateFiltered } from '../services/dateFilter';
 import { foldAttendanceDays, attendanceSummary, todayStanding, suggestedMarkType, teamCounts, detectInAppBrowser, attendanceRulesFrom, FULL_DAY, HALF_DAY } from '../services/attendance';
 import TeamAttendancePanel from '../components/TeamAttendancePanel';
+import MonthAttendancePanel from '../components/MonthAttendancePanel';
+import AddAttendanceModal from '../components/AddAttendanceModal';
 import { isTeamLeader, seesAllAttendance } from '../services/permissions';
 
 const PAGE_SIZE = 30;
@@ -42,6 +44,8 @@ export default function Attendance() {
   const { user, role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(false);
+  // Req 6 (30-Oct): an authorised person records a day for an employee.
+  const [addModal, setAddModal] = useState(null);   // { initial?, presetEmail? }
   // Full Day / Half Day thresholds (Req 5), as the Owner / Admin set them in Settings.
   const rules = attendanceRulesFrom(settings);
   const [search, setSearch] = useState('');
@@ -152,7 +156,10 @@ export default function Attendance() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search attendance..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <button className="btn bp bsm" onClick={() => setModal(true)}><span className="material-icons-round" style={{ fontSize: 18 }}>where_to_vote</span> Mark Attendance</button>
+        <div className="tl-r">
+          {canSeeAll && <button className="btn bo bsm" onClick={() => setAddModal({})} title="Record a day for an employee — today or a day that was missed"><span className="material-icons-round" style={{ fontSize: 18 }}>post_add</span> Add Attendance</button>}
+          <button className="btn bp bsm" onClick={() => setModal(true)}><span className="material-icons-round" style={{ fontSize: 18 }}>where_to_vote</span> Mark Attendance</button>
+        </div>
       </div>
 
       {/* My Attendance is the default view; managers can switch to the whole team. */}
@@ -160,6 +167,7 @@ export default function Attendance() {
         {[
           ['mine', 'My Attendance'],
           canSeeTeam ? ['team', canSeeAll ? 'Team Attendance' : 'My Team'] : null,
+          canSeeAll ? ['month', 'This Month'] : null,
           ['all', canSeeAll ? 'Staff Attendance' : 'My Records'],
         ].filter(Boolean).map(([k, label]) => (
           <span key={k} className={`fc ${view === k ? 'act' : ''}`} onClick={() => setView(k)}>{label}</span>
@@ -215,6 +223,7 @@ export default function Attendance() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(130px,1fr))', gap: 10, marginBottom: 14 }}>
             {[
               ['Days Present', mySummary.present, '#27ae60'],
+              ['Days Absent', mySummary.absent, mySummary.absent ? '#c0392b' : 'var(--muted)'],
               ['Total Hours', mySummary.totalHours, 'var(--pri)'],
               ['Avg Hours / Day', mySummary.avgHours, '#6c5ce7'],
               ['Days Without Check-Out', mySummary.incomplete, mySummary.incomplete ? '#e67e22' : 'var(--muted)'],
@@ -236,7 +245,7 @@ export default function Attendance() {
               {monthDays.map(d => (
                 <tr key={d.date}>
                   <td className="m-h" style={{ whiteSpace: 'nowrap', fontSize: '.82rem' }}>{formatDate(d.date)}</td>
-                  <td data-l="Status"><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }}>{d.status}</span>
+                  <td data-l="Status"><span className={`st ${d.absent ? 'st-r' : d.status === 'Complete' || d.manual ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 8px', fontSize: '.7rem' }} title={d.manual ? `${d.manual.note || ''}${d.manual.addedBy ? ` (added by ${d.manual.addedBy})` : ''}` : undefined}>{d.status}</span>
                     {d.standing && <span className={`st ${d.standing === FULL_DAY ? 'st-g' : d.standing === HALF_DAY ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.7rem', marginLeft: 4 }} title={`${d.hours} h worked — ${d.standing}${d.leaveCost ? ` (${d.leaveCost} day leave)` : ''}`}>{d.standing}</span>}</td>
                   <td data-l="Check in" style={{ fontSize: '.82rem' }}>{d.in?.time || '-'}</td>
                   <td data-l="Check out" style={{ fontSize: '.82rem' }}>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
@@ -255,33 +264,41 @@ export default function Attendance() {
 
       {view === 'team' && canSeeTeam && <TeamAttendancePanel />}
 
+      {view === 'month' && canSeeAll && <MonthAttendancePanel onAdd={(email) => setAddModal({ presetEmail: email || '' })} />}
+
       {view === 'all' && (<>
       <div style={{ marginBottom: 10 }}><DateFilter value={allFilter} onChange={setAllFilter} records={attendance} fields={ATTENDANCE_DATE_FIELDS} /></div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
-        <th>Employee</th><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Photo</th>{admin && <th style={{ textAlign: 'right' }}>Actions</th>}
+        <th>Employee</th><th>Date</th><th>Time</th><th>Type</th><th>Location</th><th>Photo</th>{(admin || canSeeAll) && <th style={{ textAlign: 'right' }}>Actions</th>}
       </tr></thead><tbody>
         {displayed.map(a => (
           <tr key={a.id}>
             <td className="m-h"><strong>{a.employeeName || '-'}</strong></td>
             <td data-l="Date" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(a.date)}</td>
             <td data-l="Time" style={{ fontSize: '.82rem' }}>{a.time || '-'}</td>
-            <td data-l="Type"><span className="st" style={{ background: a.type === 'Check In' ? 'rgba(0,184,148,.12)' : 'rgba(232,131,12,.12)', color: a.type === 'Check In' ? '#00a381' : '#d68910' }}>{a.type}</span></td>
+            <td data-l="Type">
+              {a.type === 'Manual'
+                ? <><span className="st" style={{ background: a.status === 'Absent' ? 'rgba(231,76,60,.12)' : 'rgba(99,102,241,.12)', color: a.status === 'Absent' ? '#c0392b' : '#4f46e5' }}>{a.status} (added)</span>
+                    <div style={{ fontSize: '.7rem', color: 'var(--muted)', marginTop: 2 }}>{a.hours != null ? `${a.hours} h · ` : ''}{a.note || ''}{a.addedBy ? ` — by ${a.addedBy}` : ''}</div></>
+                : <span className="st" style={{ background: a.type === 'Check In' ? 'rgba(0,184,148,.12)' : 'rgba(232,131,12,.12)', color: a.type === 'Check In' ? '#00a381' : '#d68910' }}>{a.type}</span>}
+            </td>
             <td data-l="Location" style={{ fontSize: '.8rem' }}>
               {a.lat && a.lng
                 ? <a href={a.mapLink || `https://www.google.com/maps?q=${a.lat},${a.lng}`} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)', display: 'inline-flex', alignItems: 'center', gap: 3 }}><span className="material-icons-round" style={{ fontSize: 15 }}>place</span> View{a.accuracy ? ` (±${Math.round(a.accuracy)}m)` : ''}</a>
                 : '-'}
             </td>
             <td data-l="Photo">{isSafeUrl(a.photoUrl) ? <a href={a.photoUrl} target="_blank" rel="noreferrer"><img src={a.photoUrl} alt="" style={{ width: 40, height: 40, objectFit: 'cover', borderRadius: 6, border: '1px solid var(--bor)' }} /></a> : '-'}</td>
-            {admin && <td className="m-a" style={{ textAlign: 'right' }}><div><button className="btn bsm bo" onClick={() => handleDelete(a.id)} title="Delete" style={{ padding: '4px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button></div></td>}
+            {(admin || canSeeAll) && <td className="m-a" style={{ textAlign: 'right' }}><div>{canSeeAll && a.type === 'Manual' && <button className="btn bsm bo" onClick={() => setAddModal({ initial: a })} title="Edit" style={{ padding: '4px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>}{admin && <button className="btn bsm bo" onClick={() => handleDelete(a.id)} title="Delete" style={{ padding: '4px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}</div></td>}
           </tr>
         ))}
-        {!visible.length && <tr><td colSpan={admin ? 7 : 6}><EmptyState icon="location_off" title="No attendance yet" message="Mark attendance with your live location and a photo." /></td></tr>}
+        {!visible.length && <tr><td colSpan={(admin || canSeeAll) ? 7 : 6}><EmptyState icon="location_off" title="No attendance yet" message="Mark attendance with your live location and a photo." /></td></tr>}
       </tbody></table></div>
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({visible.length - visibleCount} remaining)</button></div>}
       </div></div>
       </>)}
 
       {modal && <MarkModal suggestedType={suggestedType} onSave={handleSave} onClose={() => { clearDraft(); setModal(false); }} />}
+      {addModal && <AddAttendanceModal users={users} attendance={attendance} initial={addModal.initial} presetEmail={addModal.presetEmail} onClose={() => setAddModal(null)} />}
     </>
   );
 }

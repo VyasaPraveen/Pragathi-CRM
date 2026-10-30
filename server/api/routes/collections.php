@@ -57,6 +57,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     unset($data['id'], $data['createdAt'], $data['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('POST', $claims, $data, []);
     if ($collection === 'leads') enforce_site_visit_photos($data, []);
+    if ($collection === 'attendance') enforce_attendance_write('POST', $claims, $data, []);
     // Force the correct initial status for approval-chain collections so the
     // workflow can't be bypassed by POSTing an already-advanced status (the UI
     // always starts here; this stops the raw API from skipping stages).
@@ -128,6 +129,7 @@ function handle_collections(string $collection, string $id, string $method): voi
     $patch = body();
     unset($patch['id'], $patch['createdAt'], $patch['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('PATCH', $claims, $patch, $existing);
+    if ($collection === 'attendance') enforce_attendance_write('PATCH', $claims, $patch, $existing);
     if ($collection === 'leads') {
       enforce_lead_edit($claims, $patch, $existing + ['createdBy' => $existing['createdBy'] ?? (string)($row['created_by'] ?? '')]);
       enforce_site_visit_photos($patch, $existing);
@@ -214,6 +216,75 @@ function handle_batch(string $method): void {
 // Returns a test to apply to each row. The members reporting to this viewer are
 // looked up once here rather than per row, because this runs on the batch read
 // that every client repeats every 15 seconds.
+// ── Attendance (Req 6, 30-Oct) ──────────────────────────────────────────────
+// A mark (Check In / Check Out, with the photo and the location) is the
+// person's own. An added record ("Manual": Present / Half Day / Absent on a
+// date) is the authorities' — the Owner, Management, Admin, the Operation
+// Manager — one per person per date, counted against the date on it.
+// Mirrors ATTENDANCE_AUTHORITY_ROLES in src/services/permissions.js.
+const ATTENDANCE_MANUAL_STATUSES = ['Present', 'Half Day', 'Absent'];
+function attendance_authority(string $role): bool {
+  return in_array(normalize_role($role), ['super_admin', 'management', 'admin', 'operation_manager'], true);
+}
+function enforce_attendance_write(string $method, array $claims, array &$data, array $existing): void {
+  $role = (string)($claims['role'] ?? '');
+  $email = strtolower(trim((string)($claims['email'] ?? '')));
+  $authority = attendance_authority($role);
+  if ($method === 'POST') {
+    if (($data['type'] ?? '') === 'Manual') {
+      if (!$authority) fail(403, 'Only the Owner, Management, an Admin or the Operation Manager can add attendance for an employee.');
+      $who = strtolower(trim((string)($data['employeeEmail'] ?? '')));
+      if ($who === '') fail(422, 'Choose the employee');
+      $date = (string)($data['date'] ?? '');
+      if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date)) fail(422, 'Choose the attendance date');
+      if ($date > gmdate('Y-m-d', time() + 19800)) fail(422, 'Attendance cannot be recorded for a day that has not come yet');
+      if (!in_array((string)($data['status'] ?? ''), ATTENDANCE_MANUAL_STATUSES, true)) fail(422, 'The status must be Present, Half Day or Absent');
+      if (isset($data['hours']) && $data['hours'] !== null && $data['hours'] !== '') {
+        if (!is_numeric($data['hours']) || (float)$data['hours'] < 0 || (float)$data['hours'] > 24) fail(422, 'Worked hours must be between 0 and 24');
+        $data['hours'] = (float)$data['hours'];
+      } else $data['hours'] = null;
+      if ($data['status'] === 'Absent') $data['hours'] = null;
+      $st = db()->prepare('SELECT display_name FROM users WHERE email = ? LIMIT 1'); $st->execute([$who]); $u = $st->fetch();
+      if (!$u) fail(404, 'That employee has no account');
+      $data['employeeEmail'] = $who;
+      $data['employeeName'] = (string)($u['display_name'] ?? '') ?: (string)($data['employeeName'] ?? $who);
+      // One added record per person per date: the second would double-count.
+      foreach (db()->query("SELECT data FROM `attendance`")->fetchAll() as $r) {
+        $d = $r['data'] ? json_decode($r['data'], true) : [];
+        if (is_array($d) && ($d['type'] ?? '') === 'Manual' && ($d['date'] ?? '') === $date && strtolower(trim((string)($d['employeeEmail'] ?? ''))) === $who) {
+          fail(409, 'This employee already has an attendance record on that date. Edit that record instead of adding another.');
+        }
+      }
+      $data['addedBy'] = (string)($claims['name'] ?? $email);
+      $data['addedByEmail'] = $email;
+      $data['addedAt'] = gmdate('Y-m-d\TH:i:s\Z');
+    } elseif (!$authority) {
+      // A mark is the person's own: whatever the request says, it is theirs.
+      $data['employeeEmail'] = $email;
+      if ($email !== '' && empty($data['employeeName'])) $data['employeeName'] = (string)($claims['name'] ?? $email);
+    }
+    return;
+  }
+  // PATCH: an added record is corrected by the authorities; a mark is not edited.
+  if (($existing['type'] ?? '') === 'Manual') {
+    if (!$authority) fail(403, 'Only the Owner, Management, an Admin or the Operation Manager can change an added attendance record.');
+    foreach (array_keys($data) as $k) {
+      if (!in_array($k, ['status', 'hours', 'note'], true)) fail(422, 'Only the status, the hours and the note of an added attendance record can be changed.');
+    }
+    if (array_key_exists('status', $data) && !in_array((string)$data['status'], ATTENDANCE_MANUAL_STATUSES, true)) fail(422, 'The status must be Present, Half Day or Absent');
+    if (array_key_exists('hours', $data)) {
+      if ($data['hours'] === null || $data['hours'] === '') $data['hours'] = null;
+      elseif (!is_numeric($data['hours']) || (float)$data['hours'] < 0 || (float)$data['hours'] > 24) fail(422, 'Worked hours must be between 0 and 24');
+      else $data['hours'] = (float)$data['hours'];
+    }
+    if ((($data['status'] ?? $existing['status'] ?? '') === 'Absent')) $data['hours'] = null;
+    $data['updatedBy'] = (string)($claims['name'] ?? $email);
+    $data['updatedAt'] = gmdate('Y-m-d\TH:i:s\Z');
+    return;
+  }
+  if (!has_access($role, 'admin')) fail(403, 'A marked attendance (with its photo and location) is not edited. An Admin can delete it; an authorised person can add a record for the day.');
+}
+
 // Req 2 (30-Oct): who may delete activity log entries. Mirrors
 // ACTIVITY_DELETE_ROLES in src/pages/ActivityLog.js.
 function activity_log_deleter(string $role): bool {

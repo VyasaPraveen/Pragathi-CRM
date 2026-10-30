@@ -25,6 +25,9 @@ const STATE_TONE = {
   'Not marked': { bg: 'rgba(231,76,60,.10)', fg: '#c0392b', icon: 'error_outline' },
   'Checked in': { bg: 'rgba(26,58,122,.08)', fg: 'var(--pri)', icon: 'how_to_reg' },
   'Checked out': { bg: 'rgba(39,174,96,.10)', fg: '#1e8449', icon: 'task_alt' },
+  'Present (added)': { bg: 'rgba(99,102,241,.10)', fg: '#4f46e5', icon: 'post_add' },
+  'Half Day (added)': { bg: 'rgba(243,156,18,.12)', fg: '#d68910', icon: 'post_add' },
+  'Absent': { bg: 'rgba(231,76,60,.12)', fg: '#c0392b', icon: 'person_off' },
 };
 
 export default function TeamAttendancePanel() {
@@ -90,6 +93,7 @@ export default function TeamAttendancePanel() {
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 10, marginBottom: 12 }}>
           {[
             ['Present', picked.marked, '#27ae60'],
+            ['Absent (recorded)', picked.absent, picked.absent ? '#c0392b' : 'var(--muted)'],
             ['Still On Site', picked.onSite, 'var(--pri)'],
             ['Not Marked', picked.notMarked, picked.notMarked ? '#c0392b' : 'var(--muted)'],
             [seesEveryone ? 'Staff' : 'Team Members', members.length, '#6c5ce7'],
@@ -197,6 +201,7 @@ export default function TeamAttendancePanel() {
             ['Members', members.length, 'var(--pri)'],
             ['Attended This Month', report.present, '#27ae60'],
             ['Total Days Present', report.totalDays, '#6c5ce7'],
+            ['Days Absent (recorded)', report.absentDays, report.absentDays ? '#c0392b' : 'var(--muted)'],
             ['Total Hours', report.totalHours, '#e8830c'],
             ['Days Without Check-Out', report.incomplete, report.incomplete ? '#e67e22' : 'var(--muted)'],
             [`Full Days (${rules.fullDayHours} h+)`, report.fullDays, '#1e8449'],
@@ -212,7 +217,7 @@ export default function TeamAttendancePanel() {
         </div>
 
         <div className="tw"><table><thead><tr>
-          <th>Team Member</th><th>Days Present</th><th>Full / Half / Short</th><th>Leave Counter</th><th>Total Hours</th><th>Avg Hours / Day</th>
+          <th>Team Member</th><th>Days Present</th><th>Absent</th><th>Full / Half / Short</th><th>Leave Counter</th><th>Total Hours</th><th>Avg Hours / Day</th>
           <th>No Check-Out</th><th>Last Marked</th><th style={{ textAlign: 'right' }}>Detail</th>
         </tr></thead><tbody>
           {report.rows.map(r => (
@@ -220,6 +225,7 @@ export default function TeamAttendancePanel() {
               <tr>
                 <td><strong>{r.name}</strong></td>
                 <td style={{ fontWeight: 700, color: r.present ? '#1e8449' : '#c0392b' }}>{r.present}</td>
+                <td style={{ fontWeight: 600, color: r.absent ? '#c0392b' : 'var(--muted)' }}>{r.absent || '-'}</td>
                 <td style={{ fontSize: '.82rem' }}><span style={{ color: '#1e8449' }}>{r.fullDays}</span> / <span style={{ color: '#d68910' }}>{r.halfDays}</span> / <span style={{ color: r.shortDays ? '#c0392b' : 'var(--muted)' }}>{r.shortDays}</span></td>
                 <td style={{ fontWeight: 600, color: r.leaveCounter ? '#c0392b' : 'var(--muted)' }}>{r.leaveCounter || '-'}</td>
                 <td>{r.totalHours || '-'}</td>
@@ -234,7 +240,7 @@ export default function TeamAttendancePanel() {
               </tr>
               {openMember === (r.email || r.name) && (
                 <tr>
-                  <td colSpan={9} style={{ background: 'rgba(26,58,122,.03)', padding: 10 }}>
+                  <td colSpan={10} style={{ background: 'rgba(26,58,122,.03)', padding: 10 }}>
                     {r.days.length ? (
                       <table style={{ fontSize: '.82rem' }}><thead><tr>
                         <th>Date</th><th>Status</th><th>Check In</th><th>Check Out</th><th>Hours</th><th>Check-In Location</th><th>Check-Out Location</th>
@@ -242,7 +248,7 @@ export default function TeamAttendancePanel() {
                         {r.days.map(d => (
                           <tr key={d.date}>
                             <td style={{ whiteSpace: 'nowrap' }}>{formatDate(d.date)}</td>
-                            <td><span className={`st ${d.status === 'Complete' ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 7px', fontSize: '.68rem' }}>{d.status}</span>
+                            <td><span className={`st ${d.absent ? 'st-r' : d.status === 'Complete' || d.manual ? 'st-g' : d.status === 'Checked in' ? 'st-b' : 'st-o'}`} style={{ padding: '2px 7px', fontSize: '.68rem' }} title={d.manual ? `${d.manual.note || ''}${d.manual.addedBy ? ` (added by ${d.manual.addedBy})` : ''}` : undefined}>{d.status}</span>
                               {d.standing && <span className={`st ${d.standing === FULL_DAY ? 'st-g' : d.standing === HALF_DAY ? 'st-o' : 'st-r'}`} style={{ padding: '2px 7px', fontSize: '.68rem', marginLeft: 4 }}>{d.standing}</span>}</td>
                             <td>{d.in?.time || '-'}</td>
                             <td>{d.out?.time || <span style={{ color: '#e67e22' }}>Not marked</span>}</td>
