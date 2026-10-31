@@ -5,6 +5,7 @@ import { DataProvider } from './context/DataContext';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { Toast } from './components/SharedUI';
 import AppLayout from './components/AppLayout';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './pages/Login';
 import './styles/app.css';
 
@@ -37,7 +38,7 @@ function AppContent() {
   if (loading) {
     return (
       <div id="LS">
-        <img src="/logo.png" alt="PPS" onError={e => e.target.style.display = 'none'} />
+        <img src="/logo-full.png" alt="Pragathi Power Solutions" onError={e => e.target.style.display = 'none'} />
         <div className="spin"></div>
         <p className="lt">Loading Pragathi Power CRM...</p>
       </div>
@@ -67,7 +68,9 @@ export default function App() {
     <BrowserRouter>
       <AuthProvider>
         <ToastProvider>
-          <AppContent />
+          <ErrorBoundary>
+            <AppContent />
+          </ErrorBoundary>
         </ToastProvider>
       </AuthProvider>
     </BrowserRouter>

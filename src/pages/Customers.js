@@ -1,49 +1,65 @@
 import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
-import { addDocument, updateDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
+import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, shareWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState, DateFilter , SearchSelect } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { leadPickerOptions, customerFromLead } from '../services/installations';
 import { printBOM, downloadBOM } from '../services/poUtils';
 import WorkflowTab from '../components/WorkflowTab';
 import { completedCount, TOTAL_STAGES } from '../services/workflow';
+// 31-Oct (Customers batch): who sees and edits which customer, tab and stage,
+// and the stages the Payment tab completes by itself.
+import { CUSTOMER_TABS, ACCESS, tabLocked as tabLockedFor, tabAccess, canSeeCustomer, canEditCustomer } from '../services/customerAccess';
+import { customerSavePatch, syncInstallationToCustomer } from '../services/customerSync';
+import { paymentProgress } from '../services/customerWorkflow';
 
 const PAGE_SIZE = 20;
 const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
 const phases = ['Single Phase', 'Three Phase'];
 
-// Customer tabs unlock in step with the 18-stage workflow (sequential gating).
-// The number is the minimum "stages completed" required before the tab opens.
-const TAB_MIN_STAGE = {
-  // Info + Payment are open from the start (payment must be entered before proceeding);
-  // every later tab unlocks only as its workflow stage is completed.
-  workflow: 0, info: 0, payment: 4, subsidy: 5, dispatch: 6,
-  installation: 8, quality: 9, warranty: 9, sync: 10, firstbill: 14, om: 15,
-};
+// The sequence in which the Customer tabs open (TAB_MIN_STAGE in
+// customerAccess.js) is driven PURELY by how many workflow stages are
+// completed. Existing field data does NOT unlock tabs. The Owner and the Admin
+// are free of it (Req 1.2); everyone else advances through the Workflow tab.
 
-// Fully strict gating: tab access is driven PURELY by how many workflow stages
-// are completed. Existing field data does NOT unlock tabs — every customer (new
-// or existing) must be advanced through the Workflow tab to open later stages.
-function workflowGateLevel(customer) {
-  return completedCount(customer || {});
-}
+// A customer's day for the Day / Month filter: when the record was created.
+const CUSTOMER_DATE_FIELDS = ['createdAt'];
 
 export default function Customers() {
-  const { customers, leadPOs, installations, leads, users } = useData();
-  const { role } = useAuth();
+  const { customers, leadPOs, installations, leads, users, team, settings, bcoOps } = useData();
+  const { role, user } = useAuth();
   const { toast } = useToast();
+  // Adding a customer stays with the coordinator level and up. Editing one is
+  // decided per customer: those roles, plus the customer's own sales contact.
   const canEdit = hasAccess(role, 'coordinator');
+  const meName = user?.displayName || user?.email || '';
+  const leadOf = (c) => (c.leadId && leads.find(l => l.id === c.leadId)) || null;
+  const canEditC = (c) => canEditCustomer(c, leadOf(c), user, role, users, settings);
   const [search, setSearch] = useState('');
+  // Req 2 (27-Oct): the Owner alone may delete a customer (a duplicate or a
+  // mistaken entry). Nobody else gets the button, and the API refuses them.
+  const isOwner = role === 'super_admin';
+  const handleDeleteCustomer = async (c) => {
+    if (!window.confirm(`Delete the customer "${c.name}" permanently? Their installations and payments are not deleted with them.`)) return;
+    try { await deleteDocument('customers', c.id); toast('Customer deleted'); }
+    catch (e) { toast(e.message, 'er'); }
+  };
   const [typeFilter, setTypeFilter] = useState('all');
   const [areaFilter, setAreaFilter] = useState('all');
   const [modal, setModal] = useState(null);
   const [detailId, setDetailId] = useState(null);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
-  const areas = [...new Set(customers.map(c => c.area).filter(Boolean))].sort();
+  // Req 1.4: a Sales Executive sees the customers of their own leads; the
+  // coordinator level and up see them all.
+  const visible = customers.filter(c => canSeeCustomer(c, leadOf(c), user, role, users, team, settings));
+  const areas = [...new Set(visible.map(c => c.area).filter(Boolean))].sort();
 
-  let filtered = customers;
+  let filtered = visible;
   if (typeFilter !== 'all') filtered = filtered.filter(c => c.customerType === typeFilter);
   if (areaFilter !== 'all') filtered = filtered.filter(c => c.area === areaFilter);
   if (search) {
@@ -53,9 +69,14 @@ export default function Customers() {
       safeStr(c.phone).includes(q) ||
       safeStr(c.email).toLowerCase().includes(q) ||
       safeStr(c.area).toLowerCase().includes(q) ||
-      safeStr(c.pincode).includes(q)
+      safeStr(c.pincode).includes(q) ||
+      // R3 (8-Oct): a customer is also found by the name and phone on the
+      // lead they came from, which can differ from what was typed on the customer.
+      safeStr(leadOf(c)?.name).toLowerCase().includes(q) ||
+      safeStr(leadOf(c)?.phone).includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, CUSTOMER_DATE_FIELDS);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -74,14 +95,18 @@ export default function Customers() {
 
       if (id) {
         const prevCustomer = customers.find(c => c.id === id);
-        await updateDocument('customers', id, cleaned);
+        // The Payment tab completes Stage 7 (90% received, PO approved) and
+        // Stage 13 (the full agreed price) by itself (Req 1.11, 1.17).
+        const auto = customerSavePatch({ ...(prevCustomer || {}), ...cleaned, id }, { leads, leadPOs, installations, bcoOps, by: meName });
+        await updateDocument('customers', id, { ...cleaned, ...auto });
         toast('Customer updated');
         notifyAdmins(users, { title: 'Customer Updated', message: `Customer "${cleaned.name}" has been updated`, type: 'customer', module: 'customers', relatedId: id });
         if (cleaned.assignedTo && cleaned.assignedTo !== (prevCustomer?.assignedTo || '')) {
           createNotification({ forUser: cleaned.assignedTo, title: 'Customer Assigned to You', message: `Customer "${cleaned.name}" has been assigned to you`, type: 'customer', module: 'customers', relatedId: id });
         }
       } else {
-        const newId = await addDocument('customers', { ...cleaned, status: 'Active' });
+        const auto = customerSavePatch({ ...cleaned, status: 'Active' }, { leads, leadPOs, installations, bcoOps, by: meName });
+        const newId = await addDocument('customers', { ...cleaned, status: 'Active', ...auto });
         toast('Customer added');
         notifyAdmins(users, { title: 'New Customer Added', message: `New customer "${cleaned.name}" added`, type: 'customer', module: 'customers', relatedId: newId });
         if (cleaned.assignedTo) {
@@ -96,8 +121,8 @@ export default function Customers() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search customers..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...customerTypes].map(t => <span key={t} className={`fc ${typeFilter === t ? 'act' : ''}`} onClick={() => setTypeFilter(t)}>{t === 'all' ? 'All Types' : t}</span>)}
           </div>
           {areas.length > 0 && (
@@ -109,7 +134,8 @@ export default function Customers() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>}
         </div>
       </div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr><th>Customer</th><th>Type</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={customers} fields={CUSTOMER_DATE_FIELDS} /></div>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Customer</th><th>Type</th><th>kW</th><th>Payment</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th>Installation</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(c => {
           const paid = c.paymentType === 'Finance'
             ? toNumber(c.advanceReceivedAmount) + toNumber(c.finalAmount)
@@ -117,16 +143,16 @@ export default function Customers() {
           const bal = toNumber(c.totalPrice) - paid;
           return (
             <tr key={c.id}>
-              <td><strong>{c.name}</strong><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{c.phone}</span>{c.email && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{c.email}</span></>}</td>
-              <td style={{ fontSize: '.82rem' }}>{c.customerType || '-'}</td>
-              <td>{c.kwRequired || '-'}</td>
-              <td><span className={`st ${c.paymentType === 'Finance' ? 'st-b' : 'st-g'}`}>{c.paymentType}</span></td>
-              <td style={{ fontWeight: 600 }}>{formatCurrency(c.totalPrice)}</td>
-              <td style={{ color: 'var(--ok)', fontWeight: 600 }}>{formatCurrency(paid)}</td>
-              <td style={{ color: bal > 0 ? 'var(--err)' : 'var(--ok)', fontWeight: 600 }}>{formatCurrency(bal)}</td>
-              <td><StatusBadge status={c.status} /></td>
-              <td><StatusBadge status={c.installationStatus || 'Pending'} /></td>
-              <td><div style={{ display: 'flex', gap: 4 }}>
+              <td className="m-h"><strong>{c.name}</strong><br /><span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{c.phone}</span>{c.email && <><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{c.email}</span></>}</td>
+              <td data-l="Type" style={{ fontSize: '.82rem' }}>{c.customerType || '-'}</td>
+              <td data-l="kW">{c.kwRequired || '-'}</td>
+              <td data-l="Payment"><span className={`st ${c.paymentType === 'Finance' ? 'st-b' : 'st-g'}`}>{c.paymentType}</span></td>
+              <td data-l="Total" style={{ fontWeight: 600 }}>{formatCurrency(c.totalPrice)}</td>
+              <td data-l="Paid" style={{ color: 'var(--ok)', fontWeight: 600 }}>{formatCurrency(paid)}</td>
+              <td data-l="Balance" style={{ color: bal > 0 ? 'var(--err)' : 'var(--ok)', fontWeight: 600 }}>{formatCurrency(bal)}</td>
+              <td data-l="Status"><StatusBadge status={c.status} /></td>
+              <td data-l="Installation"><StatusBadge status={c.installationStatus || 'Pending'} /></td>
+              <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
                 <button className="btn bsm bo" title="View Details" onClick={() => setDetailId(c.id)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span>
                 </button>
@@ -139,20 +165,21 @@ export default function Customers() {
                 <button className="btn bsm bo" title="Completion Report" onClick={() => printCompletionReport(c, leadPOs, installations, leads)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>description</span>
                 </button>
-                <button className="btn bsm bo" title="Share Report via WhatsApp" onClick={() => shareCompletionReportWhatsApp(c, leadPOs, installations, leads)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
+                <button className="btn bsm bo" title="Share Report via WhatsApp" data-m="Share report" onClick={() => shareCompletionReportWhatsApp(c, leadPOs, installations, leads)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>share</span>
                 </button>
                 {c.nextServiceDate && c.phone && (
-                  <button className="btn bsm bo" title="Send Service Reminder" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)}>
+                  <button className="btn bsm bo" title="Send Service Reminder" data-m="Service reminder" onClick={() => sendWhatsApp(c.phone, `Hi ${c.name}, this is a reminder for your upcoming solar system service on ${formatDate(c.nextServiceDate)}. Please let us know if you need to reschedule. - Pragathi Solar`)}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>send</span>
                   </button>
                 )}
-                {canEdit && <button className="btn bsm bo" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                {canEditC(c) && <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: c, id: c.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                {isOwner && <button className="btn bsm bo" onClick={() => handleDeleteCustomer(c)} title="Delete (Owner only)" data-m="Delete" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
           );
         })}
-        {!filtered.length && <tr><td colSpan="10"><EmptyState icon="people" title="No customers yet" message="Convert leads or add customers directly." /></td></tr>}
+        {!filtered.length && <tr><td colSpan="10"><EmptyState icon="people" title={customers.length && !visible.length ? 'No customers assigned to you' : 'No customers yet'} message={customers.length && !visible.length ? 'You see the customers made from the leads assigned to you.' : 'Convert leads or add customers directly.'} /></td></tr>}
       </tbody></table></div>
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
       </div></div>
@@ -169,7 +196,9 @@ export default function Customers() {
 /* ============ CUSTOMER MODAL (ADD / EDIT) ============ */
 function CustomerModal({ data, id, onSave, onClose }) {
   const { leads, installations, leadPOs, users, settings, customers } = useData();
+  const { role, user } = useAuth();
   const { toast } = useToast();
+  const meName = user?.displayName || user?.email || '';
   // Live customer (so completing a stage in the Workflow tab unlocks the next tab
   // immediately); falls back to the passed snapshot for a brand-new customer.
   const liveCustomer = (id && customers.find(x => x.id === id)) || data;
@@ -190,7 +219,12 @@ function CustomerModal({ data, id, onSave, onClose }) {
   const pipeItem  = findItem('Conduit') || findItem('UPVC') || findItem('PVC Pipe');
 
   const [tab, setTab] = useState('info');
+  // RR1 (9-Oct): the customer can be picked from the Leads by name or phone;
+  // the lead's details fill the form. One way only - the lead is not changed.
+  const leadOptions = React.useMemo(() => leadPickerOptions(leads), [leads]);
+  const [pickedLead, setPickedLead] = useState(null);
   const [f, setF] = useState({
+    leadId: data.leadId || '',
     // Basic Info
     name: data.name || '', phone: data.phone || '', email: data.email || '',
     alternatePhone: data.alternatePhone || '', address: data.address || '',
@@ -305,28 +339,31 @@ function CustomerModal({ data, id, onSave, onClose }) {
     // Save installation data to installations collection
     try {
       const instData = { ...instF, progress: Math.min(100, Math.max(0, toNumber(instF.progress))), floors: toNumber(instF.floors), customerName: data.name || f.name, phone: data.phone || f.phone };
+      let instId = linkedInst?.id || '';
       if (linkedInst?.id) {
         await updateDocument('installations', linkedInst.id, instData);
       } else if (instData.customerName) {
-        await addDocument('installations', { ...instData, customerId: id || '' });
+        instId = await addDocument('installations', { ...instData, customerId: id || '' });
+      }
+      // The installation team → Stage 9 of the customer's workflow (Req 1.13).
+      if (id && instId && instData.teamLeader) {
+        await syncInstallationToCustomer({ customers, leads, leadPOs, inst: { ...(linkedInst || {}), ...instData, id: instId, customerId: id }, by: meName }).catch(() => {});
       }
     } catch (err) { toast('Installation save failed: ' + err.message, 'er'); }
     try { await onSave(f, id); } finally { setSaving(false); }
   };
 
-  const EDIT_TABS = [
-    ...(id ? [{ key: 'workflow', label: 'Workflow', icon: 'account_tree', color: '#7c3aed' }] : []),
-    { key: 'info',         label: 'Customer Info', icon: 'person',          color: '#3b82f6' },
-    { key: 'payment',      label: 'Payment',       icon: 'payments',        color: '#10b981' },
-    { key: 'dispatch',     label: 'Dispatch',      icon: 'local_shipping',  color: '#f59e0b' },
-    { key: 'installation', label: 'Installation',  icon: 'construction',    color: '#8b5cf6' },
-    { key: 'quality',      label: 'Quality',       icon: 'fact_check',      color: '#06b6d4' },
-    { key: 'warranty',     label: 'Warranty',      icon: 'verified_user',   color: '#059669' },
-    { key: 'subsidy',      label: 'Subsidy',       icon: 'savings',         color: '#d97706' },
-    { key: 'sync',         label: 'Sync & Flag',   icon: 'sync',            color: '#6366f1' },
-    { key: 'firstbill',    label: 'First Bill',    icon: 'receipt',         color: '#f43f5e' },
-    { key: 'om',           label: 'O&M',           icon: 'build_circle',    color: '#14b8a6' },
-  ];
+  // The eleven tabs (Quality is "Quality Inspection" now, Req 1.1); the
+  // Workflow tab only once the customer exists. A tab the Owner has closed to
+  // this person is not shown; a view-only one is shown with its fields disabled.
+  const gatingOn = settings?.workflowGatingEnabled !== false;
+  const liveLead = leads.find(l => l.id === (liveCustomer.leadId || f.leadId)) || ll || null;
+  const accessCtx = { customer: liveCustomer, lead: liveLead, user, role, users, settings };
+  const accessOf = (key) => (id ? tabAccess(key, accessCtx) : ACCESS.EDIT);
+  const EDIT_TABS = CUSTOMER_TABS.filter(t => (id || t.key !== 'workflow') && accessOf(t.key) !== ACCESS.NONE);
+  const isTabLocked = (key) => tabLockedFor(key, liveCustomer, role, gatingOn);
+  const viewOnly = tab !== 'workflow' && accessOf(tab) === ACCESS.VIEW;
+  const payProgress = paymentProgress({ ...liveCustomer, ...f });
 
   const tabStyle = (key, color) => ({
     padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
@@ -337,19 +374,13 @@ function CustomerModal({ data, id, onSave, onClose }) {
     cursor: 'pointer', whiteSpace: 'nowrap', transition: 'all .15s',
   });
 
-  // Sequential gating: a tab unlocks only once the workflow has reached its stage
-  // Admin can globally disable gating from Settings; default is enabled.
-  const gatingOn = settings?.workflowGatingEnabled !== false;
-  const gate = workflowGateLevel(liveCustomer);
-  const tabLocked = (key) => gatingOn && gate < (TAB_MIN_STAGE[key] || 0);
-
   return (
     <Modal title={id ? 'Edit Customer' : 'Add Customer'} onClose={onClose} wide>
       <form onSubmit={handleSubmit}>
         {/* Tab bar — later stages stay locked until the previous stage is completed */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16, padding: '4px 0' }}>
           {EDIT_TABS.map(t => {
-            const locked = tabLocked(t.key);
+            const locked = isTabLocked(t.key);
             return (
               <button
                 key={t.key} type="button" disabled={locked}
@@ -368,12 +399,30 @@ function CustomerModal({ data, id, onSave, onClose }) {
               Guard Enter so typing in a stage field doesn't submit the customer form. */}
           {tab === 'workflow' && id && (
             <div onKeyDown={e => { if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') e.preventDefault(); }}>
-              <WorkflowTab customer={liveCustomer} canEdit={true} />
+              <WorkflowTab customer={liveCustomer} canEdit={accessOf('workflow') === ACCESS.EDIT} />
             </div>
           )}
+          {viewOnly && (
+            <div style={{ fontSize: '.78rem', color: 'var(--muted)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span className="material-icons-round" style={{ fontSize: 16 }}>visibility</span> View only — the Owner has not given you edit access to this tab.
+            </div>
+          )}
+          <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
 
           {/* Tab 1: Customer Info */}
           {tab === 'info' && (<>
+            <div className="fg">
+              <label>Customer from Leads <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>search by the lead's name or phone - pick one to fill the details below</span></label>
+              <SearchSelect value="" options={[...leadOptions.keys()]} allowFree={false}
+                placeholder={leadOptions.size ? 'Search a lead by name or phone…' : 'No leads on file'}
+                emptyText="No matching lead" onChange={label => { const l = leadOptions.get(label); if (l) { setF(p => customerFromLead(p, l)); setPickedLead(l); } }} />
+              {pickedLead && (
+                <small style={{ display: 'block', marginTop: 4, color: 'var(--ok)' }}>
+                  <span className="material-icons-round" style={{ fontSize: 14, verticalAlign: '-2px' }}>link</span>{' '}
+                  Details taken from lead <strong>{pickedLead.name}</strong>{pickedLead.phone ? ` (${pickedLead.phone})` : ''}. The lead itself is not changed.
+                </small>
+              )}
+            </div>
             <div className="fr"><div className="fg"><label>Name *</label><input className="fi" value={f.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={f.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
             <div className="fr"><div className="fg"><label>Email</label><input type="email" className="fi" value={f.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Alternate Phone</label><input className="fi" value={f.alternatePhone} onChange={e => set('alternatePhone', e.target.value)} /></div></div>
             <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
@@ -405,6 +454,15 @@ function CustomerModal({ data, id, onSave, onClose }) {
                 </div>
               )}
 
+              {/* Where the payments stand against the agreed price: 90% releases
+                  the material (Stage 7), the full amount completes Stage 13. */}
+              {id && payProgress.agreed > 0 && (
+                <div style={{ fontSize: '.78rem', marginBottom: 10, color: payProgress.fullyPaid ? 'var(--ok)' : payProgress.releaseReached ? '#10b981' : 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span className="material-icons-round" style={{ fontSize: 16 }}>{payProgress.fullyPaid ? 'task_alt' : payProgress.releaseReached ? 'local_shipping' : 'hourglass_empty'}</span>
+                  {payProgress.percent}% of the agreed price received
+                  {payProgress.fullyPaid ? ' — fully paid; Stage 13 Final Payment completes on save.' : payProgress.releaseReached ? ' — 90% reached; Stage 7 Material Delivery Request completes on save once a PO is approved.' : ` — ${90 - payProgress.percent}% more releases the material (Stage 7).`}
+                </div>
+              )}
               {/* Live balance summary */}
               <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 16 }}>
                 <div style={{ background: 'rgba(26,58,122,.06)', borderRadius: 10, padding: '12px 14px', textAlign: 'center' }}>
@@ -576,6 +634,7 @@ function CustomerModal({ data, id, onSave, onClose }) {
             {f.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={f.referenceLeadName} onChange={e => set('referenceLeadName', e.target.value)} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={f.referencePhoneNumber} onChange={e => set('referencePhoneNumber', e.target.value)} /></div></div>}
             <div className="fg" style={{ marginTop: 8 }}><label>Customer Feedback</label><textarea className="fi" value={f.feedback} onChange={e => set('feedback', e.target.value)} rows="3" placeholder="Satisfaction notes..." /></div>
           </>)}
+          </fieldset>
         </div>
 
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : (id ? 'Update' : 'Add')}</button></div>
@@ -587,10 +646,13 @@ function CustomerModal({ data, id, onSave, onClose }) {
 /* ============ CUSTOMER DETAIL MODAL (10 TABS) ============ */
 function CustomerDetailModal({ customer, onClose, onEdit }) {
   const [tab, setTab] = useState('info');
-  const { leadPOs, leads, installations, users, settings } = useData();
-  const { role } = useAuth();
+  const { leadPOs, leads, installations, users, settings, customers } = useData();
+  const { role, user } = useAuth();
   const { toast } = useToast();
-  const canEdit = hasAccess(role, 'coordinator');
+  const leadById = leads.find(l => l.id === customer.leadId) || null;
+  const canEdit = canEditCustomer(customer, leadById, user, role, users, settings);
+  const detailCtx = { customer, lead: leadById, user, role, users, settings };
+  const meName = user?.displayName || user?.email || '';
 
   const blankInst = { customerName: customer.name, phone: customer.phone, address: customer.address || '',
     siteVisitStatus: 'Not Visited', roofType: 'RCC', floors: 1, structureType: 'Flat',
@@ -633,12 +695,17 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     setInstSaving(true);
     try {
       const data = { ...instF, progress: Math.min(100, Math.max(0, toNumber(instF.progress))), floors: toNumber(instF.floors) };
+      let instId = inst?.id || '';
       if (inst?.id) {
         await updateDocument('installations', inst.id, data);
         toast('Installation updated');
       } else {
-        await addDocument('installations', { ...data, customerId: c.id, customerName: c.name, phone: c.phone });
+        instId = await addDocument('installations', { ...data, customerId: c.id, customerName: c.name, phone: c.phone });
         toast('Installation record created');
+      }
+      // The installation team → Stage 9 of the customer's workflow (Req 1.13).
+      if (data.teamLeader) {
+        await syncInstallationToCustomer({ customers, leads, leadPOs, inst: { ...(inst || {}), ...data, id: instId, customerId: c.id }, by: meName }).catch(() => {});
       }
     } catch (err) { toast(err.message, 'er'); }
     setInstSaving(false);
@@ -663,11 +730,12 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
     { key: 'om',           label: 'Next O&M',         icon: 'build_circle',   color: '#14b8a6' },
   ];
 
-  // Sequential gating (same rule as the edit form) — later stages stay locked.
-  // Admin can globally disable gating from Settings; default is enabled.
+  // Sequential gating (same rule as the edit form) — later stages stay locked
+  // for everyone but the Owner and the Admin. Admin can globally disable gating
+  // from Settings; default is enabled. A tab closed to this person is not shown.
   const gatingOn = settings?.workflowGatingEnabled !== false;
-  const gate = workflowGateLevel(customer);
-  const tabLocked = (key) => gatingOn && gate < (TAB_MIN_STAGE[key] || 0);
+  const tabLocked = (key) => tabLockedFor(key, customer, role, gatingOn);
+  const visibleTabs = TABS.filter(t => tabAccess(t.key, detailCtx) !== ACCESS.NONE);
 
   const tabStyle = (key, color) => ({
     padding: '7px 12px', fontWeight: 600, fontSize: '.78rem', borderRadius: 20,
@@ -712,7 +780,7 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
 
         {/* Tab bar */}
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', padding: '12px 24px 0', borderBottom: '1px solid var(--bor)', paddingBottom: 12 }}>
-          {TABS.map(t => {
+          {visibleTabs.map(t => {
             const locked = tabLocked(t.key);
             return (
               <button
@@ -735,7 +803,7 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
         <div style={{ padding: 24, maxHeight: '65vh', overflowY: 'auto' }}>
 
           {/* ===== TAB: WORKFLOW (18-stage gated pipeline) ===== */}
-          {tab === 'workflow' && <WorkflowTab customer={c} canEdit={canEdit} />}
+          {tab === 'workflow' && <WorkflowTab customer={c} canEdit={canEdit && tabAccess('workflow', detailCtx) === ACCESS.EDIT} />}
 
           {/* ===== TAB 1: CUSTOMER INFO ===== */}
           {tab === 'info' && (
@@ -833,8 +901,8 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
                         <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{po.vendorName}</span>
                       </div>
                       <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-                        <button className="btn bsm bo" onClick={() => printBOM(po, linkedLead || c)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
-                        <button className="btn bsm bo" onClick={() => downloadBOM(po, linkedLead || c)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => printBOM(po)}><span className="material-icons-round" style={{ fontSize: 14 }}>print</span> BOM</button>
+                        <button className="btn bsm bo" onClick={() => downloadBOM(po)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 14 }}>download</span> BOM</button>
                       </div>
                     </div>
                     {(po.items || []).length > 0 && (
@@ -1401,13 +1469,5 @@ function shareCompletionReportWhatsApp(customer, leadPOs, installations, leads) 
     (customer.feedback ? '\n*Feedback:* ' + customer.feedback + '\n' : '') +
     '\n_Pragathi Power Solutions_';
 
-  let url;
-  if (customer.phone) {
-    const phone = customer.phone.replace(/\D/g, '');
-    url = 'https://wa.me/' + (phone.length === 10 ? '91' + phone : phone) + '?text=' + encodeURIComponent(msg);
-  } else {
-    url = 'https://wa.me/?text=' + encodeURIComponent(msg);
-  }
-  const win = window.open(url, '_blank');
-  if (!win) alert('Popup blocked — please allow popups for WhatsApp sharing.');
+  shareWhatsApp(customer.phone, msg);
 }

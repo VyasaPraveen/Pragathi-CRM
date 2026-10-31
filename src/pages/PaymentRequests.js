@@ -1,0 +1,492 @@
+import React, { useState, useMemo } from 'react';
+import { useData } from '../context/DataContext';
+import { useAuth } from '../context/AuthContext';
+import { useToast } from '../context/ToastContext';
+import { addDocument, updateDocument, deleteDocument, notifyAdmins, createNotification } from '../services/firestore';
+import { formatCurrency, formatDate, safeStr, toNumber, hasAccess, todayStr } from '../services/helpers';
+import { StatusBadge, Modal, EmptyState, DateInput , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import {
+  can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf, canSeePaymentRequest,
+  PR_CATEGORIES, PR_DIRECT_PAY_LIMIT, canDirectPayPr, ownerUsers,
+} from '../services/permissions';
+
+// Payment Request — the step-by-step approval & payment workflow:
+// Team Member → Generate Payment Request → their own Team Leader (Recommend
+// only) → final approval by ANY ONE of Operation Manager / Management / Admin /
+// Owner → Accountant (Payment Transfer) → Accountant (one-shot Work Proposal /
+// Pre-PO) → Admin / Management / Operation Manager (sign-off).
+// A Team Leader raising their own request skips the recommendation step, and
+// nobody may recommend or approve a request they raised themselves.
+const PAYMENT_MODES = ['Bank Transfer', 'UPI', 'Cash', 'Cheque', 'Card', 'Other'];
+const PAGE_SIZE = 20;
+
+// A payment request must say what the money is for, in words, before anybody
+// spends time on it — raising it, recommending it, approving it or paying it.
+// This applies to Payment Requests and to nothing else in the system:
+// expenditures, purchase orders and leave all keep their optional notes.
+export const NOTE_REQUIRED_MESSAGE = 'A Note is required on a payment request — say what this payment is for.';
+export const hasPrNote = (pr) => String((pr && pr.notes) || '').trim().length > 0;
+
+// Who may reject: whoever owns the stage the request is sitting on — and never
+// the person who raised it.
+const canRejectPr = (pr, user, role, users) => {
+  const stage = nextPrStage(pr.status, pr, users);
+  return !!stage && canTakePrStage(stage, pr, user, role, users);
+};
+
+// A payment request's day for the Day / Month filter: when it was raised.
+const PR_DATE_FIELDS = ['requestedDate', 'createdAt'];
+
+export default function PaymentRequests() {
+  const { paymentRequests, users } = useData();
+  const { role, user } = useAuth();
+  const { toast } = useToast();
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [modal, setModal] = useState(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  // The Day / Month filter (R15) — asked for here above all, because the list
+  // keeps growing and a request from last month is hard to find.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
+
+  const canRequest = can(role, ACTIONS.PR_CREATE);
+  const me = user?.displayName || user?.email || 'unknown';
+  // The Team Leader this request has to go to, from the team structure.
+  const myLeaderEmail = leaderOf(users, user?.email);
+  const myLeader = (users || []).find(u => String(u.email || '').toLowerCase() === myLeaderEmail);
+  const iAmMyOwnLeader = !!myLeaderEmail && myLeaderEmail === String(user?.email || '').toLowerCase();
+  const needsRecommendation = !!myLeaderEmail && !iAmMyOwnLeader;
+
+  // Hand the request to whoever must act on the given stage — this is how it
+  // "moves to" the next person in the chain.
+  const notifyActors = (action, label, pr) => {
+    const seen = new Set();
+    (users || []).forEach(u => {
+      if (u.role === 'super_admin') return; // owner already gets admin-level notices
+      if (!can(u.role, action)) return;
+      const key = u.displayName || u.email;
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      createNotification({
+        forUser: key,
+        title: `Payment Request needs your ${label}`,
+        message: `"${pr.purpose || ''}" (${formatCurrency(pr.amount)}) raised by ${pr.requestedByName || pr.requestedBy || 'a team member'} is awaiting your ${label.toLowerCase()}`,
+        type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+      });
+    });
+  };
+
+  // Operation Manager, Management, Admin and Owner see every request from the
+  // moment it is raised, so nothing sits unnoticed.
+  const notifyConcerned = (pr) => {
+    const seen = new Set();
+    (users || []).forEach(u => {
+      if (!['operation_manager', 'management', 'admin', 'super_admin'].includes(u.role)) return;
+      const key = u.displayName || u.email;
+      if (!key || seen.has(key) || key === me) return;
+      seen.add(key);
+      createNotification({
+        forUser: key,
+        title: 'New Payment Request raised',
+        message: `${pr.requestedByName || me} raised "${pr.purpose || ''}" (${formatCurrency(pr.amount)})${pr.teamLeaderName ? ` — with ${pr.teamLeaderName} for recommendation` : ' — awaiting final approval'}`,
+        type: 'info', module: 'paymentRequests', relatedId: pr.id,
+      });
+    });
+  };
+
+  const statuses = ['all', PR_STATUS.REQUESTED, PR_STATUS.RECOMMENDED, PR_STATUS.APPROVED, PR_STATUS.PAID, PR_STATUS.PROPOSAL_SUBMITTED, PR_STATUS.CLOSED, PR_STATUS.REJECTED];
+
+  // A payment request is only shown to the people who have a part in it: the
+  // person who raised it, their Team Leader, the approving authorities and the
+  // Accountant who pays it. It used to be on screen for everybody.
+  const visibleRequests = useMemo(
+    () => (paymentRequests || []).filter(pr => canSeePaymentRequest(pr, user, role, users)),
+    [paymentRequests, user, role, users]);
+
+  let filtered = filter === 'all' ? visibleRequests : visibleRequests.filter(x => x.status === filter);
+  if (search) {
+    const q = search.toLowerCase();
+    filtered = filtered.filter(x =>
+      safeStr(x.purpose).toLowerCase().includes(q) ||
+      safeStr(x.payTo).toLowerCase().includes(q) ||
+      safeStr(x.requestedByName).toLowerCase().includes(q) ||
+      safeStr(x.requestedBy).toLowerCase().includes(q)
+    );
+  }
+  filtered = applyDateFilter(filtered, dateFilter, PR_DATE_FIELDS);
+
+  const summary = useMemo(() => {
+    const s = { total: 0, pending: 0, approved: 0, paid: 0 };
+    visibleRequests.forEach(x => {
+      const amt = toNumber(x.amount);
+      s.total += amt;
+      if (x.status === PR_STATUS.REJECTED) return;
+      if ([PR_STATUS.PAID, PR_STATUS.PROPOSAL_SUBMITTED, PR_STATUS.CLOSED].includes(x.status)) s.paid += amt;
+      else if (x.status === PR_STATUS.APPROVED) s.approved += amt;
+      else s.pending += amt;
+    });
+    return s;
+  }, [visibleRequests]);
+
+  const displayed = filtered.slice(0, visibleCount);
+  const hasMore = filtered.length > visibleCount;
+
+  const handleSave = async (data, id) => {
+    try {
+      const cleaned = { ...data, amount: toNumber(data.amount) };
+      if (id) {
+        await updateDocument('paymentRequests', id, cleaned);
+        toast('Payment request updated');
+      } else {
+        cleaned.status = PR_STATUS.REQUESTED;
+        cleaned.requestedBy = user?.email || 'unknown';
+        cleaned.requestedByName = me;
+        cleaned.requestedDate = new Date().toISOString();
+        // The server decides these from the team structure on file; sent here so
+        // the row reads correctly straight away.
+        cleaned.teamLeaderEmail = needsRecommendation ? myLeaderEmail : '';
+        cleaned.teamLeaderName = needsRecommendation ? (myLeader?.displayName || myLeaderEmail) : '';
+        cleaned.needsRecommendation = needsRecommendation;
+        const newId = await addDocument('paymentRequests', cleaned);
+        const full = { ...cleaned, id: newId };
+        // Everyone concerned is told as soon as it is raised: the requester's own
+        // Team Leader, plus Operation Manager, Management, Admin and the Owner.
+        notifyConcerned(full);
+        if (needsRecommendation && myLeader) {
+          createNotification({
+            forUser: myLeader.displayName || myLeader.email,
+            title: 'Payment Request needs your recommendation',
+            message: `${me} raised "${cleaned.purpose || ''}" (${formatCurrency(cleaned.amount)}) — you are their Team Leader.`,
+            type: 'status_update', module: 'paymentRequests', relatedId: newId,
+          });
+        }
+        if (needsRecommendation && myLeader) {
+          createNotification({
+            forUser: myLeader.displayName || myLeader.email,
+            title: 'Payment Request needs your Recommendation',
+            message: `${me} raised "${cleaned.purpose}" (${formatCurrency(cleaned.amount)}). You are their Team Leader — please recommend it.`,
+            type: 'status_update', module: 'paymentRequests', relatedId: newId,
+          });
+        } else {
+          // No recommendation due — it goes straight for final approval.
+          notifyActors(ACTIONS.PR_APPROVE, 'Final Approval', full);
+        }
+        toast(needsRecommendation ? 'Payment request sent to your Team Leader' : 'Payment request sent for final approval');
+      }
+      setModal(null);
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
+  const advanceStage = async (pr) => {
+    const stage = nextPrStage(pr.status, pr, users);
+    if (!stage) return;
+    // Requests raised before the Note became compulsory can still be rejected,
+    // but they cannot be moved forward until somebody says what they are for.
+    if (!hasPrNote(pr)) { toast(NOTE_REQUIRED_MESSAGE + ' Edit the request and add one.', 'er'); return; }
+    if (isOwnRequest(pr, user)) { toast('You cannot act on your own payment request', 'er'); return; }
+    if (!canTakePrStage(stage, pr, user, role, users)) { toast(`You are not authorised to ${stage.label.toLowerCase()}`, 'er'); return; }
+    const extra = {};
+
+    if (stage.to === PR_STATUS.PAID) {
+      const ref = window.prompt('Payment transfer reference / transaction no.:', '');
+      if (ref === null) return;                    // cancelled
+      if (!ref.trim()) { toast('A payment reference is required', 'er'); return; }
+      extra.paymentRef = ref.trim();
+    } else if (stage.to === PR_STATUS.PROPOSAL_SUBMITTED) {
+      const ref = window.prompt('Work Proposal / Pre-PO reference (one-shot, after payment):', '');
+      if (ref === null) return;
+      if (!ref.trim()) { toast('A Work Proposal / Pre-PO reference is required', 'er'); return; }
+      extra.proposalRef = ref.trim();
+    } else if (!window.confirm(`${stage.label} this payment request?`)) {
+      return;
+    }
+
+    try {
+      await updateDocument('paymentRequests', pr.id, {
+        status: stage.to,
+        [stage.field]: me,
+        [stage.field + 'Date']: new Date().toISOString(),
+        ...extra,
+      });
+      // Keep the requester informed as their request moves along the chain.
+      if (pr.requestedBy && pr.requestedBy !== user?.email) {
+        createNotification({
+          forUser: pr.requestedByName || pr.requestedBy,
+          title: `Payment Request ${stage.to}`,
+          message: `Your payment request "${pr.purpose || ''}" (${formatCurrency(pr.amount)}) is now ${stage.to}${extra.paymentRef ? ' · Ref: ' + extra.paymentRef : ''}`,
+          type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+        });
+      }
+      const next = nextPrStage(stage.to, pr, users);
+      if (next) notifyActors(next.action, next.label, pr);
+      else notifyAdmins(users, { title: 'Payment Request Closed', message: `"${pr.purpose || ''}" — ${formatCurrency(pr.amount)} is fully closed`, type: 'status_update', module: 'paymentRequests', relatedId: pr.id });
+      toast(`Payment request ${stage.to.toLowerCase()}`);
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
+  // Below Rs.1,000 the Accountant pays straight away, without the approval
+  // step, and the Owner is told — in so many words — that it was paid that
+  // way. The server applies the same limit, so this cannot be reached for a
+  // larger amount by any other route. At Rs.1,000 and above nothing changes.
+  const directPay = async (pr) => {
+    if (!canDirectPayPr(pr, user, role)) { toast('This request cannot be paid directly', 'er'); return; }
+    if (!hasPrNote(pr)) { toast(NOTE_REQUIRED_MESSAGE + ' Edit the request and add one.', 'er'); return; }
+    const limit = '₹' + PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN');
+    const ref = window.prompt(`Pay ${formatCurrency(pr.amount)} directly — below ${limit}, no approval step.\nPayment transfer reference / transaction no.:`, '');
+    if (ref === null) return;
+    if (!ref.trim()) { toast('A payment reference is required', 'er'); return; }
+    try {
+      await updateDocument('paymentRequests', pr.id, {
+        status: PR_STATUS.PAID, paidBy: me, paidByDate: new Date().toISOString(), paymentRef: ref.trim(),
+        directPayment: true,
+        directPaymentRule: `Below ${limit} — paid directly by the Accountant without the approval step`,
+      });
+      const who = pr.requestedByName || pr.requestedBy || 'a team member';
+      // The mandatory notice to the Owner.
+      ownerUsers(users).forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: `Direct payment by the Accountant (below ${limit})`,
+        message: `${me} paid "${pr.purpose || ''}" (${formatCurrency(pr.amount)}${pr.category ? ', ' + pr.category : ''}) raised by ${who} DIRECTLY, without the approval step, under the below-${limit} rule. Ref: ${ref.trim()}.`,
+        type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+      }));
+      if (pr.requestedBy && pr.requestedBy !== user?.email) {
+        createNotification({
+          forUser: pr.requestedByName || pr.requestedBy,
+          title: 'Payment Request Paid',
+          message: `Your payment request "${pr.purpose || ''}" (${formatCurrency(pr.amount)}) was paid directly by the Accountant (below ${limit}) · Ref: ${ref.trim()}`,
+          type: 'status_update', module: 'paymentRequests', relatedId: pr.id,
+        });
+      }
+      // The rest of the chain carries on as it always has.
+      const next = nextPrStage(PR_STATUS.PAID, pr, users);
+      if (next) notifyActors(next.action, next.label, pr);
+      toast('Paid directly — the Owner has been notified');
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
+  const rejectRequest = async (pr) => {
+    if (isOwnRequest(pr, user)) { toast('You cannot reject your own payment request', 'er'); return; }
+    if (!window.confirm('Reject this payment request? This stops the approval chain.')) return;
+    try {
+      await updateDocument('paymentRequests', pr.id, {
+        status: PR_STATUS.REJECTED,
+        rejectedBy: me,
+        rejectedDate: new Date().toISOString(),
+      });
+      if (pr.requestedBy && pr.requestedBy !== user?.email) {
+        createNotification({ forUser: pr.requestedByName || pr.requestedBy, title: 'Payment Request Rejected', message: `Your payment request "${pr.purpose || ''}" (${formatCurrency(pr.amount)}) was rejected by ${me}`, type: 'status_update', module: 'paymentRequests', relatedId: pr.id });
+      }
+      toast('Payment request rejected', 'er');
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
+  const handleDelete = async (id) => {
+    if (!window.confirm('Delete this payment request permanently?')) return;
+    try { await deleteDocument('paymentRequests', id); toast('Payment request deleted'); }
+    catch (e) { toast(e.message, 'er'); }
+  };
+
+  // What has happened and what it is waiting on — shown on every row so the
+  // requester can always see exactly where their request has stopped.
+  const trail = (pr) => {
+    const p = prProgress(pr, users);
+    return (
+      <>
+        {p.done.map(d => (
+          <div key={d.label} style={{ whiteSpace: 'nowrap' }}>
+            <span className="material-icons-round" style={{ fontSize: 13, color: 'var(--ok)', verticalAlign: 'middle' }}>check_circle</span>{' '}
+            {d.label} by <strong>{d.by}</strong>{d.date ? ` · ${formatDate(d.date)}` : ''}
+          </div>
+        ))}
+        {p.rejected && <div style={{ color: 'var(--err)' }}>Rejected by <strong>{p.rejectedBy || '-'}</strong></div>}
+        {!p.rejected && p.waitingOn && (
+          <div style={{ color: '#e8830c' }}>
+            <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: 'middle' }}>hourglass_top</span>{' '}
+            Pending with <strong>{p.waitingOn}</strong>
+          </div>
+        )}
+        {!p.rejected && !p.waitingOn && !p.done.length && <span style={{ color: 'var(--muted)' }}>Just raised</span>}
+        {!p.rejected && !p.waitingOn && !!p.done.length && <div style={{ color: 'var(--ok)' }}>Completed</div>}
+      </>
+    );
+  };
+
+  return (
+    <>
+      <div className="tl">
+        <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search payment requests..." value={search} onChange={e => setSearch(e.target.value)} /></div>
+        <div className="tl-r">
+          <div className="chips">
+            {statuses.map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
+          </div>
+          {canRequest && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Generate Payment Request</button>}
+        </div>
+      </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={visibleRequests} fields={PR_DATE_FIELDS} /></div>
+
+      {/* Summary */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(150px,1fr))', gap: 12, marginBottom: 16 }}>
+        {[
+          ['Total Requested', summary.total, 'request_quote', 'var(--pri)'],
+          ['In Approval', summary.pending, 'hourglass_top', '#e8830c'],
+          ['Approved (to pay)', summary.approved, 'verified', '#6c5ce7'],
+          ['Transferred', summary.paid, 'payments', '#27ae60'],
+        ].map(([label, val, icon, color]) => (
+          <div className="card" key={label}><div className="cb" style={{ textAlign: 'center', padding: '14px 10px' }}>
+            <span className="material-icons-round" style={{ fontSize: 26, color, display: 'block', marginBottom: 4 }}>{icon}</span>
+            <div style={{ fontSize: '1.15rem', fontWeight: 700 }}>{formatCurrency(val)}</div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{label}</div>
+          </div></div>
+        ))}
+      </div>
+
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
+        <th>Payment For</th><th>Amount</th><th>Requested By</th><th>Date</th><th>Status</th><th>Progress</th><th style={{ textAlign: 'right' }}>Actions</th>
+      </tr></thead><tbody>
+        {displayed.map(pr => {
+          const stage = nextPrStage(pr.status, pr, users);
+          const canAct = canTakePrStage(stage, pr, user, role, users);
+          const isOwner = isOwnRequest(pr, user);
+          return (
+            <tr key={pr.id}>
+              <td className="m-h">
+                <strong>{pr.purpose || '-'}</strong>
+                {pr.category && (
+                  <span style={{ marginLeft: 6, fontSize: '.68rem', fontWeight: 700, color: 'var(--pri)', background: 'rgba(26,58,122,.08)', borderRadius: 10, padding: '1px 7px', verticalAlign: '1px' }}>{pr.category}</span>
+                )}
+                {pr.directPayment && (
+                  <span title={pr.directPaymentRule || ''} style={{ marginLeft: 6, fontSize: '.68rem', fontWeight: 700, color: '#1e8449', background: 'rgba(39,174,96,.1)', borderRadius: 10, padding: '1px 7px', verticalAlign: '1px' }}>Paid directly</span>
+                )}
+                <br />
+                <span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>
+                  {pr.payTo ? pr.payTo + ' · ' : ''}{pr.paymentMode ? pr.paymentMode : ''}{pr.paymentRef ? ' · Ref ' + pr.paymentRef : ''}{pr.proposalRef ? ' · Proposal ' + pr.proposalRef : ''}
+                </span>
+                {/* The Note is what an approver needs to decide, so it is on the
+                    row rather than hidden behind an edit. A request raised
+                    before the Note was compulsory says so, because until one is
+                    added it cannot be moved on. */}
+                {hasPrNote(pr)
+                  ? <div style={{ fontSize: '.76rem', marginTop: 3, color: 'var(--dark)' }}>
+                      <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: '-2px', color: 'var(--muted)' }}>sticky_note_2</span>{' '}
+                      {pr.notes}
+                    </div>
+                  : <div style={{ fontSize: '.74rem', marginTop: 3, color: '#c0392b' }}>No Note — cannot be approved until one is added</div>}
+              </td>
+              <td data-l="Amount" style={{ fontWeight: 700 }}>{formatCurrency(pr.amount)}</td>
+              <td data-l="Requested by" style={{ fontSize: '.82rem' }}>{pr.requestedByName || pr.requestedBy || '-'}</td>
+              <td data-l="Date" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{formatDate(pr.requestedDate)}</td>
+              <td data-l="Status"><StatusBadge status={pr.status} /></td>
+              <td data-l="Progress" style={{ fontSize: '.74rem', color: 'var(--muted)', minWidth: 200, lineHeight: 1.6 }}>{trail(pr)}</td>
+              <td className="m-a" style={{ textAlign: 'right' }}>
+                <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+                  {canAct && (
+                    <button className="btn bsm bp" data-m="" onClick={() => advanceStage(pr)} title={`${stage.label} (${stage.by})`} style={{ padding: '4px 10px', fontSize: '.78rem' }}>
+                      <span className="material-icons-round" style={{ fontSize: 15 }}>arrow_forward</span> {stage.label}
+                    </button>
+                  )}
+                  {/* The Accountant's shortcut for small amounts; the ordinary
+                      approval buttons stay beside it for everyone else. */}
+                  {canDirectPayPr(pr, user, role) && (
+                    <button className="btn bsm bo" data-m="" onClick={() => directPay(pr)} title={`Below ₹${PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN')} — pay now without waiting for approval; the Owner is notified`}
+                      style={{ padding: '4px 10px', fontSize: '.78rem', color: '#1e8449', borderColor: 'rgba(39,174,96,.4)' }}>
+                      <span className="material-icons-round" style={{ fontSize: 15 }}>bolt</span> Pay Directly
+                    </button>
+                  )}
+                  {pr.status !== PR_STATUS.CLOSED && pr.status !== PR_STATUS.REJECTED && canRejectPr(pr, user, role, users) && (
+                    <button className="btn bsm bo" onClick={() => rejectRequest(pr)} title="Reject" style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+                      <span className="material-icons-round" style={{ fontSize: 15 }}>block</span>
+                    </button>
+                  )}
+                  {((pr.status === PR_STATUS.REQUESTED && isOwner) || hasAccess(role, 'admin')) && (
+                    <button className="btn bsm bo" onClick={() => setModal({ data: pr, id: pr.id })} title="Edit" style={{ padding: '4px 8px', fontSize: '.78rem' }}>
+                      <span className="material-icons-round" style={{ fontSize: 15 }}>edit</span>
+                    </button>
+                  )}
+                  {hasAccess(role, 'admin') && (
+                    <button className="btn bsm bo" onClick={() => handleDelete(pr.id)} title="Delete" style={{ padding: '4px 8px', fontSize: '.78rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+                      <span className="material-icons-round" style={{ fontSize: 15 }}>delete</span>
+                    </button>
+                  )}
+                </div>
+              </td>
+            </tr>
+          );
+        })}
+        {!filtered.length && <tr><td colSpan="7"><EmptyState icon="request_quote" title="No payment requests" message={canRequest ? 'Use “Generate Payment Request” to raise one.' : 'No payment requests yet.'} /></td></tr>}
+      </tbody></table></div>
+      {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
+      </div></div>
+
+      {/* Workflow legend — the official order of the stages */}
+      <div className="card" style={{ marginTop: 12 }}><div className="cb">
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', fontSize: '.76rem', color: 'var(--muted)' }}>
+          <span className="material-icons-round" style={{ fontSize: 15 }}>info</span>
+          <strong>Flow:</strong> Team Member generates the request
+          {PR_STAGES.map(s => <span key={s.to}>→ {s.label} ({s.by})</span>)}
+          · final approval needs any ONE of Operation Manager / Management / Admin / Owner.
+          A Team Leader&rsquo;s own request skips the recommendation step, and nobody can
+          recommend or approve a request they raised themselves.
+          Below &#8377;{PR_DIRECT_PAY_LIMIT.toLocaleString('en-IN')} the Accountant may pay directly without the approval step; the Owner is notified of every such payment.
+        </div>
+      </div></div>
+
+      {modal && <PRModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
+    </>
+  );
+}
+
+/* ── Generate / Edit Payment Request ── */
+function PRModal({ data, id, onSave, onClose }) {
+  const { toast } = useToast();
+  const [saving, setSaving] = useState(false);
+  const [f, setF] = useState({
+    purpose: data.purpose || '',
+    category: data.category || PR_CATEGORIES[0],
+    amount: data.amount || '',
+    paymentMode: data.paymentMode || PAYMENT_MODES[0],
+    neededBy: data.neededBy || todayStr(),
+    notes: data.notes || '',
+  });
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    if (!f.purpose.trim()) { toast('Payment For is required', 'er'); return; }
+    if (toNumber(f.amount) <= 0) { toast('Enter a valid amount', 'er'); return; }
+    if (!f.notes.trim()) { toast(NOTE_REQUIRED_MESSAGE, 'er'); return; }
+    setSaving(true);
+    try { await onSave(f, id); } finally { setSaving(false); }
+  };
+
+  return (
+    <Modal title={id ? 'Edit Payment Request' : 'Generate Payment Request'} onClose={onClose}>
+      <form onSubmit={submit}>
+        <div className="mb">
+          <div className="fg"><label>Payment For *</label><input className="fi" value={f.purpose} onChange={e => set('purpose', e.target.value)} placeholder="e.g. Module transport charges — Tirupati site" required /></div>
+          <div className="fg"><label>Category *</label>
+            <select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>
+              {PR_CATEGORIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+          </div>
+          <div className="fr">
+            <div className="fg"><label>Amount (₹) *</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} min="1" required /></div>
+            <div className="fg"><label>Payment Mode</label><select className="fi" value={f.paymentMode} onChange={e => set('paymentMode', e.target.value)}>{PAYMENT_MODES.map(m => <option key={m}>{m}</option>)}</select></div>
+          </div>
+          <div className="fg"><label>Required By</label><DateInput value={f.neededBy} onChange={e => set('neededBy', e.target.value)} /></div>
+          <div className="fg">
+            <label>Note *</label>
+            <textarea className="fi" value={f.notes} onChange={e => set('notes', e.target.value)} rows="2" required
+              placeholder="What is this payment for? The approvers cannot act on a request without this." />
+            {!f.notes.trim() && <div style={{ fontSize: '.74rem', color: '#c0392b', marginTop: 3 }}>{NOTE_REQUIRED_MESSAGE}</div>}
+          </div>
+        </div>
+        <div className="mf">
+          <button type="button" className="btn bo" onClick={onClose}>Cancel</button>
+          <button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : (id ? 'Update' : 'Generate Request')}</button>
+        </div>
+      </form>
+    </Modal>
+  );
+}

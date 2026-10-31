@@ -2,11 +2,76 @@ export function formatCurrency(n) {
   return n == null || isNaN(n) ? '₹0' : '₹' + Number(n).toLocaleString('en-IN');
 }
 
+// All dates display as day, month name, year ("28 Oct 2026") across the app.
+//
+// A value that carries a time — an ISO timestamp such as approvedAt or a
+// notification's createdAt — is shown with that time as well, in Indian
+// Standard Time: "02 Oct 2026 11:39 PM". A plain calendar date (a leave date,
+// a PO date, "2026-10-02") stays a date. The distinction is made on the value
+// itself, so every screen that shows an activity gets its time without each
+// one being changed by hand.
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+// "02 Oct 2026": the day two digits wide so columns of dates line up.
+const dmy = (day, month, year) => `${String(day).padStart(2, '0')} ${MONTHS[Number(month) - 1] || month} ${year}`;
+const IST = 'Asia/Kolkata';
+
+function istParts(dt) {
+  // One formatter call, read back as parts, so the day and the clock agree.
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    timeZone: IST, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', hour12: true,
+  }).formatToParts(dt);
+  const get = (t) => (parts.find(p => p.type === t) || {}).value || '';
+  return {
+    date: dmy(get('day'), get('month'), get('year')),
+    time: `${get('hour')}:${get('minute')} ${get('dayPeriod').toUpperCase()}`.replace(/\s+/g, ' ').trim(),
+  };
+}
+
 export function formatDate(d) {
   if (!d) return '-';
+  if (typeof d === 'string' && DATE_ONLY.test(d.trim())) {
+    const [y, m, day] = d.trim().split('-');
+    return dmy(day, m, y);
+  }
   const dt = d.toDate ? d.toDate() : new Date(d);
-  return isNaN(dt) ? String(d) : dt.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+  if (isNaN(dt)) return String(d);
+  // A string with a clock in it, or a Date that is not exactly midnight, is a
+  // moment in time rather than a day, and is shown as one.
+  const timed = typeof d === 'string'
+    ? /[T ]\d{1,2}:\d{2}/.test(d)
+    : (dt.getHours() + dt.getMinutes() + dt.getSeconds()) !== 0 || !!d.toDate;
+  if (!timed) {
+    return dmy(dt.getDate(), dt.getMonth() + 1, dt.getFullYear());
+  }
+  const p = istParts(dt);
+  return `${p.date} ${p.time}`;
 }
+
+// Always the date and the IST time, whatever the value looks like.
+export function formatDateTime(d) {
+  if (!d) return '-';
+  const dt = d.toDate ? d.toDate() : new Date(d);
+  if (isNaN(dt)) return String(d);
+  const p = istParts(dt);
+  return `${p.date} ${p.time}`;
+}
+
+// Today's date as YYYY-MM-DD, on the calendar the employee is actually living
+// on. toISOString() gives the UTC day, and India runs 5:30 ahead of UTC, so
+// between midnight and 05:30 the UTC day is still yesterday — an early-morning
+// site check-in was being filed against the previous day, leaving that day with
+// a check-in and no check-out, and the real day with only a check-out. The same
+// slip dated leave, purchase orders, expenditures and follow-ups a day early.
+export function todayStr(d = new Date()) {
+  const dt = d instanceof Date ? d : new Date(d);
+  if (isNaN(dt)) return '';
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+}
+
+// The YYYY-MM key the dashboard and My Reports group by.
+export const thisMonthStr = (d = new Date()) => todayStr(d).slice(0, 7);
 
 export function getInitials(name) {
   return name ? name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2) : '?';
@@ -17,13 +82,73 @@ export function escapeHtml(str) {
   return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
+// An Indian mobile number as WhatsApp wants it: 91 followed by the ten-digit
+// subscriber number, or '' when there are not ten digits to work with. The
+// last ten digits are taken, so a leading 0, a +91, or both, are all fine.
+export function indianWhatsAppNumber(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (digits.length < 10) return '';
+  return '91' + digits.slice(-10);
+}
+
+// Why a number cannot be used for WhatsApp, in words — or '' when it can.
+// Indian mobiles are ten digits starting 6–9; the last ten digits are what
+// count, so a leading 0 or +91 is fine (28-Oct, Req 3).
+export function indianMobileIssue(phone) {
+  const raw = String(phone || '').trim();
+  const digits = raw.replace(/\D/g, '');
+  if (!digits) return 'This record has no mobile number.';
+  if (digits.length < 10) return `"${raw}" is not a 10-digit mobile number — correct it on the record first.`;
+  const ten = digits.slice(-10);
+  if (!/^[6-9]/.test(ten)) return `"${raw}" is not an Indian mobile number (mobiles start with 6, 7, 8 or 9) — WhatsApp cannot open it.`;
+  return '';
+}
+// The wa.me link: with the number when it is usable, otherwise the
+// "pick a contact" form so the text is not lost.
+export function whatsAppUrl(phone, msg) {
+  const num = indianMobileIssue(phone) ? '' : indianWhatsAppNumber(phone);
+  return 'https://wa.me/' + (num ? num : '') + '?text=' + encodeURIComponent(msg || '');
+}
+// A message for the person from code that has no toast hook (the app's
+// ToastProvider listens for this). Falls back to alert() outside the app.
+export function notify(message, type = 'er') {
+  try {
+    if (typeof window !== 'undefined' && window.__ppsToast) { window.__ppsToast(message, type); return; }
+  } catch (e) { /* fall through */ }
+  if (typeof alert === 'function') alert(message);
+}
+// Open a link in a new tab the way a tapped link does: an anchor click from
+// the user's gesture is never treated as a popup (window.open sometimes was,
+// and on a phone the installed app got a blank "popup blocked" alert).
+export function openExternal(url) {
+  try {
+    const a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 0);
+    return true;
+  } catch (e) {
+    const w = window.open(url, '_blank');
+    if (!w) notify('Could not open WhatsApp — allow pop-ups for this site and try again.');
+    return !!w;
+  }
+}
+
+// A chat with this one number: refused, with the reason, when the number is
+// not usable, so WhatsApp never opens on a number it does not know.
 export function sendWhatsApp(phone, msg) {
-  if (!phone) return;
-  const cleaned = String(phone).replace(/\D/g, '');
-  if (cleaned.length < 10) return;
-  const num = cleaned.length === 10 ? '91' + cleaned : cleaned;
-  const w = window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  if (!w) alert('Popup blocked — please allow popups for WhatsApp sharing.');
+  const issue = indianMobileIssue(phone);
+  if (issue) { notify(issue); return false; }
+  return openExternal(whatsAppUrl(phone, msg));
+}
+// A share: with the number when it is usable; when a number is there but
+// unusable the person is told, and WhatsApp opens on its contact list so the
+// text can still be sent to the right person.
+export function shareWhatsApp(phone, msg) {
+  const issue = String(phone || '').trim() ? indianMobileIssue(phone) : '';
+  if (issue) notify(issue + ' WhatsApp will open on your contacts instead — pick the person there.', 'warn');
+  return openExternal(whatsAppUrl(phone, msg));
 }
 
 export const statusClass = (s) => {
@@ -39,7 +164,16 @@ export const statusClass = (s) => {
     'Dealer': 'st-b', 'Distributor': 'st-p', 'Channel Partner': 'st-o',
     'Overdue': 'st-r', 'High': 'st-r', 'Medium': 'st-o', 'Low': 'st-g',
     'Inactive': 'st-x',
-    'Unapproved': 'st-o', 'Recommended': 'st-b'
+    'Unapproved': 'st-o', 'Recommended': 'st-b',
+    'Requested': 'st-o', 'Verified': 'st-b', 'Management Approved': 'st-p',
+    'Proposal Submitted': 'st-b', 'Closed': 'st-g',
+    'Awaiting Replacement': 'st-o', 'Awaiting Manager': 'st-b',
+    // Quotation workflow
+    'Pending Approval': 'st-o', 'Shared with Customer': 'st-b',
+    'Accepted': 'st-g', 'Not Accepted': 'st-r', 'Pending Follow-up': 'st-o',
+    // The stock ledger (10-Oct)
+    'Pending Review': 'st-o', 'Forwarded to Owner': 'st-b', 'Applied': 'st-g',
+    'Low Stock': 'st-r', 'Good': 'st-g',
   };
   return m[s] || 'st-x';
 };
@@ -68,9 +202,21 @@ export const priorityClass = (p) => {
   return m[p] || 'st-x';
 };
 
-// Role hierarchy levels — higher number = more access
+// Role hierarchy levels — higher number = more access.
+// The 9 business roles sit alongside the legacy roles (kept for backward
+// compatibility with existing user documents). See permissions.js for the
+// action-level matrix that governs specific workflow steps.
 export const ROLE_LEVELS = {
-  super_admin: 6, admin: 5, manager: 4, coordinator: 3, engineer: 2, staff: 1
+  super_admin: 7,
+  management: 6,
+  admin: 5,
+  // Manager-tier (level 4)
+  manager: 4, operation_manager: 4, technical_manager: 4, sales_manager: 4, warehouse_admin: 4,
+  // Coordinator-tier (level 3)
+  coordinator: 3, accountant: 3, bco: 3, team_leader: 3,
+  // Field/operational-tier (level 2)
+  engineer: 2, executive: 2, technician: 2,
+  staff: 1
 };
 
 // Check if user's role meets minimum required access level
@@ -78,26 +224,57 @@ export function hasAccess(userRole, minRole) {
   return (ROLE_LEVELS[userRole] || 0) >= (ROLE_LEVELS[minRole] || 0);
 }
 
-// Designations config — maps display titles to access levels (role)
+// Designations config — the 9 official roles (+ Super Admin owner account).
+// Each maps to its canonical role key used throughout the app.
 export const DESIGNATIONS = [
   { label: 'Super Admin', role: 'super_admin' },
+  { label: 'Management', role: 'management' },
   { label: 'Admin', role: 'admin' },
-  { label: 'Technical Manager', role: 'manager' },
-  { label: 'Operations Manager', role: 'manager' },
-  { label: 'Sales Manager', role: 'manager' },
-  { label: 'Admin Manager', role: 'manager' },
-  { label: 'Business Coordinator', role: 'coordinator' },
-  { label: 'Quality Coordinator', role: 'coordinator' },
-  { label: 'Accountant', role: 'coordinator' },
-  { label: 'Senior Engineer', role: 'engineer' },
-  { label: 'Engineer', role: 'engineer' },
-  { label: 'Staff', role: 'staff' },
+  { label: 'Operation Manager', role: 'operation_manager' },
+  { label: 'Technical Manager', role: 'technical_manager' },
+  { label: 'Sales Manager', role: 'sales_manager' },
+  { label: 'Accountant', role: 'accountant' },
+  { label: 'BCO', role: 'bco' },
+  { label: 'Executive', role: 'executive' },
+  { label: 'Team Leader', role: 'team_leader' },
+  { label: 'Technician', role: 'technician' },
+  { label: 'Warehouse Admin', role: 'warehouse_admin' },
 ];
+
+// Legacy designation labels → nearest new role (so re-assigning an old
+// designation still resolves to a valid role instead of dropping to staff).
+const LEGACY_DESIGNATION_ALIASES = {
+  'Operations Manager': 'operation_manager',
+  'Admin Manager': 'admin',
+  'Business Coordinator': 'bco',
+  'Quality Coordinator': 'operation_manager',
+  'Senior Engineer': 'technician',
+  'Engineer': 'technician',
+  'Staff': 'executive',
+};
 
 export function getRoleFromDesignation(designation) {
   const found = DESIGNATIONS.find(d => d.label === designation);
-  return found ? found.role : 'staff';
+  if (found) return found.role;
+  if (LEGACY_DESIGNATION_ALIASES[designation]) return LEGACY_DESIGNATION_ALIASES[designation];
+  return 'staff';
 }
+
+// Where a notification about `module` should take the user when it is tapped.
+// Mirrors module_link() in server/api/routes/collections.php, which builds the
+// deep link for push notifications — keep the two in step.
+export const MODULE_ROUTES = {
+  leads: '/leads', quotations: '/leads', customers: '/customers', employeeTasks: '/tasks',
+  tasks: '/tasks', installations: '/installations', ongoingWork: '/ongoing',
+  materials: '/materials', purchaseOrders: '/purchase-orders', leadPOs: '/purchase-orders', assignedMaterials: '/assigned-materials',
+  revenue: '/revenue', expenditure: '/expenditure', expenditures: '/expenditure',
+  paymentRequests: '/payment-requests', reports: '/reports', team: '/team',
+  attendance: '/attendance', tracking: '/tracking', leaveRequests: '/leave',
+  leave: '/leave', reminders: '/reminders', retailers: '/retailers',
+  influencers: '/influencers', gallery: '/gallery', users: '/user-management',
+};
+
+export const moduleRoute = (module) => MODULE_ROUTES[module] || '/';
 
 // Make a phone call via tel: link
 export function makeCall(phone) {
@@ -113,20 +290,158 @@ export function isSafeUrl(url) {
   const trimmed = url.trim().toLowerCase();
   const blocked = ['javascript', 'vbscript'];
   if (blocked.some(proto => trimmed.startsWith(proto + ':'))) return false;
-  if (trimmed.startsWith('data:') && !trimmed.startsWith('data:image/')) return false;
-  try { const parsed = new URL(url); return ['http:', 'https:'].includes(parsed.protocol); }
-  catch { return false; }
+  // An inline image (the workflow tab compresses stage photos to a data URL) is
+  // allowed, but never SVG — that one can carry script. Everything else on a
+  // data: URL is refused. These return early because the URL parse below only
+  // recognises http/https, which used to reject every data: URL and made the
+  // line above look like it permitted something it never did.
+  if (trimmed.startsWith('data:')) {
+    return trimmed.startsWith('data:image/') && !trimmed.startsWith('data:image/svg');
+  }
+  // Resolve against the current origin so same-origin RELATIVE URLs (e.g. our own
+  // "/uploads/..." files from device uploads) are recognised as safe, not just
+  // absolute http/https URLs. Falls back to a dummy base outside the browser.
+  try {
+    const base = (typeof window !== 'undefined' && window.location) ? window.location.origin : 'https://localhost';
+    const parsed = new URL(url, base);
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch { return false; }
+}
+
+// The print dialog is modal: it spins a nested loop that blocks whichever
+// document's stack called it. Printing used to be started from here with
+// w.print(), so the loop ran on the CRM's own stack and the CRM sat frozen for
+// as long as the print tab was open — the tab only came back to life once that
+// tab was closed. The trigger now lives inside the printed document, so the
+// dialog belongs to that document alone.
+function withAutoPrint(html) {
+  // Waiting for 'load' matters: the letterhead, the footer and the marketing
+  // pages are images, and printing before they arrive prints blank boxes.
+  // / is the closing tag's slash — written that way so this line cannot
+  // itself be mistaken for the end of a script block wherever it is inlined.
+  const trigger = '<script>window.addEventListener("load",function(){setTimeout(function(){window.print()},250)})</script>';
+  return html.includes('</body>') ? html.replace('</body>', trigger + '</body>') : html + trigger;
 }
 
 // Security: safe HTML print — uses Blob URL instead of document.write to prevent DOM injection
 export function openHtmlSafely(html, shouldPrint = false) {
-  const blob = new Blob([html], { type: 'text/html; charset=utf-8' });
+  const blob = new Blob([shouldPrint ? withAutoPrint(html) : html], { type: 'text/html; charset=utf-8' });
   const url = URL.createObjectURL(blob);
-  const w = window.open(url, '_blank');
-  if (!w) { alert('Popup blocked — please allow popups.'); URL.revokeObjectURL(url); return; }
-  w.addEventListener('afterprint', () => URL.revokeObjectURL(url));
-  if (shouldPrint) w.addEventListener('load', () => w.print());
-  setTimeout(() => URL.revokeObjectURL(url), 60000);
+  // An anchor click inside the current user gesture is what popup blockers
+  // allow, and rel="noopener" puts the new tab in its own browsing context
+  // group — so nothing it does can reach back into this one.
+  const a = document.createElement('a');
+  a.href = url;
+  a.target = '_blank';
+  a.rel = 'noopener noreferrer';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  // Nothing tells us when the other tab has finished with the blob, so it is
+  // held long enough for a slow print and then released.
+  setTimeout(() => URL.revokeObjectURL(url), 120000);
+}
+
+// Names compare as people type them, so casing and stray spaces never leave the
+// same person on two lists at once.
+export const normName = (v) => String(v || '').trim().toLowerCase();
+
+// The names offered as Supporting Team on a lead: the active team members,
+// minus anyone already named in a field above (Team Leader / Assigned To /
+// Sales Executive) and anyone already on the list.
+// Does a stored name or email refer to this person? Records carry whichever of
+// the two the screen that wrote them had to hand — a lead assignment stores the
+// display name, an expenditure stores the email — so both have to be accepted.
+// Matching is done on the trimmed, lower-cased value: a stray capital or a
+// trailing space in a display name used to mean the notification was written
+// but never shown to anybody.
+export function isSameUser(value, user) {
+  const v = normName(value);
+  if (!v) return false;
+  return v === normName(user && user.email) || v === normName(user && user.displayName);
+}
+
+export function supportingTeamOptions(team, usedAbove = [], selected = []) {
+  const blocked = [...usedAbove, ...selected].map(normName).filter(Boolean);
+  const out = [];
+  (team || []).forEach(t => {
+    const name = t && t.name;
+    if (!name || t.status !== 'Active') return;
+    const k = normName(name);
+    if (blocked.includes(k) || out.some(n => normName(n) === k)) return;
+    out.push(name);
+  });
+  return out;
+}
+
+// Shrink a picked photo before it is uploaded.
+//
+// Phone photos are 4–12 MB and 12 megapixels. Decoding one the obvious way —
+// `new Image()` onto a full-size canvas — allocates roughly width x height x 4
+// bytes (about 48 MB for a 12 MP shot) before anything is scaled down, and on a
+// phone that is already short on memory that allocation is what tips it over.
+// `createImageBitmap` with resize options decodes straight to the size we want,
+// so the big bitmap never exists. The old path is kept for browsers without it,
+// and any failure at all just returns the original file.
+export async function compressImage(file, maxDim = 1600, quality = 0.82) {
+  try {
+    if (!file || !/^image\//.test(file.type) || typeof document === 'undefined') return file;
+    // A small photo is already fine — don't re-encode it for nothing.
+    if (file.size <= 512 * 1024) return file;
+
+    const toJpeg = async (canvas) => {
+      const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg', quality));
+      canvas.width = 0; canvas.height = 0;            // release the backing store
+      if (!blob || blob.size >= file.size) return file;
+      const name = (file.name || 'photo').replace(/\.[^.]+$/, '') + '.jpg';
+      try { return new File([blob], name, { type: 'image/jpeg' }); }
+      catch { return blob; }
+    };
+
+    if (typeof createImageBitmap === 'function') {
+      // Decode at the target size. resizeWidth alone keeps the aspect ratio,
+      // and the browser picks the smaller edge for us.
+      let bmp;
+      try {
+        bmp = await createImageBitmap(file, { resizeWidth: maxDim, resizeQuality: 'medium' });
+        // A portrait photo comes back taller than maxDim; scale it down again.
+        if (bmp.height > maxDim) {
+          const shrunk = await createImageBitmap(file, { resizeHeight: maxDim, resizeQuality: 'medium' });
+          bmp.close();
+          bmp = shrunk;
+        }
+      } catch {
+        bmp = await createImageBitmap(file);           // no resize support
+      }
+      const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bmp.width * scale));
+      canvas.height = Math.max(1, Math.round(bmp.height * scale));
+      canvas.getContext('2d').drawImage(bmp, 0, 0, canvas.width, canvas.height);
+      bmp.close();
+      return await toJpeg(canvas);
+    }
+
+    // Older browsers: decode through an <img>, which costs more memory.
+    return await new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = async () => {
+        try {
+          const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          URL.revokeObjectURL(url);
+          resolve(await toJpeg(canvas));
+        } catch { URL.revokeObjectURL(url); resolve(file); }
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
+  } catch { return file; }
 }
 
 // Q5 fix: dynamic days-in-month instead of hardcoded 30

@@ -1,0 +1,992 @@
+// ============================================================================
+// Pragathi CRM — Role-Based Access Control (RBAC)
+// 9 business roles, each with a separate login, gated per the official
+// permission matrix. `super_admin` (the owner account) always has full access.
+// This layer is additive: the legacy hierarchy in helpers.js (hasAccess) still
+// works for generic module gating; this file governs the specific workflow
+// ACTIONS (lead entry, PO record/recommend/approve, expenditure chain, etc.).
+// ============================================================================
+
+import { hasAccess, isSameUser } from './helpers';
+
+// The 9 canonical roles (order = display order in dropdowns)
+export const ROLES = [
+  { key: 'executive', label: 'Executive' },
+  { key: 'technical_manager', label: 'Technical Manager' },
+  { key: 'operation_manager', label: 'Operation Manager' },
+  { key: 'accountant', label: 'Accountant' },
+  { key: 'admin', label: 'Admin' },
+  { key: 'management', label: 'Management' },
+  { key: 'bco', label: 'BCO' },
+  { key: 'technician', label: 'Technician' },
+  { key: 'team_leader', label: 'Team Leader' },
+  { key: 'sales_manager', label: 'Sales Manager' },
+  { key: 'warehouse_admin', label: 'Warehouse Admin' },
+];
+
+export const ALL_ROLE_KEYS = ROLES.map(r => r.key);
+
+export const roleLabel = (key) => {
+  if (key === 'super_admin') return 'Super Admin';
+  const found = ROLES.find(r => r.key === key);
+  return found ? found.label : (key || '');
+};
+
+// ── Permission matrix: action → roles allowed ──────────────────────────────
+// Keep keys stable — they are referenced from the UI gating code.
+export const ACTIONS = {
+  LEAD_ENTRY: 'lead_entry',
+  SITE_VISIT: 'site_visit',
+  PO_RECORD: 'po_record',
+  PO_RECOMMENDATION: 'po_recommendation',
+  PO_MANAGEMENT_APPROVAL: 'po_management_approval', // mandatory pre-approval step
+  PO_APPROVAL: 'po_approval',
+  EXPENDITURE_REQUEST: 'expenditure_request',
+  EXPENDITURE_RECOMMENDATION: 'expenditure_recommendation',
+  EXPENDITURE_VERIFIED: 'expenditure_verified',
+  EXPENDITURE_APPROVE: 'expenditure_approve',
+  PAYMENT_RELEASE: 'payment_release',
+  // Payment Request chain (Team Member → Team Leader → Admin/Management/
+  // Operation Manager → Accountant → Work Proposal / Pre-PO → Admin/Mgmt/OM)
+  PR_CREATE: 'pr_create',
+  PR_RECOMMEND: 'pr_recommend',
+  PR_APPROVE: 'pr_approve',
+  PR_TRANSFER: 'pr_transfer',
+  PR_PROPOSAL: 'pr_proposal',
+  PR_PROPOSAL_APPROVE: 'pr_proposal_approve',
+  // Quotation workflow (19-Sep requirement)
+  QUOTATION_APPROVE: 'quotation_approve',                     // any ONE of the four
+  QUOTATION_REVISION_OVERRIDE: 'quotation_revision_override', // a revision after R3
+};
+
+export const ACTION_ROLES = {
+  [ACTIONS.LEAD_ENTRY]: [...ALL_ROLE_KEYS], // all 1–9
+  [ACTIONS.SITE_VISIT]: ['executive', 'technical_manager'],
+  // Sales Manager may add a PO directly (req: "Add PO option for Sales Manager")
+  [ACTIONS.PO_RECORD]: ['operation_manager', 'admin', 'warehouse_admin', 'sales_manager'],
+  [ACTIONS.PO_RECOMMENDATION]: ['operation_manager', 'admin'],
+  // Management permission is mandatory before a PO can be approved
+  [ACTIONS.PO_MANAGEMENT_APPROVAL]: ['management'],
+  [ACTIONS.PO_APPROVAL]: ['admin', 'management'],
+  [ACTIONS.EXPENDITURE_REQUEST]: [...ALL_ROLE_KEYS], // anyone may raise a request
+  // Approval/payment chain (req #12): requester → concerned approval (Recommend)
+  // → Accountant review → Management/Owner final approval → back to Accountant to
+  // release payment. super_admin (Owner) always overrides via can().
+  [ACTIONS.EXPENDITURE_RECOMMENDATION]: ['technical_manager', 'operation_manager', 'sales_manager'],
+  [ACTIONS.EXPENDITURE_VERIFIED]: ['accountant'],   // Accountant review step
+  [ACTIONS.EXPENDITURE_APPROVE]: ['management'],     // Management/Owner final approval
+  [ACTIONS.PAYMENT_RELEASE]: ['accountant'],         // Accountant releases the payment
+  // Payment Request chain
+  [ACTIONS.PR_CREATE]: [...ALL_ROLE_KEYS],                                   // any team member
+  // The requester's own Team Leader recommends (see prRecommenders); these
+  // roles stand in for staff who have no Team Leader assigned.
+  [ACTIONS.PR_RECOMMEND]: ['team_leader', 'technical_manager', 'operation_manager', 'sales_manager'],
+  [ACTIONS.PR_APPROVE]: ['admin', 'management', 'operation_manager'],        // main approval
+  [ACTIONS.PR_TRANSFER]: ['accountant'],                                     // payment transfer
+  [ACTIONS.PR_PROPOSAL]: ['accountant'],                                     // Work Proposal / Pre-PO
+  [ACTIONS.PR_PROPOSAL_APPROVE]: ['admin', 'management', 'operation_manager'],
+  // A quotation is approved by any ONE of Admin / Operation Manager /
+  // Management / Owner — all four are notified, the first to act decides it.
+  [ACTIONS.QUOTATION_APPROVE]: ['admin', 'operation_manager', 'management'],
+  [ACTIONS.QUOTATION_REVISION_OVERRIDE]: ['admin'],
+};
+
+// The four authorities notified when a quotation needs approval. Owner
+// (super_admin) is included — can() lets them act everywhere anyway.
+export const QUOTATION_APPROVER_ROLES = ['admin', 'operation_manager', 'management', 'super_admin'];
+export const quotationApprovers = (users) =>
+  (users || []).filter(u => QUOTATION_APPROVER_ROLES.includes(normalizeRole(u.role)));
+
+// Legacy role keys (from before the 9-role system) → nearest new role, so
+// existing user accounts keep working until an admin reassigns them one of the
+// 9 official roles. New accounts use the canonical keys directly.
+const LEGACY_ROLE_MAP = {
+  manager: 'operation_manager',
+  coordinator: 'bco',
+  engineer: 'technician',
+  staff: 'executive',
+};
+
+export function normalizeRole(role) {
+  return LEGACY_ROLE_MAP[role] || role;
+}
+
+// Can the given role perform the given action?
+export function can(role, action) {
+  if (role === 'super_admin') return true; // owner override
+  const r = normalizeRole(role);
+  const allowed = ACTION_ROLES[action];
+  return Array.isArray(allowed) && allowed.includes(r);
+}
+
+// ── PO approval workflow states (lead-sourced POs) ─────────────────────────
+export const PO_STATUS = {
+  UNAPPROVED: 'Unapproved',
+  RECOMMENDED: 'Recommended',
+  MANAGEMENT_APPROVED: 'Management Approved',
+  APPROVED: 'Approved',
+};
+
+// Required advance before a PO can be sent for approval ("to Sir"): 10%
+export const ADVANCE_PERCENT = 0.10;
+
+// The cost basis a PO's 10% advance is measured against.
+export function poCostBasis(po) {
+  const n = Number(po?.agreedPrice) || Number(po?.totalValue) || 0;
+  return isNaN(n) ? 0 : n;
+}
+
+// How much advance has been recorded for this PO's lead.
+export function recordedAdvance(lead) {
+  if (!lead) return 0;
+  if (lead.advancePaid !== 'Yes') return 0;
+  const n = Number(lead.advanceLeadAmount);
+  return isNaN(n) ? 0 : n;
+}
+
+// Is the mandatory 10% advance recorded for this PO? Returns a detail object.
+export function advanceGate(po, lead) {
+  const cost = poCostBasis(po);
+  const required = Math.round(cost * ADVANCE_PERCENT);
+  const paid = recordedAdvance(lead);
+  return {
+    cost,
+    required,
+    paid,
+    // Until a cost (agreed price / total value) is set, the 10% requirement can't
+    // be verified, so the PO is not yet allowed to move for approval.
+    ok: cost <= 0 ? false : paid >= required,
+  };
+}
+
+// ── Expenditure approval workflow states ───────────────────────────────────
+export const EXP_STATUS = {
+  REQUESTED: 'Requested',
+  RECOMMENDED: 'Recommended',
+  VERIFIED: 'Verified',
+  APPROVED: 'Approved',
+  RELEASED: 'Released',
+  REJECTED: 'Rejected',
+};
+
+// Ordered stages of the expenditure chain, each with its gating action.
+export const EXP_STAGES = [
+  { from: EXP_STATUS.REQUESTED, to: EXP_STATUS.RECOMMENDED, action: ACTIONS.EXPENDITURE_RECOMMENDATION, label: 'Recommend', field: 'recommendedBy' },
+  { from: EXP_STATUS.RECOMMENDED, to: EXP_STATUS.VERIFIED, action: ACTIONS.EXPENDITURE_VERIFIED, label: 'Accountant Review', field: 'verifiedBy' },
+  { from: EXP_STATUS.VERIFIED, to: EXP_STATUS.APPROVED, action: ACTIONS.EXPENDITURE_APPROVE, label: 'Management Approval', field: 'approvedBy' },
+  { from: EXP_STATUS.APPROVED, to: EXP_STATUS.RELEASED, action: ACTIONS.PAYMENT_RELEASE, label: 'Release Payment', field: 'releasedBy' },
+];
+
+export const nextExpStage = (status) => EXP_STAGES.find(s => s.from === status) || null;
+
+// ── Payment Request workflow ───────────────────────────────────────────────
+// Team Member → Generate Payment Request → Team Leader (Recommend) → Admin /
+// Management / Operation Manager (Main Approval) → Accountant (Payment
+// Transfer) → Accountant (one-shot Work Proposal / Pre-PO) → Admin /
+// Management / Operation Manager (final sign-off). A stage can only be taken
+// from the stage immediately before it, so nothing can be skipped.
+export const PR_STATUS = {
+  REQUESTED: 'Requested',
+  RECOMMENDED: 'Recommended',
+  APPROVED: 'Approved',
+  PAID: 'Paid',
+  PROPOSAL_SUBMITTED: 'Proposal Submitted',
+  CLOSED: 'Closed',
+  REJECTED: 'Rejected',
+};
+
+export const PR_STAGES = [
+  { from: PR_STATUS.REQUESTED, to: PR_STATUS.RECOMMENDED, action: ACTIONS.PR_RECOMMEND, label: 'Recommend', by: 'Team Leader', field: 'recommendedBy' },
+  { from: PR_STATUS.RECOMMENDED, to: PR_STATUS.APPROVED, action: ACTIONS.PR_APPROVE, label: 'Main Approval', by: 'Admin / Management / Operation Manager', field: 'approvedBy' },
+  { from: PR_STATUS.APPROVED, to: PR_STATUS.PAID, action: ACTIONS.PR_TRANSFER, label: 'Payment Transfer', by: 'Accountant', field: 'paidBy' },
+  { from: PR_STATUS.PAID, to: PR_STATUS.PROPOSAL_SUBMITTED, action: ACTIONS.PR_PROPOSAL, label: 'Work Proposal / Pre-PO', by: 'Accountant', field: 'proposalBy' },
+  { from: PR_STATUS.PROPOSAL_SUBMITTED, to: PR_STATUS.CLOSED, action: ACTIONS.PR_PROPOSAL_APPROVE, label: 'Approve Proposal & Close', by: 'Admin / Management / Operation Manager', field: 'closedBy' },
+];
+
+// The next stage for a request. When the requester has no Team Leader to
+// recommend it (they are a Team Leader themselves, or none is assigned), the
+// recommendation step is skipped and it goes straight for final approval.
+export function nextPrStage(status, pr, users) {
+  const from = status || PR_STATUS.REQUESTED;
+  const skips = pr && (users !== undefined ? !prNeedsRecommendation(pr, users) : pr.needsRecommendation === false);
+  if (skips && from === PR_STATUS.REQUESTED) {
+    const approve = PR_STAGES.find(s => s.to === PR_STATUS.APPROVED);
+    return approve ? { ...approve, from: PR_STATUS.REQUESTED } : null;
+  }
+  return PR_STAGES.find(s => s.from === from) || null;
+}
+
+// ── Team Leader → Team Member structure ─────────────────────────────────
+// A member's user record carries `teamLeader` (their leader's email). A Team
+// Leader is anyone who has members pointing at them, which keeps the structure
+// in one place instead of duplicating it on both sides.
+export const teamMembersOf = (users, leaderEmail) => {
+  const key = String(leaderEmail || '').toLowerCase();
+  if (!key) return [];
+  return (users || []).filter(u => String(u.teamLeader || '').toLowerCase() === key);
+};
+
+export const isTeamLeader = (users, email) => teamMembersOf(users, email).length > 0;
+
+// Who sees every employee's attendance (RR2, 9-Oct): the higher authorities -
+// the Owner, Management, Admin and the Operation Manager. Everyone else sees
+// their own marks, plus their mapped team members' if they lead a team. This
+// used to be "manager level and above", which let a Sales Manager or
+// Technical Manager who leads a team see every other team as well. Mirrors
+// attendance_visibility_filter() in collections.php.
+export const ATTENDANCE_AUTHORITY_ROLES = ['super_admin', 'management', 'admin', 'operation_manager'];
+export const seesAllAttendance = (role) => role === 'super_admin' || ATTENDANCE_AUTHORITY_ROLES.includes(normalizeRole(role));
+
+// The leader who should recommend this person's requests, if any.
+export const leaderOf = (users, email) => {
+  const me = (users || []).find(u => String(u.email || '').toLowerCase() === String(email || '').toLowerCase());
+  return me && me.teamLeader ? String(me.teamLeader).toLowerCase() : '';
+};
+
+// ── Sales team selection (lead assignment) ─────────────────────────────────
+// The technical side does not take sales leads, so those roles are never
+// offered in "Assigned To".
+export const TECHNICAL_ROLES = ['technician', 'technical_manager', 'warehouse_admin'];
+export const isTechnicalRole = (role) => TECHNICAL_ROLES.includes(normalizeRole(role));
+
+// Who may be given a lead.
+//
+// With a Team Leader chosen, that is their team: the members who report to
+// them, plus the leader. The team structure is the company's own grouping, so
+// it decides — not the role each member happens to carry.
+//
+// With no leader chosen the list falls back to everyone on the sales side, and
+// the technical roles are left out of that wider list.
+export function salesMembersOf(users, leaderEmail) {
+  const approved = (users || []).filter(u => u.approved !== false);
+  const key = String(leaderEmail || '').toLowerCase();
+  if (!key) return approved.filter(u => !isTechnicalRole(u.role));
+  return approved.filter(u =>
+    String(u.teamLeader || '').toLowerCase() === key ||
+    String(u.email || '').toLowerCase() === key);
+}
+
+// Everyone who leads a team, for the "Team Leader" picker on a lead.
+export function teamLeaders(users) {
+  // An account still waiting to be approved cannot be handed a team's leads,
+  // so it is not offered as a leader — the same rule salesMembersOf applies to
+  // the members underneath.
+  return (users || []).filter(u => u.approved !== false).filter(u =>
+    normalizeRole(u.role) === 'team_leader' || isTeamLeader(users, u.email));
+}
+
+// ── Lead visibility (19-Sep requirement 6) ─────────────────────────────────
+// A lead belongs to the person it is assigned to. The hierarchy above them —
+// Sales Manager, Operation Manager, Management, Admin, Owner — sees everything,
+// and so does the assignee's own Team Leader. Unrelated staff see nothing.
+//
+// A lead only becomes private once it is assigned to somebody who actually has
+// a login. Older leads assigned to a name that no account matches (several on
+// file are) stay visible exactly as they are today, rather than disappearing
+// for everyone below manager level.
+const lc = (v) => String(v || '').trim().toLowerCase();
+
+// The assignment fields — who is supposed to be working this lead.
+export const leadAssignees = (lead) =>
+  [lead?.assignedTo, lead?.salesExecutive, lead?.assignedToEmail].map(lc).filter(Boolean);
+
+// Does a name/email on the lead correspond to a real login? The `team`
+// directory bridges the gap where a lead carries the team record's name and
+// that record holds the person's login address.
+export function leadHasKnownOwner(lead, users, team) {
+  const names = leadAssignees(lead);
+  if (!names.length) return false;
+  return names.some(n =>
+    (users || []).some(u => lc(u.email) === n || lc(u.displayName) === n) ||
+    (team || []).some(t => lc(t.name) === n && (users || []).some(u => lc(u.email) === lc(t.email))));
+}
+
+export function canSeeLead(lead, user, role, users, team, leadPOs) {
+  if (!lead) return false;
+  const r = normalizeRole(role);
+  if (r === 'super_admin' || hasAccess(r, 'manager')) return true; // manager tier and above
+  // Req 2 (15-Oct): once a purchase order on the lead is approved (its status
+  // turns green) the material work begins, and the BCO - and the warehouse,
+  // who sit at manager level anyway - must be able to open the lead to do it.
+  // They see it; canEditLead() keeps them from changing it.
+  if (r === 'bco' && leadHasApprovedPO(lead, leadPOs)) return true;
+  const email = lc(user?.email);
+  const name = lc(user?.displayName);
+  const mine = (v) => {
+    const s = lc(v);
+    return !!s && (s === email || s === name);
+  };
+  if (mine(lead.assignedTo) || mine(lead.salesExecutive) || mine(lead.createdBy) || mine(lead.assignedToEmail)) return true;
+  if (Array.isArray(lead.supportingTeam) && lead.supportingTeam.some(mine)) return true;
+  // The lead carries this person's name through the team directory.
+  if ((team || []).some(t => (lc(t.email) === email && email) && leadAssignees(lead).includes(lc(t.name)))) return true;
+  // A Team Leader also sees the leads of their own members.
+  if (r === 'team_leader') {
+    const owners = leadAssignees(lead);
+    const isMembers = teamMembersOf(users, user?.email).some(m =>
+      [m.email, m.displayName].some(v => !!lc(v) && owners.includes(lc(v))));
+    if (isMembers) return true;
+  }
+  // Nobody with a login is down as working it — leave it where it was.
+  return !leadHasKnownOwner(lead, users, team);
+}
+
+// Has a purchase order on this lead reached final approval?
+export const leadHasApprovedPO = (lead, leadPOs) =>
+  !!lead && (leadPOs || []).some(po => po && po.leadId === lead.id && po.status === PO_STATUS.APPROVED);
+
+// ── Who may EDIT a lead (Req 2 and Req 4, 15-Oct) ─────────────────────────
+//
+// Seeing a lead and changing it are now two different things. The lead's
+// details may be changed by the authorities - Owner, Management, Operation
+// Manager, Admin - by the person it is assigned to, by whoever created it,
+// and by its Team Leader (named on the lead, or the leader of the assignee in
+// the team structure). The BCO and the Warehouse Admin only ever look. A
+// Technician may create a lead but never edit one, their own included - once
+// submitted it belongs to the hierarchy. Mirrors lead_editor() in
+// routes/collections.php, which is the enforcement.
+export const LEAD_EDIT_AUTHORITIES = ['super_admin', 'management', 'admin', 'operation_manager'];
+export const LEAD_VIEW_ONLY_ROLES = ['bco', 'warehouse_admin', 'technician'];
+
+export function canEditLead(lead, user, role, users) {
+  if (!lead) return false;
+  const r = normalizeRole(role);
+  if (r === 'super_admin' || LEAD_EDIT_AUTHORITIES.includes(r)) return true;
+  if (LEAD_VIEW_ONLY_ROLES.includes(r)) return false;
+  if (isLeadOwner(lead, user)) return true;
+  const me = lc(user && user.email), myName = lc(user && user.displayName);
+  const creator = lc(lead.createdBy);
+  if (creator && (creator === me || creator === myName)) return true;
+  if (lc(lead.assignedToEmail) && lc(lead.assignedToEmail) === me) return true;
+  return isLeadLeader(lead, user, users);
+}
+
+// Nobody may recommend or approve their own payment request.
+export const isOwnRequest = (pr, user) => {
+  if (!pr || !user) return false;
+  const email = String(user.email || '').toLowerCase();
+  return String(pr.requestedBy || '').toLowerCase() === email;
+};
+
+// The Team Leader a payment request belongs to. It is stamped on the request
+// when it is raised, but requests raised before their member was mapped to a
+// leader carry nothing — and a leader who is not named on the row can do
+// nothing with it, which is how requests ended up stuck with no one able to
+// recommend them. So fall back to the team structure as it stands now.
+export function prLeaderEmail(pr, users) {
+  const stamped = String(pr?.teamLeaderEmail || '').trim().toLowerCase();
+  if (stamped) return stamped;
+  return leaderOf(users, pr?.requestedBy);
+}
+
+// Does this request still need a recommendation? The stored answer wins when
+// it is there; otherwise it is whether the requester has a leader who is not
+// themselves.
+export function prNeedsRecommendation(pr, users) {
+  if (pr && pr.needsRecommendation === false) return false;
+  if (pr && pr.needsRecommendation === true) return true;
+  const tl = prLeaderEmail(pr, users);
+  return !!tl && tl !== String(pr?.requestedBy || '').trim().toLowerCase();
+}
+
+// May this user take the given stage on this request?
+export function canTakePrStage(stage, pr, user, role, users) {
+  if (!stage || !pr) return false;
+  if (pr.status === PR_STATUS.REJECTED) return false;
+  if (isOwnRequest(pr, user)) return false; // never your own request
+  if (stage.to === PR_STATUS.RECOMMENDED) {
+    // Their own Team Leader recommends. A Team Leader has no say over another
+    // leader's members, so only the managers below can stand in.
+    const tl = prLeaderEmail(pr, users);
+    const mine = !!tl && tl === String(user?.email || '').trim().toLowerCase();
+    if (mine) return true;
+    if (normalizeRole(role) === 'team_leader') return false;
+    return can(role, ACTIONS.PR_RECOMMEND);
+  }
+  return can(role, stage.action);
+}
+
+// ── Leave: the Team Leader's recommendation ────────────────────────────────
+// The leader of the person who applied. Taken from the team structure rather
+// than stored on the request, so mapping somebody to a leader today also puts
+// the leave they applied for yesterday in front of that leader.
+export function leaveLeaderEmail(lr, users) {
+  return leaderOf(users, lr?.employeeEmail);
+}
+
+// A leader may put their recommendation on their own member's leave — once,
+// and never on their own leave. It is an opinion for the approver to read: the
+// Sales Manager can still approve a request the leader never looked at.
+export function canRecommendLeave(lr, user, role, users) {
+  if (!lr || !user) return false;
+  if (lr.status === 'Approved' || lr.status === 'Rejected') return false;
+  if (lr.recommendedBy) return false;                       // already recommended
+  const email = String(user.email || '').trim().toLowerCase();
+  if (!email) return false;
+  if (String(lr.employeeEmail || '').trim().toLowerCase() === email) return false; // not your own
+  return leaveLeaderEmail(lr, users) === email;
+}
+
+// A leader also has to be able to see the request in order to recommend it.
+export function isLeaveLeader(lr, user, users) {
+  const email = String(user?.email || '').trim().toLowerCase();
+  return !!email && leaveLeaderEmail(lr, users) === email;
+}
+
+// ── Who may see a payment request ──────────────────────────────────────────
+// A payment request names an amount and a reason, and used to be on screen for
+// every logged-in user. It belongs to the people who have a part in it: the
+// person who raised it, their Team Leader, the authorities who approve it, and
+// the Accountant who pays it. Nobody else has any business reading it.
+export const PR_VIEWER_ROLES = ['operation_manager', 'management', 'admin', 'super_admin', 'accountant'];
+
+export function canSeePaymentRequest(pr, user, role, users) {
+  if (!pr) return false;
+  const r = normalizeRole(role);
+  if (r === 'super_admin' || PR_VIEWER_ROLES.includes(r)) return true;
+  const email = String(user?.email || '').trim().toLowerCase();
+  const name = String(user?.displayName || '').trim().toLowerCase();
+  if (!email && !name) return false;
+  // The person who raised it.
+  const by = String(pr.requestedBy || '').trim().toLowerCase();
+  const byName = String(pr.requestedByName || '').trim().toLowerCase();
+  if ((by && (by === email || by === name)) || (byName && byName === name)) return true;
+  // Their Team Leader — whether or not the row was stamped with one.
+  const tl = prLeaderEmail(pr, users);
+  return !!tl && tl === email;
+}
+
+// A plain-English trail of what has happened and what the request is waiting on
+// — the requester must always be able to see where it is stopped.
+export function prProgress(pr, users) {
+  const done = [];
+  if (pr.recommendedBy) done.push({ label: 'Recommended', by: pr.recommendedBy, date: pr.recommendedByDate });
+  if (pr.approvedBy) done.push({ label: 'Approved', by: pr.approvedBy, date: pr.approvedByDate });
+  if (pr.paidBy) done.push({ label: pr.directPayment ? 'Paid directly by the Accountant (below Rs.1,000)' : 'Payment transferred', by: pr.paidBy, date: pr.paidByDate });
+  if (pr.proposalBy) done.push({ label: 'Work Proposal / Pre-PO sent', by: pr.proposalBy, date: pr.proposalByDate });
+  if (pr.closedBy) done.push({ label: 'Closed', by: pr.closedBy, date: pr.closedByDate });
+  if (pr.status === PR_STATUS.REJECTED) {
+    return { done, waitingOn: null, rejected: true, rejectedBy: pr.rejectedBy, summary: `Rejected by ${pr.rejectedBy || 'a reviewer'}` };
+  }
+  const stage = nextPrStage(pr.status, pr, users);
+  // Name the leader it is sitting with, falling back to the team structure for
+  // requests raised before their member had a leader.
+  const leaderName = pr.teamLeaderName ||
+    ((users || []).find(u => String(u.email || '').toLowerCase() === prLeaderEmail(pr, users)) || {}).displayName || '';
+  const waitingOn = stage
+    ? (stage.to === PR_STATUS.RECOMMENDED && leaderName ? `${stage.by} (${leaderName})` : stage.by)
+    : null;
+  return {
+    done,
+    waitingOn,
+    rejected: false,
+    summary: stage ? `Pending ${stage.label.toLowerCase()} with ${waitingOn}` : 'Completed — no action pending',
+  };
+}
+
+// ── Per-user module / action permissions (Admin-controlled) ────────────────
+// Settings → Permission Management saves a { key: true|false } map on the user
+// record. A key that is ABSENT falls back to the role default below, so every
+// existing account keeps exactly the access it has today. Admin and above are
+// never restricted, so an Admin cannot lock themselves out of the app.
+export const PERMISSION_MODULES = [
+  { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', group: 'Main' },
+  { key: 'leads', label: 'Leads', icon: 'leaderboard', group: 'Main' },
+  { key: 'customers', label: 'Customers', icon: 'people', group: 'Main' },
+  { key: 'tasks', label: 'Tasks', icon: 'task_alt', group: 'Main' },
+  { key: 'my_reports', label: 'My Reports & Planning', icon: 'insights', group: 'Main' },
+
+  { key: 'installations', label: 'Installations', icon: 'solar_power', group: 'Operations' },
+  { key: 'ongoing_work', label: 'Ongoing Work', icon: 'construction', group: 'Operations' },
+  { key: 'materials', label: 'Materials', icon: 'inventory_2', group: 'Operations' },
+  { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long', group: 'Operations' },
+  { key: 'new_po', label: 'New PO (create a PO)', icon: 'post_add', group: 'Operations', action: true },
+  { key: 'installations_manage', label: 'Add / edit installations', icon: 'edit_note', group: 'Operations', action: true },
+  { key: 'assigned_materials', label: 'Assigned Materials', icon: 'assignment_turned_in', group: 'Operations' },
+
+  { key: 'revenue', label: 'Revenue', icon: 'account_balance_wallet', group: 'Finance' },
+  { key: 'expenditure', label: 'Expenditure', icon: 'payments', group: 'Finance' },
+  { key: 'payment_requests', label: 'Payment Requests', icon: 'request_quote', group: 'Finance' },
+  { key: 'reports', label: 'Reports', icon: 'assessment', group: 'Finance' },
+
+  { key: 'team', label: 'Team', icon: 'groups', group: 'People' },
+  { key: 'team_members', label: 'My Team — member list', icon: 'supervisor_account', group: 'Team' },
+  { key: 'team_attendance', label: 'My Team — attendance', icon: 'how_to_reg', group: 'Team' },
+  { key: 'team_tracking', label: 'My Team — planning', icon: 'event_note', group: 'Team' },
+  { key: 'team_tasks', label: 'My Team — tasks', icon: 'task_alt', group: 'Team' },
+  { key: 'team_leave', label: 'My Team — leave', icon: 'event_available', group: 'Team' },
+  { key: 'attendance', label: 'Attendance', icon: 'how_to_reg', group: 'People' },
+  { key: 'tracking', label: 'Planning', icon: 'event_note', group: 'People' },
+  { key: 'leave', label: 'Leave', icon: 'event_available', group: 'People' },
+  { key: 'reminders', label: 'Reminders', icon: 'notifications_active', group: 'People' },
+  { key: 'retailers', label: 'Retailers', icon: 'storefront', group: 'People' },
+  { key: 'influencers', label: 'Influencers', icon: 'campaign', group: 'People' },
+
+  { key: 'gallery', label: 'Gallery', icon: 'photo_library', group: 'Company' },
+  { key: 'about', label: 'About', icon: 'info', group: 'Company' },
+  // Req 3 (30-Oct): the Settings button (Account details for most people).
+  { key: 'settings', label: 'Settings', icon: 'settings', group: 'Company' },
+];
+
+export const PERMISSION_GROUPS = PERMISSION_MODULES
+  .map(m => m.group)
+  .filter((g, i, arr) => arr.indexOf(g) === i);
+
+// A Technician login is deliberately limited to the options their work needs.
+// Everything else (Leads, Revenue, Expenditure, New PO, …) stays OFF until an
+// Admin switches it on for that individual in Settings → Permission Management.
+export const TECHNICIAN_DEFAULT_MODULES = [
+  'dashboard', 'tasks', 'my_reports', 'installations', 'ongoing_work',
+  'materials', 'assigned_materials', 'attendance', 'tracking', 'leave', 'reminders', 'gallery', 'about',
+];
+
+// The default state of a permission for a role, used when the Admin has not set
+// an explicit value for that user.
+// A Team Leader starts with what a Technician gets, plus the Team section and
+// the ability to raise a payment request. Anything more is the Admin's call.
+export const TEAM_LEADER_DEFAULT_MODULES = [
+  ...TECHNICIAN_DEFAULT_MODULES,
+  'team', 'team_members', 'team_attendance', 'team_tracking', 'team_tasks', 'team_leave',
+  'payment_requests',
+];
+
+export function defaultModuleAllowed(role, key) {
+  const r = normalizeRole(role);
+  if (key === 'new_po') return can(r, ACTIONS.PO_RECORD);
+  // Adding and editing installations (R6.3, 8-Oct) is a manager-level job by
+  // default; an Admin grants it to an individual (P. Ganesh) in Settings →
+  // Permission Management. Mirrors default_module_allowed() in lib.php.
+  if (key === 'installations_manage') return hasAccess(r, 'manager');
+  // Settings (Req 3, 30-Oct): on by default from the coordinator level, as the
+  // button always was; the Owner switches it for anyone in Permission
+  // Management. Mirrors default_module_allowed() in lib.php.
+  if (key === 'settings') return hasAccess(r, 'coordinator');
+  if (r === 'technician') return TECHNICIAN_DEFAULT_MODULES.includes(key);
+  if (r === 'team_leader') return TEAM_LEADER_DEFAULT_MODULES.includes(key);
+  // The Team options only mean anything to someone who has members assigned.
+  return true;
+}
+
+// Is a module / action available to this user? Explicit per-user value wins,
+// then the role default. Admin and above always keep full access.
+export function hasModule(user, role, key) {
+  if (role === 'super_admin' || hasAccess(role, 'admin')) return true;
+  const p = user && user.permissions;
+  if (p && typeof p === 'object' && p[key] !== undefined && p[key] !== null) return !!p[key];
+  return defaultModuleAllowed(role, key);
+}
+
+// ── Quotation: Team Leader recommendation and the edit window (2-Oct) ───────
+//
+// A quotation is approved by any ONE of Admin / Operation Manager /
+// Management / Owner. The Team Leader of the person the lead sits with may now
+// *recommend* it first. That is advisory only: it records who recommended it
+// and when, it does not move the quotation's status, and an approver can still
+// approve a quotation nobody has recommended. It exists so the leader's view
+// is on the record before the office decides.
+//
+// Deliberately keyed off the team structure rather than a named person, so it
+// keeps working when the team changes.
+
+// Whose quotation is this, as a name or an email?
+export const quotationOwner = (q, lead) =>
+  (q && (q.executiveName || q.executiveEmail)) ||
+  (lead && (lead.assignedTo || lead.salesExecutive)) || '';
+
+// The Team Leader who may recommend this quotation.
+export function quotationLeaderEmail(q, lead, users) {
+  const owner = quotationOwner(q, lead);
+  const key = String(owner || '').trim().toLowerCase();
+  if (!key) return '';
+  const u = (users || []).find(x =>
+    String(x.email || '').toLowerCase() === key ||
+    String(x.displayName || '').trim().toLowerCase() === key);
+  return u ? leaderOf(users, u.email) : '';
+}
+
+export function canRecommendQuotation(q, lead, user, role, users) {
+  if (!q || q.status !== 'Pending Approval') return false;
+  if (q.recommendedBy) return false;                     // once is enough
+  const me = String(user?.email || '').toLowerCase();
+  if (!me) return false;
+  // Nobody recommends their own quotation.
+  const owner = String(quotationOwner(q, lead) || '').trim().toLowerCase();
+  if (owner && (owner === me || owner === String(user?.displayName || '').trim().toLowerCase())) return false;
+  const leader = quotationLeaderEmail(q, lead, users);
+  if (leader && leader === me) return true;
+  // A Team Leader with members of their own stands in when the quotation has
+  // no leader on file; the approving authorities never need this route.
+  return normalizeRole(role) === 'team_leader' && isTeamLeader(users, user?.email) && !leader;
+}
+
+// The statuses a quotation may still be edited in. Once it is approved,
+// shared or accepted it is fixed; a rejection or a revision opens it again.
+export const QUOTATION_EDITABLE_STATUSES = ['Pending Approval', 'Rejected', 'Not Accepted'];
+
+export function canEditQuotation(q, lead, user, role, users) {
+  if (!q) return false;
+  if (!QUOTATION_EDITABLE_STATUSES.includes(q.status)) return false;
+  if (hasAccess(role, 'admin')) return true;             // Admin / Management / Owner
+  if (can(role, ACTIONS.QUOTATION_APPROVE)) return true; // Operation Manager
+  const me = String(user?.email || '').toLowerCase();
+  const myName = String(user?.displayName || '').trim().toLowerCase();
+  const owner = String(quotationOwner(q, lead) || '').trim().toLowerCase();
+  if (owner && (owner === me || owner === myName)) return true;
+  if (String(q.raisedBy || '').toLowerCase() === me) return true;
+  // The Team Leader of whoever holds it.
+  const leader = quotationLeaderEmail(q, lead, users);
+  return !!leader && leader === me;
+}
+
+// ── Who may see the customer's acceptance proof (2-Oct) ─────────────────────
+// The screenshot of the customer's "OK" is kept with the quotation, and is for
+// the people with a part in the sale: whoever it is assigned to, their Team
+// Leader, and the approving authorities. Nobody else.
+export function canSeeAcceptanceProof(q, lead, user, role, users) {
+  if (!q) return false;
+  if (QUOTATION_APPROVER_ROLES.includes(normalizeRole(role))) return true;
+  const me = String(user?.email || '').toLowerCase();
+  const myName = String(user?.displayName || '').trim().toLowerCase();
+  if (!me) return false;
+  const owner = String(quotationOwner(q, lead) || '').trim().toLowerCase();
+  if (owner && (owner === me || owner === myName)) return true;
+  if (String(q.raisedBy || '').toLowerCase() === me) return true;
+  if (String(q.acceptanceProofBy || '').toLowerCase() === me) return true;
+  const leader = quotationLeaderEmail(q, lead, users);
+  return !!leader && leader === me;
+}
+
+// When it can be attached: from the point the quotation is with the customer
+// until it is accepted. The screenshot is the evidence for marking it
+// accepted, so it has to be attachable before that button is pressed, not
+// only afterwards.
+export const PROOF_STATUSES = ['Shared with Customer', 'Accepted'];
+
+// Who may attach it: the same people, but not the whole approver bench —
+// it is the assigned person's job, with their leader and Admin able to help.
+export function canUploadAcceptanceProof(q, lead, user, role, users) {
+  if (!q || !PROOF_STATUSES.includes(q.status)) return false;
+  return canSeeAcceptanceProof(q, lead, user, role, users);
+}
+
+// ── Purchase Orders raised from a lead (2-Oct) ──────────────────────────────
+//
+// A PO used to be addable and editable only by the roles on PO_RECORD
+// (Operation Manager, Admin, Warehouse Admin, Sales Manager). That left out the
+// two people closest to the job: the executive the lead is assigned to, and
+// their Team Leader — so raising a PO meant asking someone else to do it.
+//
+// These three keep the existing role rules exactly as they were and add the
+// lead's own people on top. An explicit "New PO: off" set by an Admin in
+// Permission Management still wins, because that is a deliberate instruction.
+
+// Is this person the one the lead sits with?
+export function isLeadOwner(lead, user) {
+  const me = String(user?.email || '').toLowerCase();
+  const myName = String(user?.displayName || '').trim().toLowerCase();
+  if (!me && !myName) return false;
+  return [lead?.assignedTo, lead?.salesExecutive, lead?.teamLeader]
+    .map(v => String(v || '').trim().toLowerCase())
+    .some(v => v !== '' && (v === me || v === myName));
+}
+
+// The Team Leader of whoever holds the lead.
+export function leadLeaderEmail(lead, users) {
+  const owner = String(lead?.assignedTo || lead?.salesExecutive || '').trim().toLowerCase();
+  if (!owner) return '';
+  const u = (users || []).find(x =>
+    String(x.email || '').toLowerCase() === owner ||
+    String(x.displayName || '').trim().toLowerCase() === owner);
+  return u ? leaderOf(users, u.email) : '';
+}
+
+export const isLeadLeader = (lead, user, users) => {
+  const me = String(user?.email || '').toLowerCase();
+  const leader = leadLeaderEmail(lead, users);
+  return !!me && !!leader && leader === me;
+};
+
+// An Admin switching "New PO" off for someone is an instruction, not a default.
+const poExplicitlyDenied = (user, role) => {
+  if (role === 'super_admin' || hasAccess(role, 'admin')) return false;
+  const p = user && user.permissions;
+  return !!(p && typeof p === 'object' && p.new_po !== undefined && p.new_po !== null && !p.new_po);
+};
+
+export function canAddLeadPO(lead, user, role, users) {
+  if (poExplicitlyDenied(user, role)) return false;
+  if (can(role, ACTIONS.PO_RECORD)) return true;          // the roles that always could
+  if (hasAccess(role, 'admin')) return true;              // Admin / Management / Owner
+  if (isLeadOwner(lead, user)) return true;               // the person it is assigned to
+  return isLeadLeader(lead, user, users);                 // and their Team Leader
+}
+
+// Before final approval a PO is still a draft, so the people above may correct
+// it. Once it is approved it is fixed — and a rejection or a revision, which
+// put it back to Unapproved, open it again.
+export const PO_EDITABLE_STATUSES = [PO_STATUS.UNAPPROVED, PO_STATUS.RECOMMENDED, PO_STATUS.MANAGEMENT_APPROVED, 'Rejected', ''];
+
+export function canEditLeadPO(po, lead, user, role, users) {
+  const status = (po && po.status) || PO_STATUS.UNAPPROVED;
+  if (status === PO_STATUS.APPROVED) return false;        // approved is final
+  if (!PO_EDITABLE_STATUSES.includes(status)) return false;
+  return canAddLeadPO(lead, user, role, users);
+}
+
+// Recommending is the Team Leader's step. The Operation Manager and Admin keep
+// it too, as they always had it, and nobody recommends a PO they raised.
+export function canRecommendLeadPO(po, lead, user, role, users) {
+  const status = (po && po.status) || PO_STATUS.UNAPPROVED;
+  if (status !== PO_STATUS.UNAPPROVED) return false;
+  const me = String(user?.email || '').toLowerCase();
+  if (me && String(po?.createdBy || '').toLowerCase() === me) {
+    // Raising and recommending your own PO is not a review; the roles that
+    // own the step by seniority may still do it.
+    return can(role, ACTIONS.PO_RECOMMENDATION);
+  }
+  if (can(role, ACTIONS.PO_RECOMMENDATION)) return true;
+  return isLeadLeader(lead, user, users);
+}
+
+// Who hears that an approved PO is ready to dispatch.
+export const WAREHOUSE_ROLES = ['warehouse_admin', 'technical_manager'];
+export const warehouseUsers = (users) =>
+  (users || []).filter(u => u.approved !== false && WAREHOUSE_ROLES.includes(normalizeRole(u.role)));
+
+// ── Payment requests: the category, and the below-Rs.1,000 direct payment ───
+//
+// Every request now says what kind of payment it is. The three kinds are the
+// company's own; "Expenditure" is the default because that is what nearly all
+// of them are.
+export const PR_CATEGORIES = ['Expenditure', 'Salary Advance', 'Loan'];
+
+// A small payment does not wait for the approval chain: below this amount the
+// Accountant may pay it as soon as it is raised, and the Owner is told that it
+// was paid that way. At this amount or above, nothing changes.
+export const PR_DIRECT_PAY_LIMIT = 1000;
+
+const prAmount = (pr) => Number(pr && pr.amount) || 0;
+
+// Is this request small enough, and early enough in its life, to be paid
+// directly? Once it has been approved the ordinary path applies anyway.
+export function prDirectPayAllowed(pr) {
+  if (!pr) return false;
+  const status = pr.status || PR_STATUS.REQUESTED;
+  if (![PR_STATUS.REQUESTED, PR_STATUS.RECOMMENDED].includes(status)) return false;
+  const amt = prAmount(pr);
+  return amt > 0 && amt < PR_DIRECT_PAY_LIMIT;
+}
+
+// May this user pay it directly? The Accountant's step, and never their own
+// request — the same two rules the ordinary payment step follows.
+export function canDirectPayPr(pr, user, role) {
+  if (!prDirectPayAllowed(pr)) return false;
+  if (isOwnRequest(pr, user)) return false;
+  return can(role, ACTIONS.PR_TRANSFER);
+}
+
+// The Owner(s) — who must hear of every direct payment.
+export const ownerUsers = (users) =>
+  (users || []).filter(u => u.approved !== false && normalizeRole(u.role) === 'super_admin');
+
+// ── Warehouse dispatch, after a purchase order is approved ──────────────────
+//
+// An approved PO is handed to the warehouse, who send the material out item by
+// item. Each item is marked dispatched or not, with a reason when it is not;
+// the warehouse then declares the dispatch complete, the authorities are told,
+// and the Operation Manager confirms it after looking it over. None of this
+// touches the PO's own status, which stays Approved throughout.
+export const DISPATCH_STATUS = { NONE: '', PARTIAL: 'Partial', COMPLETED: 'Completed' };
+
+// Who may mark items and complete a dispatch: the warehouse — which the
+// client's "Warehouse / BCO" (8-Oct) says includes the BCO — with the
+// Operation Manager and Admin able to step in.
+export const DISPATCH_EDITOR_ROLES = ['warehouse_admin', 'technical_manager', 'bco', 'operation_manager', 'admin', 'management', 'super_admin'];
+// Who confirms it once complete.
+export const DISPATCH_CONFIRM_ROLES = ['operation_manager', 'admin', 'management', 'super_admin'];
+// Who is told when it is complete.
+export const DISPATCH_NOTIFY_ROLES = ['super_admin', 'management', 'operation_manager', 'admin'];
+
+const roleIn = (role, list) => list.includes(normalizeRole(role)) || role === 'super_admin';
+
+export const dispatchOpen = (po) => !!po && po.status === PO_STATUS.APPROVED;
+
+// Items may be marked until the Operation Manager has confirmed the dispatch.
+// Req 3 (15-Oct): once the warehouse has pressed "Stock OK" its own editing
+// is locked; from then until the confirmation only the Operation Manager (or
+// an Admin) may still correct the marks.
+export function canUpdateDispatch(po, role) {
+  if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  if (po.dispatchStatus === DISPATCH_STATUS.COMPLETED) return roleIn(role, DISPATCH_CONFIRM_ROLES);
+  return roleIn(role, DISPATCH_EDITOR_ROLES);
+}
+
+export function canConfirmDispatch(po, role) {
+  if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  if (po.dispatchStatus !== DISPATCH_STATUS.COMPLETED) return false;
+  return roleIn(role, DISPATCH_CONFIRM_ROLES);
+}
+
+export const dispatchNotifyUsers = (users) =>
+  (users || []).filter(u => u.approved !== false && DISPATCH_NOTIFY_ROLES.includes(normalizeRole(u.role)));
+
+// The lines the warehouse verifies: the PO's own items followed by the yard
+// items the Operation Manager added (Req 3, 27-Oct), each flagged `yard`.
+// Marks, handovers and the final dispatch all index into this one list, so a
+// yard item is verified, handed over and dispatched exactly like a PO item.
+// Mirrors po_lines() in routes/stock.php.
+export function poLines(po) {
+  const items = (po && Array.isArray(po.items)) ? po.items : [];
+  const yard = (po && Array.isArray(po.yardItems)) ? po.yardItems : [];
+  return [...items, ...yard.map(y => ({ ...y, yard: true }))];
+}
+
+// The marks for each item, one per PO line, in the PO's own order. A PO that
+// has never been touched gets a blank mark for every line.
+export function dispatchMarks(po) {
+  const items = poLines(po);
+  const marks = (po && Array.isArray(po.dispatchItems)) ? po.dispatchItems : [];
+  return items.map((it, i) => ({
+    dispatched: !!(marks[i] && marks[i].dispatched),
+    note: (marks[i] && marks[i].note) || '',
+    at: (marks[i] && marks[i].at) || '',
+    by: (marks[i] && marks[i].by) || '',
+  }));
+}
+
+// How far the dispatch has got.
+export function dispatchSummary(po) {
+  const items = poLines(po);
+  const marks = dispatchMarks(po);
+  const pending = [];
+  let dispatched = 0;
+  marks.forEach((m, i) => {
+    if (m.dispatched) dispatched++;
+    else pending.push({ index: i, name: (items[i] && items[i].materialName) || `Item ${i + 1}`, note: m.note });
+  });
+  return { total: items.length, dispatched, pending, allDispatched: items.length > 0 && dispatched === items.length };
+}
+
+// What stops the warehouse from declaring the dispatch complete: nothing sent
+// at all, or an item held back without a reason. Partial dispatch is allowed —
+// it just has to say why each missing item is missing.
+export function dispatchCompleteIssue(po, marks) {
+  const items = poLines(po);
+  if (!items.length) return 'This purchase order has no items to dispatch.';
+  const ms = marks || dispatchMarks(po);
+  if (!ms.some(m => m.dispatched)) return 'Mark at least one item as dispatched first.';
+  const unexplained = ms.map((m, i) => (!m.dispatched && !String(m.note || '').trim()) ? ((items[i] && items[i].materialName) || `Item ${i + 1}`) : '').filter(Boolean);
+  if (unexplained.length) return `Add a note saying why these were not dispatched: ${unexplained.join(', ')}.`;
+  return '';
+}
+
+// ── Dispatch handover: warehouse → Operation Manager → the person (R6, 8-Oct) ─
+//
+// Once the warehouse has sent its list ("OK & Send", which is the Material
+// Dispatch Completed step above), the Operation Manager hands the items to a
+// named person, who confirms they have received them. Each step is a stamp on
+// the same PO: nothing here changes the PO's status or the dispatch marks.
+export const DISPATCH_ASSIGN_ROLES = DISPATCH_CONFIRM_ROLES;
+
+// The dispatch has been sent to the office — the point from which it can be assigned.
+export const dispatchSent = (po) => !!po && po.dispatchStatus === DISPATCH_STATUS.COMPLETED;
+
+// Yard items (Req 3, 27-Oct): the Operation Manager (or an Admin) adds
+// materials from the Materials master to the verification list, until the
+// Approval for Dispatch is given. Mirrors the yardItems gate in collections.php.
+export function canAddYardItems(po, role) {
+  if (!dispatchOpen(po) || po.dispatchConfirmedAt) return false;
+  return roleIn(role, DISPATCH_CONFIRM_ROLES);
+}
+// A yard line from a material on the master list and the quantity entered.
+export const yardItemFrom = (material, quantity, by) => ({
+  materialId: material.id, materialName: material.name, unit: material.unit || '', quantity: Number(quantity) || 0,
+  specification: material.category || '', addedBy: by || '', addedAt: new Date().toISOString(),
+});
+// A yard item added after Stock OK starts unmarked, and nobody but the
+// Operation Manager is left to mark it. An unmarked line is left out of the
+// handover and the dispatch, so the Approval for Dispatch waits until each
+// yard item is marked available (Yes) or given a reason.
+export function yardApprovalIssue(po, marks) {
+  const items = poLines(po);
+  const ms = Array.isArray(marks) ? marks : dispatchMarks(po);
+  const open = items.map((it, i) => (it.yard && !(ms[i] && ms[i].dispatched) && !String((ms[i] && ms[i].note) || '').trim()) ? (it.materialName || `Item ${i + 1}`) : '').filter(Boolean);
+  if (!open.length) return '';
+  return `Mark the yard item${open.length === 1 ? '' : 's'} ${open.join(', ')} as available (Yes), or say why not, before giving the Approval for Dispatch — otherwise ${open.length === 1 ? 'it is' : 'they are'} left out of the handover and the dispatch.`;
+}
+
+// The Operation Manager (or above) assigns, once the warehouse has sent the
+// list and until the items have been received. Re-assigning before receipt is
+// allowed — people fall ill.
+export function canAssignDispatch(po, role) {
+  if (!dispatchOpen(po) || !dispatchSent(po)) return false;
+  if (po.dispatchReceivedAt) return false;
+  return roleIn(role, DISPATCH_ASSIGN_ROLES);
+}
+
+// Only the person the items were assigned to can say they have received them.
+export function canReceiveDispatch(po, user) {
+  if (!dispatchOpen(po) || !dispatchSent(po)) return false;
+  if (!po.dispatchAssignedTo || po.dispatchReceivedAt) return false;
+  return isSameUser(po.dispatchAssignedTo, user) || isSameUser(po.dispatchAssignedToEmail, user);
+}
+
+// The items that actually went out — what the assigned person is handed.
+export function dispatchedItemNames(po) {
+  const items = poLines(po);
+  return dispatchMarks(po).map((m, i) => (m.dispatched ? `${(items[i] && items[i].materialName) || `Item ${i + 1}`} (${(items[i] && items[i].quantity) || ''} ${(items[i] && items[i].unit) || ''})`.replace(/\s+\)/, ')') : '')).filter(Boolean);
+}
+
+// Where the handover stands, in one line.
+export function dispatchHandoverState(po) {
+  if (!po || !dispatchSent(po)) return { step: 'none', text: '' };
+  if (po.dispatchReceivedAt) return { step: 'received', text: `Received by ${po.dispatchReceivedBy || po.dispatchAssignedTo || '-'}` };
+  if (po.dispatchAssignedTo) return { step: 'assigned', text: `Assigned to ${po.dispatchAssignedTo} — awaiting their receipt` };
+  return { step: 'sent', text: 'Sent by the warehouse — awaiting the Operation Manager\'s assignment' };
+}
+
+// ── Installations: who may add and edit (R6.3 / R6.4, 8-Oct) ───────────────
+//
+// Adding an installation, and editing any of them, is a manager-level job by
+// default; an Admin can grant it to one person (P. Ganesh) through the
+// per-user permission. On top of that, the Team Leader named on an
+// installation may edit that installation — and only that one. Team members
+// are told they are on it but cannot edit it.
+export const canManageInstallations = (user, role) => hasModule(user, role, 'installations_manage');
+
+export function canEditInstallation(inst, user, role) {
+  if (canManageInstallations(user, role)) return true;
+  if (!inst || !user) return false;
+  return isSameUser(inst.teamLeader, user) || isSameUser(inst.teamLeaderEmail, user);
+}
+
+// The team sizes offered on the form. "Such as 3 or 4" — these cover a crew.
+export const INSTALLATION_TEAM_SIZES = [1, 2, 3, 4, 5, 6, 7, 8];
+
+// The members list trimmed to the chosen size, with blanks and the leader's
+// own name removed, and nobody twice.
+export function installationTeamMembers(members, size, leader) {
+  const n = Math.max(0, Math.min(Number(size) || 0, 20));
+  const seen = new Set();
+  const out = [];
+  (members || []).slice(0, n).forEach(m => {
+    const name = String(m || '').trim();
+    if (!name) return;
+    const key = name.toLowerCase();
+    if (seen.has(key) || key === String(leader || '').trim().toLowerCase()) return;
+    seen.add(key);
+    out.push(name);
+  });
+  return out;
+}
+
+// Who is newly on an installation team after a save: the leader if they
+// changed, and every member who was not there before. These are the people
+// to notify; the ones already on it are not told again.
+export function installationTeamChanges(prev, next) {
+  const lc = (v) => String(v || '').trim().toLowerCase();
+  const before = new Set(((prev && prev.teamMembers) || []).map(lc));
+  const leaderChanged = lc(next && next.teamLeader) && lc(next.teamLeader) !== lc(prev && prev.teamLeader);
+  const newMembers = ((next && next.teamMembers) || []).filter(m => lc(m) && !before.has(lc(m)));
+  return { leaderChanged, newLeader: leaderChanged ? next.teamLeader : '', newMembers };
+}

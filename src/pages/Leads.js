@@ -3,45 +3,83 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
-import { printPO, downloadPO, printBOM, downloadBOM, sharePOWhatsApp } from '../services/poUtils';
+import { apiUpload } from '../services/api';
+import { assignableNames, supportingNames } from '../services/people';
+import { formatCurrency, formatDate, formatDateTime, safeStr, toNumber, daysSince, priorityClass, hasAccess, makeCall, sendWhatsApp, escapeHtml, openHtmlSafely, normName as norm, todayStr, compressImage, isSafeUrl, shareWhatsApp } from '../services/helpers';
+import { StatusBadge, Modal, EmptyState, DateInput, SearchSelect, DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { sharePOWhatsApp } from '../services/poUtils';
+import { openPoPdf, downloadPoPdf, poTerm } from '../services/poShare';
+import {
+  can, ACTIONS, PO_STATUS, advanceGate, canSeeLead, canEditLead, salesMembersOf, teamLeaders, normalizeRole,
+  quotationApprovers, canAddLeadPO, canEditLeadPO, canRecommendLeadPO, warehouseUsers,
+} from '../services/permissions';
+import QuotationPanel from '../components/QuotationPanel';
+import DispatchPanel from '../components/DispatchPanel';
+import BcoOperationsPanel from '../components/BcoOperationsPanel';
+import { canViewBco, bcoProgress } from '../services/bco';
+import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRef } from '../services/quotation';
+import { getOptions, withCurrent } from '../services/options';
+import { sortBomItems } from '../services/bomOrder';
+import { buildLeadNotice, leadNotifyTargets, siteVisitPhotoIssue, sitePhotoList } from '../services/leadNotify';
+// 31-Oct (Customers batch): a converted lead's customer starts with the stages
+// the lead and the BCO already recorded, and the lead's Advance Received keeps
+// Stage 6 of the customer's workflow up to date.
+import { newCustomerWorkflow } from '../services/customerWorkflow';
+import { syncLeadToCustomer } from '../services/customerSync';
 
-const refs = ['Website', 'Referral', 'Walk-in', 'Facebook Ad', 'Google Ad', 'Other'];
-const fups = ['New Lead', 'Interested', 'Follow-up', 'Negotiating', 'No Response', 'Completed'];
+// The customer made from a converted lead (Req 1.3, 1.8–1.10, 1.16): the
+// lead's details, the person it is assigned to, and whatever the lead and the
+// BCO already recorded for Stages 5, 6 and 12 of the customer's workflow.
+function customerFromConvertedLead(leadId, cleaned, bco, by) {
+  const fields = {
+    leadId,
+    name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
+    email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
+    city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
+    assignedTo: cleaned.assignedTo || '', salesExecutive: cleaned.salesExecutive || '',
+    advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
+    totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
+    customerServiceNumber: cleaned.customerServiceNumber || '',
+    status: 'Active',
+  };
+  return { ...fields, workflow: newCustomerWorkflow(fields, { lead: { ...cleaned, id: leadId }, bco, by }) };
+}
+
+// Lead Reference, Follow-up Status, Priority and Mode of Payment now come from
+// Settings → Manage Options (src/services/options.js holds the same defaults).
+// Lead Status stays fixed: "Converted" creates the customer record, so the app's
+// behaviour hangs off these exact four values.
 const sts = ['Interested', 'Not Interested', 'Converted', 'Not Converted'];
-const priorities = ['Hot', 'Warm', 'Cold'];
 const PAGE_SIZE = 20;
+// The filter tab holding leads whose quotation was not accepted and that are
+// waiting for their next follow-up.
+const PENDING_FOLLOWUP = 'Pending Follow-up';
 
-const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
+const EMPTY_BOM_ITEM = { materialName: '', make: '', quantity: '', actualQuantity: '', unit: 'Nos', specification: '', scopePragathi: false, scopeCustomer: false, rate: '', amount: 0 };
 
 // Stable per-row keys so add/remove doesn't shuffle React DOM/focus (not persisted to Firestore)
 let bomKeyCounter = 0;
 const nextBomKey = () => 'bom_' + (bomKeyCounter++);
 
+// The material catalogue, in the order of the official Bill of Materials sheet.
+// The kW-specific inverter variants are kept at the end so nothing that could be
+// picked before has been taken away.
 const DEFAULT_BOM_MATERIALS = [
-  { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (2KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (3KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (4KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (5KW - 1 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (5KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (6KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (8KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Grid Tie Inverter (10KW - 3 Ph)', unit: 'Nos', make: 'Tata / Others' },
-  { materialName: 'Others', unit: 'Nos', make: 'Tata / Others' },
+  { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter', unit: 'Nos', make: 'Tata/Others' },
   { materialName: 'Junction Box / ACDB', unit: 'Nos', make: '' },
   { materialName: 'Junction Box / DCDB', unit: 'Nos', make: '' },
   { materialName: 'Earthing Rods', unit: 'Nos', make: '' },
+  { materialName: 'LA', unit: 'Nos', make: '' },
+  { materialName: 'MC4 Connectors', unit: 'Nos', make: '' },
   { materialName: 'Earth Chemical Bags', unit: 'Nos', make: '' },
   { materialName: 'Earth Chambers', unit: 'Nos', make: '' },
-  { materialName: 'MC4 Connectors', unit: 'Nos', make: '' },
   { materialName: 'DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'Earthing Cable', unit: 'Mtrs', make: 'Polycab/Others' },
-  { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOD DIP/Other' },
-  { materialName: 'If Any Elevated MMS (Mention Height)', unit: 'Nos', make: 'HOD DIP/Other' },
+  { materialName: 'MMS -2/4 (PPS Standard)', unit: 'Nos', make: 'HOT DIP/Other' },
+  { materialName: 'If Any Elevated MMS (Height)', unit: 'Nos', make: 'HOT DIP/Other' },
   { materialName: 'Additional AC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'Additional DC Cable', unit: 'Mtrs', make: 'Polycab/Others' },
   { materialName: 'Additional Earth Cable', unit: 'Mtrs', make: 'Polycab/Others' },
@@ -51,12 +89,29 @@ const DEFAULT_BOM_MATERIALS = [
   { materialName: 'DISCOM Charges', unit: 'Rs.', make: '' },
   { materialName: 'Ladder (Height)', unit: 'Nos', make: '' },
   { materialName: 'MCS - Cleaning System', unit: 'Nos', make: '' },
+  { materialName: 'Additional Load', unit: '', make: '' },
+  { materialName: 'Any Misc / Others', unit: '', make: '' },
+  // kW-specific inverter variants (kept from the previous catalogue)
+  { materialName: 'Grid Tie Inverter (1KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (2KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (3KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (4KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 1 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (5KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (6KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (8KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Grid Tie Inverter (10KW - 3 Ph)', unit: 'Nos', make: 'Tata/Others' },
+  { materialName: 'Module Mounting Structure (2-4) Default Structure', unit: 'Nos', make: 'HOT DIP/Other' },
 ];
+
+// The day a lead belongs to for the Day / Month filter: the date it was
+// generated, else the moment the record was created.
+const LEAD_DATE_FIELDS = ['dateGenerated', 'createdAt'];
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads, customers, users, influencers } = useData();
-  const { role } = useAuth();
+  const { leads, customers, users, influencers, team, quotations, leadPOs, bcoOps, installations } = useData();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -64,9 +119,21 @@ export default function Leads() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [detailId, setDetailId] = useState(null);
   const [detailTab, setDetailTab] = useState(null);
+  // The common Day / Month filter (R15). Opens on All, so the list is unchanged until used.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
-  // When 'all', exclude Converted leads (they move to Customers); Converted tab shows only converted
-  let filtered = leads.filter(l => filter === 'all' ? l.status !== 'Converted' : l.status === filter);
+  // A lead belongs to the person it is assigned to: they, the people working it
+  // and the hierarchy above them see it — nobody else (19-Sep requirement 6).
+  const myLeads = leads.filter(l => canSeeLead(l, user, role, users, team, leadPOs));
+
+  // When 'all', exclude Converted leads (they move to Customers); Converted tab
+  // shows only converted; "Pending Follow-up" holds the leads whose quotation
+  // the customer did not accept, with a follow-up date recorded.
+  let filtered = myLeads.filter(l => {
+    if (filter === 'all') return l.status !== 'Converted';
+    if (filter === PENDING_FOLLOWUP) return !!l.pendingFollowUp && l.status !== 'Converted';
+    return l.status === filter;
+  });
   // B4 fix: null-safe search using safeStr
   if (search) {
     const q = search.toLowerCase();
@@ -80,10 +147,28 @@ export default function Leads() {
     );
   }
 
+  filtered = applyDateFilter(filtered, dateFilter, LEAD_DATE_FIELDS);
+
   // P2 fix: client-side pagination
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
   const detailLead = detailId ? leads.find(l => l.id === detailId) : null;
+  const pendingFollowUpCount = myLeads.filter(l => l.pendingFollowUp && l.status !== 'Converted').length;
+
+  // Who is doing the assigning — included in the notification so the employee
+  // knows at a glance who gave them the lead.
+  const assignedByName = user?.displayName || user?.email || 'a team leader';
+
+  // Req 1.3: the person the lead is assigned to hears at once that it has
+  // become a customer, which now sits in their Customers list.
+  const tellAssigneeOfCustomer = (lead, customerId) => {
+    if (!lead.assignedTo) return;
+    createNotification({
+      forUser: lead.assignedTo, title: 'Your Lead Is Now a Customer',
+      message: `"${lead.name}" has been converted and added to Customers. It is in your Customers list — the workflow continues there.`,
+      type: 'customer', module: 'customers', relatedId: customerId,
+    });
+  };
 
   const handleSave = async (data, id, prevStatus, prevExpectedSignUpDate) => {
     try {
@@ -91,6 +176,7 @@ export default function Leads() {
         ...data,
         expectedValue: toNumber(data.expectedValue),
         monthlyBill: toNumber(data.monthlyBill),
+        monthlyBillAmount: toNumber(data.monthlyBillAmount),
         floors: toNumber(data.floors),
         sanctionedLoad: toNumber(data.sanctionedLoad)
       };
@@ -98,40 +184,61 @@ export default function Leads() {
       if (id) {
         await updateDocument('leads', id, cleaned);
         toast('Lead updated');
-        // Notify assigned user on lead update
-        if (cleaned.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Updated', message: `Lead "${cleaned.name}" has been updated`, type: 'lead', module: 'leads', relatedId: id });
-        }
-        // Notify new assignee if assignment changed
-        if (cleaned.assignedTo && prevLead && cleaned.assignedTo !== prevLead.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'Lead Assigned to You', message: `Lead "${cleaned.name}" has been assigned to you`, type: 'lead', module: 'leads', relatedId: id });
-        }
-        // Notify admin on status change
-        if (prevStatus && cleaned.status !== prevStatus) {
-          notifyAdmins(users, { title: 'Lead Status Changed', message: `Lead "${cleaned.name}" changed from ${prevStatus} to ${cleaned.status}`, type: 'lead', module: 'leads', relatedId: id });
+        // One notice covering the whole edit, sent to everyone with a stake in
+        // the lead. It replaces the old pair of messages, which told only the
+        // assignee, never said who had changed what, and fired on every save.
+        const notice = buildLeadNotice({
+          lead: { ...cleaned, id }, prevLead, users, actor: user, quotations, leadPOs,
+        });
+        if (notice) {
+          notice.targets.forEach(forUser => createNotification({
+            forUser, title: notice.title, message: notice.message,
+            type: 'lead', module: 'leads', relatedId: id,
+          }));
+          // The person the lead has just landed on is told directly, because
+          // for them it is a job to pick up rather than news about a record.
+          if (notice.reassigned && notice.assignee) {
+            createNotification({
+              forUser: notice.assignee,
+              title: 'Lead Assigned to You',
+              message: `${assignedByName} assigned you the lead "${cleaned.name}"`
+                + `${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`
+                + `${notice.previousAssignee ? ' (previously with ' + notice.previousAssignee + ')' : ''}`,
+              type: 'lead', module: 'leads', relatedId: id,
+            });
+          }
+          if (notice.reassigned && notice.previousAssignee) {
+            createNotification({
+              forUser: notice.previousAssignee,
+              title: 'Lead Moved to Someone Else',
+              message: `${assignedByName} moved the lead "${cleaned.name}" from you to ${notice.assignee || '(unassigned)'}.`,
+              type: 'lead', module: 'leads', relatedId: id,
+            });
+          }
         }
       } else {
         const newId = await addDocument('leads', cleaned);
         toast('Lead added');
         // Notify assigned user on new lead
         if (cleaned.assignedTo) {
-          createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `New lead "${cleaned.name}" has been assigned to you`, type: 'lead', module: 'leads', relatedId: newId });
+          createNotification({ forUser: cleaned.assignedTo, title: 'New Lead Assigned', message: `${assignedByName} assigned you a new lead: "${cleaned.name}"${cleaned.phone ? ' · ' + cleaned.phone : ''}${cleaned.city ? ' · ' + cleaned.city : ''}`, type: 'lead', module: 'leads', relatedId: newId });
         }
-        // Notify admins about new lead
-        notifyAdmins(users, { title: 'New Lead Created', message: `New lead "${cleaned.name}" created`, type: 'lead', module: 'leads', relatedId: newId });
+        // The Team Leader and the approval line hear about a new lead too, not
+        // just the Admins — they are the people who have to act on it.
+        leadNotifyTargets({ lead: { ...cleaned, id: newId }, prevLead: null, users, actor: user })
+          .filter(t => t !== cleaned.assignedTo)
+          .forEach(forUser => createNotification({
+            forUser,
+            title: 'New Lead Created',
+            message: `${assignedByName} created the lead "${cleaned.name}"`
+              + `${cleaned.city ? ' · ' + cleaned.city : ''}, assigned to ${cleaned.assignedTo || '(nobody)'}.`,
+            type: 'lead', module: 'leads', relatedId: newId,
+          }));
         // Auto-create customer if lead is created directly as Converted
         if (cleaned.status === 'Converted') {
-          await addDocument('customers', {
-            leadId: newId,
-            name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
-            email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
-            city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
-            advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
-            totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
-            customerServiceNumber: cleaned.customerServiceNumber || '',
-            status: 'Active'
-          });
+          const custId = await addDocument('customers', customerFromConvertedLead(newId, cleaned, null, assignedByName));
           toast(cleaned.name + ' auto-added to Customers!');
+          tellAssigneeOfCustomer(cleaned, custId);
         }
         // Auto-create reminder for Expected Sign-Up Date on new lead
         if (cleaned.expectedSignUpDate) {
@@ -156,10 +263,8 @@ export default function Leads() {
             toast(cleaned.referredByName + ' added as Influencer automatically');
           }
         }
-        // Auto-open lead detail on PO tab for the new lead
+        // Close the form and return to the list (no auto-popup).
         setModal(null);
-        setDetailTab('pos');
-        setTimeout(() => setDetailId(newId), 300);
         return;
       }
       // Auto-create reminder for Expected Sign-Up Date (new or changed)
@@ -189,17 +294,13 @@ export default function Leads() {
       // Guard against duplicates: skip if a customer already exists for this lead (by leadId or name+phone).
       const existingCustomer = customers.find(c => c.leadId === id || (c.phone === cleaned.phone && c.name === cleaned.name));
       if (cleaned.status === 'Converted' && prevStatus !== 'Converted' && !existingCustomer) {
-        await addDocument('customers', {
-          leadId: id,
-          name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
-          email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
-          city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
-          advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
-          totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
-          customerServiceNumber: cleaned.customerServiceNumber || '',
-          status: 'Active'
-        });
+        const bco = (bcoOps || []).find(o => o.leadId === id) || null;
+        const custId = await addDocument('customers', customerFromConvertedLead(id, cleaned, bco, assignedByName));
         toast(cleaned.name + ' auto-added to Customers!');
+        tellAssigneeOfCustomer(cleaned, custId);
+      } else if (existingCustomer) {
+        // The lead's Advance Received → Stage 6 of the customer's workflow (Req 1.10).
+        await syncLeadToCustomer({ customers, leads, leadPOs, installations, bcoOps, lead: { ...(prevLead || {}), ...cleaned, id }, by: assignedByName }).catch(() => {});
       }
       setModal(null);
     } catch (e) { toast(e.message, 'er'); }
@@ -219,33 +320,55 @@ export default function Leads() {
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search leads..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-            {['all', ...sts].map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
+        <div className="tl-r">
+          <div className="chips">
+            {['all', ...sts, PENDING_FOLLOWUP].map(s => (
+              <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>
+                {s === 'all' ? 'All' : s}
+                {s === PENDING_FOLLOWUP && pendingFollowUpCount > 0 ? ` (${pendingFollowUpCount})` : ''}
+              </span>
+            ))}
           </div>
           <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Lead</button>
         </div>
       </div>
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table style={{ fontSize: '.82rem' }}><thead><tr><th>Name / Phone</th><th>Address</th><th>Source</th><th>Priority</th><th>Assigned</th><th style={{ textAlign: 'center' }}>Visit</th><th style={{ textAlign: 'center' }}>Quote</th><th style={{ textAlign: 'center' }}>Advance</th><th>Status</th><th>Date</th><th>Age</th><th>Actions</th></tr></thead><tbody>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={myLeads} fields={LEAD_DATE_FIELDS} /></div>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table style={{ fontSize: '.82rem' }}><thead><tr><th>Name / Phone</th><th>Address</th><th>Source</th><th>Priority</th><th>Assigned</th><th style={{ textAlign: 'center' }}>Visit</th><th style={{ textAlign: 'center' }}>Quote</th><th style={{ textAlign: 'center' }}>Advance</th><th>Status</th><th>Date</th><th>Age</th><th>Actions</th></tr></thead><tbody>
         {displayed.map(l => (
           <tr key={l.id}>
-            <td style={{ minWidth: 120 }}><strong style={{ fontSize: '.84rem' }}>{l.name}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{l.phone}</span></td>
-            <td style={{ maxWidth: 130, fontSize: '.78rem' }}>{l.address || '-'}</td>
-            <td style={{ fontSize: '.78rem' }}>{l.leadReference || '-'}</td>
-            <td>{l.priority ? <span className={`st ${priorityClass(l.priority)}`} style={{ padding: '3px 8px', fontSize: '.72rem' }}>{l.priority}</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
-            <td style={{ fontSize: '.78rem' }}>{l.assignedTo || '-'}</td>
-            <td style={{ textAlign: 'center' }}>{l.siteVisit === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Done</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td style={{ textAlign: 'center' }}>{l.quotationSent === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Sent</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td style={{ textAlign: 'center' }}>{l.advancePaid === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Paid</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
-            <td><StatusBadge status={l.status} /></td>
-            <td style={{ fontSize: '.76rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td>
-            <td style={{ fontSize: '.78rem', fontWeight: 600 }}>{daysSince(l.dateGenerated) != null ? daysSince(l.dateGenerated) + 'd' : '-'}</td>
-            <td><div style={{ display: 'flex', gap: 3 }}>
+            <td className="m-h" style={{ minWidth: 120 }}><strong style={{ fontSize: '.84rem' }}>{l.name}</strong><br /><span style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{l.phone}</span></td>
+            <td data-l="Address" style={{ maxWidth: 130, fontSize: '.78rem' }}>{l.address || '-'}</td>
+            <td data-l="Source" style={{ fontSize: '.78rem' }}>{l.leadReference || '-'}</td>
+            <td data-l="Priority">{l.priority ? <span className={`st ${priorityClass(l.priority)}`} style={{ padding: '3px 8px', fontSize: '.72rem' }}>{l.priority}</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+            <td data-l="Assigned" style={{ fontSize: '.78rem' }}>{l.assignedTo || '-'}</td>
+            <td data-l="Visit" style={{ textAlign: 'center' }}>{l.siteVisit === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Done</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
+            <td data-l="Quote" style={{ textAlign: 'center' }}>{l.quotationSent === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Sent</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
+            <td data-l="Advance" style={{ textAlign: 'center' }}>{l.advancePaid === 'Yes' ? <span className="st st-g" style={{ padding: '2px 6px', fontSize: '.7rem' }}>Paid</span> : <span style={{ color: 'var(--light)', fontSize: '.76rem' }}>No</span>}</td>
+            <td data-l="Status">
+              <StatusBadge status={l.status} />
+              {l.pendingFollowUp && l.status !== 'Converted' && (() => {
+                // Two days ahead of the follow-up date the chip turns red, which
+                // is the same point the reminder pops up.
+                const d = daysUntil(l.nextFollowUpDate);
+                const soon = d != null && d <= FOLLOWUP_REMIND_DAYS;
+                return (
+                  <span className={`st ${soon ? 'st-r' : 'st-o'}`} style={{ padding: '2px 6px', fontSize: '.68rem', display: 'block', marginTop: 3 }}
+                    title={l.notAcceptedReason || 'Pending follow-up'}>
+                    {d == null ? 'Follow-up' : d < 0 ? `Follow-up overdue ${-d}d` : d === 0 ? 'Follow-up today' : `Follow-up in ${d}d`}
+                  </span>
+                );
+              })()}
+            </td>
+            <td data-l="Date" style={{ fontSize: '.76rem', whiteSpace: 'nowrap' }}>{formatDate(l.dateGenerated)}</td>
+            <td data-l="Age" style={{ fontSize: '.78rem', fontWeight: 600 }}>{daysSince(l.dateGenerated) != null ? daysSince(l.dateGenerated) + 'd' : '-'}</td>
+            <td className="m-a"><div style={{ display: 'flex', gap: 3 }}>
               {l.phone && <button className="btn bsm bo" onClick={() => makeCall(l.phone)} title="Call" style={{ padding: '5px 8px', color: '#3b82f6', borderColor: 'rgba(59,130,246,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>call</span></button>}
               {l.phone && <button className="btn bsm bo" onClick={() => sendWhatsApp(l.phone, `Hi ${l.name}, this is from Pragathi Power Solutions regarding your solar enquiry.`)} title="WhatsApp" style={{ padding: '5px 8px', color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>chat</span></button>}
               <button className="btn bsm bo" onClick={() => setDetailId(l.id)} title="View Details" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>visibility</span></button>
+              <button className="btn bsm bo" onClick={() => { setDetailTab('quotation'); setDetailId(l.id); }} title="Quotation" style={{ padding: '5px 8px', color: 'var(--pri)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>description</span></button>
               <button className="btn bsm bo" onClick={() => { setDetailTab('pos'); setDetailId(l.id); }} title="PO & BOM" style={{ padding: '5px 8px', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>receipt_long</span></button>
-              <button className="btn bsm bo" onClick={() => setModal({ data: l, id: l.id })} title="Edit" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>
+              {/* Req 2 / Req 4 (15-Oct): the BCO, the warehouse and a Technician look but do not edit. */}
+              {canEditLead(l, user, role, users) && <button className="btn bsm bo" onClick={() => setModal({ data: l, id: l.id })} title="Edit" style={{ padding: '5px 8px' }}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span></button>}
               {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(l.id)} title="Delete" style={{ padding: '5px 8px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
             </div></td>
           </tr>
@@ -262,16 +385,23 @@ export default function Leads() {
 
 /* ============ EDIT MODAL (UNCHANGED) ============ */
 function LeadModal({ data, id, onSave, onClose }) {
-  const { leads, customers, team, retailers, influencers } = useData();
+  const { leads, customers, retailers, influencers, users, settings } = useData();
+  // The tariff used to convert a monthly bill amount into units, and back.
+  const ebTariff = toNumber(settings?.ebTariff) || DEFAULT_TARIFF;
+  // Dropdown choices come from Settings → Manage Options. Whatever this lead
+  // already holds stays on its list, even if the Admin has since removed it.
+  const opt = (key, current) => withCurrent(getOptions(settings, key), current);
   // B1 fix: track previous status to detect first conversion
   const prevStatus = data.status;
   const [form, setForm] = useState({
     name: data.name || '', phone: data.phone || '', address: data.address || '',
     email: data.email || '',
-    leadReference: data.leadReference || 'Website', leadReferenceOther: data.leadReferenceOther || '', dateGenerated: data.dateGenerated || new Date().toISOString().slice(0, 10),
+    leadReference: data.leadReference || 'Website', leadReferenceOther: data.leadReferenceOther || '', dateGenerated: data.dateGenerated || todayStr(),
     lastFollowUp: data.lastFollowUp || '', followUpStatus: data.followUpStatus || 'New Lead',
+    siteVisitPhotos: sitePhotoList(data.siteVisitPhotos),
     siteVisit: data.siteVisit || 'No', quotationSent: data.quotationSent || 'No',
-    advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', status: data.status || 'Interested',
+    advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', advanceLeadDate: data.advanceLeadDate || '', status: data.status || 'Interested',
+    modeOfPayment: data.modeOfPayment || '', modeOfPaymentOther: data.modeOfPaymentOther || '',
     assignedTo: data.assignedTo || '', expectedValue: data.expectedValue || '',
     kwRequired: data.kwRequired || '', nextFollowUpDate: data.nextFollowUpDate || '',
     priority: data.priority || '', notes: data.notes || '',
@@ -279,6 +409,8 @@ function LeadModal({ data, id, onSave, onClose }) {
     referredByName: data.referredByName || '',
     pincode: data.pincode || '', city: data.city || '', district: data.district || '',
     monthlyBill: data.monthlyBill || '',
+    monthlyBillAmount: data.monthlyBillAmount || '',
+    teamLeader: data.teamLeader || '',
     expectedSignUpDate: data.expectedSignUpDate || '',
     salesExecutive: data.salesExecutive || '',
     supportingTeam: data.supportingTeam || [],
@@ -291,9 +423,36 @@ function LeadModal({ data, id, onSave, onClose }) {
     availableSpace: data.availableSpace || '', siteVisitNotes: data.siteVisitNotes || ''
   });
   const set = (k, v) => setForm(p => ({ ...p, [k]: v }));
+  // Site visit photos (Req 1, 27-Oct): several per visit, kept on the lead;
+  // adding more never replaces the ones already there.
+  const { toast: photoToast } = useToast();
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const addSitePhotos = async (files) => {
+    const list = Array.from(files || []).filter(f => f && f.type && f.type.startsWith('image/'));
+    if (!list.length) { photoToast('Choose a photograph (JPG / PNG)', 'er'); return; }
+    setPhotoBusy(true);
+    try {
+      const added = [];
+      for (const f of list) {
+        const small = await compressImage(f, 1600, 0.8);
+        const res = await apiUpload(small, 'site-visits');
+        if (res && res.url) added.push({ url: res.url, name: res.name || f.name, at: new Date().toISOString() });
+      }
+      setForm(p => ({ ...p, siteVisitPhotos: [...(p.siteVisitPhotos || []), ...added] }));
+      photoToast(`${added.length} photo${added.length === 1 ? '' : 's'} added`);
+    } catch (e) { photoToast(e.message, 'er'); }
+    finally { setPhotoBusy(false); }
+  };
+  const photoIssue = siteVisitPhotoIssue(form, data);
+  // The Site Visit is not marked done without a photo (Req 1).
+  const submitLead = (...args) => {
+    if (photoIssue) { photoToast(photoIssue, 'er'); return undefined; }
+    return onSave(...args);
+  };
   const { toast } = useToast();
   const [cityOptions, setCityOptions] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [supportName, setSupportName] = useState('');
 
   const handlePincodeChange = async (val) => {
     set('pincode', val);
@@ -319,17 +478,77 @@ function LeadModal({ data, id, onSave, onClose }) {
     }
   };
 
-  // Auto-calculate KW from monthly bill: KW = Total Consumption / 140
+  // Auto-calculate KW from monthly consumption: KW = Total Consumption / 140
+  const applyUnits = (units) => {
+    const u = toNumber(units);
+    if (u > 0 && u <= 100000) set('kwRequired', (u / 140).toFixed(2));
+  };
+
+  // Some customers know their units, others only remember the bill amount.
+  // Either one fills the other in, using the system tariff.
   const handleMonthlyBillChange = (val) => {
     set('monthlyBill', val);
-    const bill = toNumber(val);
-    if (bill > 0 && bill <= 100000) {
-      set('kwRequired', (bill / 140).toFixed(2));
+    const units = toNumber(val);
+    if (units > 0) set('monthlyBillAmount', String(Math.round(units * ebTariff)));
+    else set('monthlyBillAmount', '');
+    applyUnits(val);
+  };
+
+  const handleMonthlyBillAmountChange = (val) => {
+    set('monthlyBillAmount', val);
+    const amount = toNumber(val);
+    if (amount > 0 && ebTariff > 0) {
+      const units = Math.round(amount / ebTariff);
+      set('monthlyBill', String(units));
+      applyUnits(units);
+    } else {
+      set('monthlyBill', '');
     }
   };
 
   // Duplicate phone detection
   const duplicatePhone = form.phone && leads.find(l => l.id !== id && l.phone === form.phone);
+
+  // Team Leaders to pick from, and the sales-side members under the chosen one.
+  const leaderOptions = teamLeaders(users);
+  // Names already used in a field above — they cannot also be supporting team.
+  const leaderName = (() => {
+    const u = users.find(x => String(x.email || '').toLowerCase() === String(form.teamLeader || '').toLowerCase());
+    return u ? (u.displayName || u.email) : '';
+  })();
+  const usedAbove = [form.salesExecutive, form.assignedTo, leaderName].map(norm).filter(Boolean);
+  const supportOptions = supportingNames(users, usedAbove, form.supportingTeam);
+  // A typed name is held to the same rule as a picked one.
+  const addSupportName = () => {
+    const nm = supportName.trim();
+    setSupportName('');
+    if (!nm) return;
+    if (usedAbove.includes(norm(nm))) { toast(`${nm} is already named in a field above`, 'er'); return; }
+    if ((form.supportingTeam || []).some(x => norm(x) === norm(nm))) return;
+    set('supportingTeam', [...(form.supportingTeam || []), nm]);
+  };
+
+  // Taking someone on above removes them from the supporting list.
+  const dropFromSupport = (name) => {
+    const k = norm(name);
+    if (!k) return;
+    const cur = form.supportingTeam || [];
+    if (cur.some(x => norm(x) === k)) set('supportingTeam', cur.filter(x => norm(x) !== k));
+  };
+  // Every valid account is offered, so a name can always be found by typing.
+  // When a Team Leader is chosen their own members are listed first, which
+  // keeps the team-based shortlist without making it the only choice.
+  const assignOptions = (() => {
+    const all = assignableNames(users, form.assignedTo);
+    const team = new Set(salesMembersOf(users, form.teamLeader).map(u => norm(u.displayName || u.email)));
+    if (!form.teamLeader) return all;
+    return [...all].sort((a, b) => (team.has(norm(b)) ? 1 : 0) - (team.has(norm(a)) ? 1 : 0));
+  })();
+  const leaderTeamNames = new Set(salesMembersOf(users, form.teamLeader).map(u => norm(u.displayName || u.email)));
+  const assignGroup = (n) => {
+    if (!form.teamLeader || !n) return null;
+    return leaderTeamNames.has(norm(n)) ? 'This Team Leader’s team' : 'Everyone else';
+  };
 
   return (
     <Modal title={id ? 'Edit Lead' : 'Add New Lead'} onClose={onClose} wide>
@@ -338,28 +557,33 @@ function LeadModal({ data, id, onSave, onClose }) {
         if (saving) return;
         if (!id && !form.city.trim()) { toast('City is required for new leads', 'er'); return; }
         if (duplicatePhone && !window.confirm(`Phone ${form.phone} already exists for lead "${duplicatePhone.name}". Save anyway?`)) return;
-        // Validation: Required KW must be <= Sanctioned Load
-        const kw = toNumber(form.kwRequired);
-        const sl = toNumber(form.sanctionedLoad);
-        if (kw > 0 && sl > 0 && kw > sl) {
-          alert(`⚠️ Sanctioned Load (${sl} kW) is less than Required KW (${kw} kW).\nPlease enhance the sanctioned load by ${(kw - sl).toFixed(2)} kW before proceeding.`);
-          return;
-        }
-        // Validation: Available Space must be >= kwRequired * 70
-        const minSpace = kw * 70;
-        const space = toNumber(form.availableSpace);
-        if (kw > 0 && space > 0 && space < minSpace) {
-          alert(`⚠️ Not possible for installation!\nRequired space for ${kw} kW system: ${minSpace} sq.ft\nAvailable space entered: ${space} sq.ft\nRequired space is less than minimum for installation.`);
-          return;
-        }
+        // R9 (8-Oct): the two checks that used to sit here — Sanctioned Load
+        // must be at least the kW Required, and Available Space at least
+        // kW x 70 sq.ft — are gone at the client's request. Any value entered
+        // in either field is accepted; higher, equal or lower.
         setSaving(true);
-        try { await onSave(form, id, prevStatus, data.expectedSignUpDate || ''); }
+        try {
+          // Anyone named in a field above is not also supporting team — this
+          // tidies older leads that carry the same person twice.
+          const cleanedForm = {
+            ...form,
+            supportingTeam: (form.supportingTeam || []).filter(n => !usedAbove.includes(norm(n))),
+          };
+          await submitLead(cleanedForm, id, prevStatus, data.expectedSignUpDate || '');
+        }
         finally { setSaving(false); }
       }}>
         <div className="mb">
           <div className="fr"><div className="fg"><label>Full Name *</label><input className="fi" value={form.name} onChange={e => set('name', e.target.value)} required /></div><div className="fg"><label>Phone *</label><input className="fi" value={form.phone} onChange={e => set('phone', e.target.value)} required /></div></div>
           {duplicatePhone && <div style={{ background: 'rgba(243,156,18,.1)', border: '1px solid rgba(243,156,18,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#d68910', marginBottom: 10 }}>Duplicate phone: already exists for <strong>{duplicatePhone.name}</strong></div>}
-          <div className="fr3"><div className="fg"><label>Email</label><input type="email" className="fi" value={form.email} onChange={e => set('email', e.target.value)} /></div><div className="fg"><label>Monthly Bill (Units)</label><input type="number" className="fi" value={form.monthlyBill} onChange={e => handleMonthlyBillChange(e.target.value)} placeholder="e.g. 350" /></div><div className="fg"><label>kW Required</label><input className="fi" value={form.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="Auto or manual" /></div></div>
+          <div className="fg"><label>Email</label><input type="email" className="fi" value={form.email} onChange={e => set('email', e.target.value)} /></div>
+          {/* Either figure fills the other in — some customers know their units,
+              others only remember what the bill comes to. */}
+          <div className="fr3">
+            <div className="fg"><label>Monthly Units</label><input type="number" className="fi" value={form.monthlyBill} onChange={e => handleMonthlyBillChange(e.target.value)} placeholder="e.g. 350" /></div>
+            <div className="fg"><label>Monthly Current Bill (₹) <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}>@ ₹{ebTariff}/unit</span></label><input type="number" className="fi" value={form.monthlyBillAmount} onChange={e => handleMonthlyBillAmountChange(e.target.value)} placeholder="e.g. 2800" /></div>
+            <div className="fg"><label>kW Required</label><input className="fi" value={form.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="Auto or manual" /></div>
+          </div>
           <div className="fg"><label>Address</label><input className="fi" value={form.address} onChange={e => set('address', e.target.value)} /></div>
           <div className="fr3">
             <div className="fg"><label>Pincode</label><input className="fi" value={form.pincode} onChange={e => handlePincodeChange(e.target.value)} maxLength={6} placeholder="e.g. 500001" /></div>
@@ -378,8 +602,17 @@ function LeadModal({ data, id, onSave, onClose }) {
             </div>
             <div className="fg"><label>District</label><input className="fi" value={form.district} onChange={e => set('district', e.target.value)} placeholder="District" /></div>
           </div>
-          <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{priorities.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Lead Reference</label><select className="fi" value={form.leadReference} onChange={e => set('leadReference', e.target.value)}>{refs.map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Date Generated</label><input type="date" className="fi" value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Expected Value (₹)</label><input type="number" className="fi" value={form.expectedValue} onChange={e => set('expectedValue', e.target.value)} /></div><div className="fg"><label>Priority</label><select className="fi" value={form.priority} onChange={e => set('priority', e.target.value)}><option value="">-- Select --</option>{opt('priority', form.priority).map(o => <option key={o}>{o}</option>)}</select></div></div>
+          <div className="fr">
+            <div className="fg">
+              <label>Lead Reference <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}>pick a name or type your own</span></label>
+              <input className="fi" list="lead-reference-names" value={form.leadReference} onChange={e => set('leadReference', e.target.value)} placeholder="Select or enter a name" />
+              <datalist id="lead-reference-names">
+                {[...new Set([...getOptions(settings, 'leadReference'), ...leads.map(l => l.leadReference).filter(Boolean)])].map(o => <option key={o} value={o} />)}
+              </datalist>
+            </div>
+            <div className="fg"><label>Date Generated</label><DateInput value={form.dateGenerated} onChange={e => set('dateGenerated', e.target.value)} /></div>
+          </div>
           {form.leadReference === 'Other' && (
             <div className="fg"><label>Specify Other Source</label><input className="fi" value={form.leadReferenceOther} onChange={e => set('leadReferenceOther', e.target.value)} placeholder="Enter lead source details..." /></div>
           )}
@@ -398,29 +631,125 @@ function LeadModal({ data, id, onSave, onClose }) {
               }
             </div>
           )}
-          <div className="fr"><div className="fg"><label>Last Follow-up</label><input type="date" className="fi" value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{fups.map(o => <option key={o}>{o}</option>)}</select></div></div>
-          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={form.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Next Follow-up Date</label><input type="date" className="fi" value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div></div>
-          <div className="fr"><div className="fg"><label>Sales Executive</label><select className="fi" value={form.salesExecutive} onChange={e => set('salesExecutive', e.target.value)}><option value="">-- Select --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Expected Sign-up Date</label><input type="date" className="fi" value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div></div>
-          <div className="fg"><label>Supporting Team</label><div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: '8px 12px', border: '1px solid var(--bor)', borderRadius: 8, minHeight: 38, background: '#fff' }}>{team.filter(t => t.status === 'Active').map(t => (<label key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.84rem', cursor: 'pointer' }}><input type="checkbox" checked={(form.supportingTeam || []).includes(t.name)} onChange={e => { const cur = form.supportingTeam || []; if (e.target.checked) set('supportingTeam', [...cur, t.name]); else set('supportingTeam', cur.filter(n => n !== t.name)); }} />{t.name}</label>))}{team.filter(t => t.status === 'Active').length === 0 && <span style={{ color: 'var(--muted)', fontSize: '.82rem' }}>No active team members</span>}</div></div>
+          <div className="fr"><div className="fg"><label>Last Follow-up</label><DateInput value={form.lastFollowUp} onChange={e => set('lastFollowUp', e.target.value)} /></div><div className="fg"><label>Follow-up Status</label><select className="fi" value={form.followUpStatus} onChange={e => set('followUpStatus', e.target.value)}>{opt('followUpStatus', form.followUpStatus).map(o => <option key={o}>{o}</option>)}</select></div></div>
+          {/* Leads go to the Sales/Team members under the chosen Team Leader —
+              the technical team is never offered here. */}
+          <div className="fr3">
+            <div className="fg"><label>Team Leader</label>
+              <select className="fi" value={form.teamLeader} onChange={e => {
+                const email = e.target.value;
+                set('teamLeader', email);
+                set('assignedTo', '');
+                const u = users.find(x => String(x.email || '').toLowerCase() === email.toLowerCase());
+                if (u) dropFromSupport(u.displayName || u.email);
+              }}>
+                <option value="">-- All sales members --</option>
+                {leaderOptions.map(u => <option key={u.id || u.email} value={u.email}>{u.displayName || u.email}</option>)}
+              </select>
+            </div>
+            <div className="fg"><label>Assigned To</label>
+              <SearchSelect
+                value={form.assignedTo}
+                options={assignOptions}
+                groups={assignGroup}
+                placeholder="Type a few letters to find a name…"
+                onChange={n => { set('assignedTo', n); if (n) dropFromSupport(n); }}
+              />
+              <small style={{ fontSize: '.72rem', color: 'var(--muted)' }}>
+                {form.teamLeader
+                  ? 'This Team Leader’s members first, then everyone else. Type to search.'
+                  : 'Any current user. Type a few letters to search, or type a name that is not on the list.'}
+              </small>
+            </div>
+            <div className="fg"><label>Next Follow-up Date</label><DateInput value={form.nextFollowUpDate} onChange={e => set('nextFollowUpDate', e.target.value)} /></div>
+          </div>
+          {/* The "Sales Executive" field that sat here was removed from the
+              form on request. The value stays on existing leads and still
+              shows wherever it did; it just cannot be set from here any more. */}
+          <div className="fr"><div className="fg"><label>Expected Sign-up Date</label><DateInput value={form.expectedSignUpDate} onChange={e => set('expectedSignUpDate', e.target.value)} /></div><div className="fg" /></div>
+          <div className="fg"><label>Supporting Team / Names</label>
+            {/* Selected supporting names (team members + custom) as removable chips */}
+            {(form.supportingTeam || []).length > 0 && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8 }}>
+                {(form.supportingTeam || []).map(n => (
+                  <span key={n} style={{ display: 'inline-flex', alignItems: 'center', gap: 4, background: 'rgba(26,58,122,.08)', color: 'var(--pri)', padding: '3px 8px', borderRadius: 12, fontSize: '.8rem' }}>
+                    {n}
+                    <span className="material-icons-round" style={{ fontSize: 15, cursor: 'pointer' }} onClick={() => set('supportingTeam', (form.supportingTeam || []).filter(x => x !== n))}>close</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Pick a name from the list. Anyone already named in a field above
+                (Team Leader, Assigned To, Sales Executive) is not offered, and
+                neither is someone already on the list. */}
+            <SearchSelect
+              value=""
+              options={supportOptions}
+              placeholder={supportOptions.length ? 'Search a name to add…' : 'No other names available'}
+              emptyText="No matching name"
+              onChange={n => {
+                if (n && !(form.supportingTeam || []).some(x => norm(x) === norm(n))) {
+                  set('supportingTeam', [...(form.supportingTeam || []), n]);
+                }
+              }}
+            />
+            {/* Add a custom supporting name not in the team list */}
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              <input className="fi" value={supportName} onChange={e => setSupportName(e.target.value)} placeholder="Or type a name not on the list..." onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addSupportName(); } }} />
+              <button type="button" className="btn bsm bo" onClick={addSupportName}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Name</button>
+            </div>
+          </div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>
           {form.advancePaid === 'Yes' && (
-            <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
+            <div className="fr">
+              <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
+              {/* The date travels with the amount and the Mode of Payment below to
+                  Stage 6 of the customer's workflow (Req 1.10). */}
+              <div className="fg"><label>Advance Date</label><DateInput value={form.advanceLeadDate} onChange={e => set('advanceLeadDate', e.target.value)} /></div>
+            </div>
           )}
+          <div className="fr">
+            <div className="fg"><label>Mode of Payment</label><select className="fi" value={form.modeOfPayment} onChange={e => set('modeOfPayment', e.target.value)}><option value="">-- Select --</option>{opt('modeOfPayment', form.modeOfPayment).map(o => <option key={o}>{o}</option>)}</select></div>
+            {form.modeOfPayment === 'Other'
+              ? <div className="fg"><label>Specify Payment Mode</label><input className="fi" value={form.modeOfPaymentOther} onChange={e => set('modeOfPaymentOther', e.target.value)} placeholder="Enter payment method" /></div>
+              : <div className="fg" />}
+          </div>
           {form.siteVisit === 'Yes' && (
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
               <label style={{ fontWeight: 700, fontSize: '.9rem', marginBottom: 10, display: 'block' }}>Site Visit Details</label>
-              <div className="fr"><div className="fg"><label>Visit Date</label><input type="date" className="fi" value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div></div>
+              <div className="fr"><div className="fg"><label>Visit Date</label><DateInput value={form.siteVisitDate} onChange={e => set('siteVisitDate', e.target.value)} /></div><div className="fg"><label>Roof Type</label><select className="fi" value={form.roofType} onChange={e => set('roofType', e.target.value)}><option value="">-- Select --</option>{opt('roofType', form.roofType).map(o => <option key={o}>{o}</option>)}</select></div></div>
               {form.roofType === 'Elevated' && (
                 <div className="fr"><div className="fg"><label>North Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedNorthHeight} onChange={e => set('elevatedNorthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div><div className="fg"><label>South Pole Height (Feet)</label><input type="number" className="fi" value={form.elevatedSouthHeight} onChange={e => set('elevatedSouthHeight', e.target.value)} placeholder="e.g. 10" min="0" /></div></div>
               )}
-              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Tilt</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option><option>Flat</option><option>Sloped</option></select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option><option>Single Phase</option><option>Three Phase</option><option>CT Meter</option><option>HT Meter</option></select></div></div>
-              <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft) <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>Min: {toNumber(form.kwRequired) > 0 ? (toNumber(form.kwRequired) * 70) + ' sq.ft' : 'kW × 70'}</span></label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder={toNumber(form.kwRequired) > 0 ? `Min ${toNumber(form.kwRequired) * 70} sq.ft` : 'e.g. 200'} /></div></div>
+              <div className="fr3"><div className="fg"><label>Floors</label><input type="number" className="fi" value={form.floors} onChange={e => set('floors', e.target.value)} min="1" /></div><div className="fg"><label>Type of Installation</label><select className="fi" value={form.structureType} onChange={e => set('structureType', e.target.value)}><option value="">-- Select --</option>{opt('structureType', form.structureType).map(o => <option key={o}>{o}</option>)}</select></div><div className="fg"><label>Existing Connection</label><select className="fi" value={form.existingConnection} onChange={e => set('existingConnection', e.target.value)}><option value="">-- Select --</option>{opt('existingConnection', form.existingConnection).map(o => <option key={o}>{o}</option>)}</select></div></div>
+              <div className="fr"><div className="fg"><label>Sanctioned Load (kW)</label><input type="number" className="fi" value={form.sanctionedLoad} onChange={e => set('sanctionedLoad', e.target.value)} placeholder="e.g. 5" /></div><div className="fg"><label>Available Space (sq.ft)</label><input type="number" className="fi" value={form.availableSpace} onChange={e => set('availableSpace', e.target.value)} placeholder="e.g. 200" /></div></div>
               <div className="fg"><label>Customer Service Number</label><input className="fi" value={form.customerServiceNumber} onChange={e => set('customerServiceNumber', e.target.value)} placeholder="Service number from electricity bill" /></div>
               <div className="fg"><label>Site Visit Notes</label><textarea className="fi" value={form.siteVisitNotes} onChange={e => set('siteVisitNotes', e.target.value)} rows="2" placeholder="Observations from site visit..." /></div>
+              {/* Req 1 (27-Oct): the photographs of the visit — one or many, never replacing earlier ones; at least one is required to mark the visit done. */}
+              <div className="fg"><label>Site Visit Photos * <span style={{ fontWeight: 400, color: 'var(--muted)', fontSize: '.76rem' }}>({(form.siteVisitPhotos || []).length} uploaded — at least one is required)</span></label>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <label className="btn bsm bo" style={{ cursor: photoBusy ? 'wait' : 'pointer' }}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>add_a_photo</span> {photoBusy ? 'Uploading…' : 'Add photo(s)'}
+                    <input type="file" accept="image/*" multiple style={{ display: 'none' }} disabled={photoBusy} onChange={e => { addSitePhotos(e.target.files); e.target.value = ''; }} />
+                  </label>
+                  {(form.siteVisitPhotos || []).map((p, i) => (
+                    <span key={p.url || i} style={{ position: 'relative', display: 'inline-block' }}>
+                      <a href={p.url} target="_blank" rel="noreferrer"><img src={p.url} alt={`Site visit ${i + 1}`} style={{ width: 56, height: 56, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} /></a>
+                      <button type="button" className="btn bsm bo" style={{ position: 'absolute', top: -6, right: -6, padding: 0, width: 20, height: 20, borderRadius: 10, lineHeight: '18px' }} title="Remove this photo" onClick={() => set('siteVisitPhotos', form.siteVisitPhotos.filter((_, j) => j !== i))}>×</button>
+                    </span>
+                  ))}
+                </div>
+                {photoIssue && <div style={{ fontSize: '.76rem', color: '#c0392b', marginTop: 4 }}>{photoIssue}</div>}
+              </div>
             </div>
           )}
           <div className="fg"><label>Notes</label><textarea className="fi" value={form.notes} onChange={e => set('notes', e.target.value)} rows="3" placeholder="Follow-up notes..." /></div>
-          <div className="fg"><label>Lead Status</label><select className="fi" value={form.status} onChange={e => set('status', e.target.value)}>{sts.map(o => <option key={o}>{o}</option>)}</select></div>
+          {/* A brand-new lead always starts at the default status, so the picker
+              is not shown while adding. It stays on an existing lead, because
+              choosing "Converted" here is what creates the Customer record. */}
+          {id && (
+            <div className="fg"><label>Lead Status</label><select className="fi" value={form.status} onChange={e => set('status', e.target.value)}>{sts.map(o => <option key={o}>{o}</option>)}</select></div>
+          )}
         </div>
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving...' : ((id ? 'Update' : 'Add') + ' Lead')}</button></div>
       </form>
@@ -431,15 +760,18 @@ function LeadModal({ data, id, onSave, onClose }) {
 /* ============ LEAD DETAIL MODAL (NEW) ============ */
 function LeadDetailModal({ lead, initialTab, onClose }) {
   const [tab, setTab] = useState(initialTab || 'overview');
-  const { leadPOs, installations } = useData();
+  const { leadPOs, installations, users, quotations, settings, bcoOps } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [poModal, setPOModal] = useState(null);
   const [fupForm, setFupForm] = useState(false);
-  const [fupData, setFupData] = useState({ date: new Date().toISOString().slice(0, 10), status: '', notes: '' });
+  const [fupData, setFupData] = useState({ date: todayStr(), status: '', notes: '' });
 
   const myPOs = leadPOs.filter(po => po.leadId === lead.id);
   const history = lead.followUpHistory || [];
+  // PO and BOM are the stage after the customer accepts the quotation.
+  const myQuote = quotations.find(q => q.leadId === lead.id) || null;
+  const quoteAccepted = myQuote ? myQuote.status === QT_STATUS.ACCEPTED : null;
 
   /* Follow-up logging */
   const handleLogFollowUp = async () => {
@@ -452,9 +784,17 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         lastFollowUp: fupData.date,
         followUpStatus: fupData.status
       });
+      // The concerned hierarchy — Operation Manager, Management, Admin, Owner —
+      // must be able to track the follow-ups the Executive performs.
+      quotationApprovers(users).forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: 'Follow-up Logged',
+        message: `${user?.displayName || user?.email || 'An executive'} logged a follow-up on "${lead.name}" — ${fupData.status}${fupData.notes ? ': ' + fupData.notes : ''}`,
+        type: 'lead', module: 'leads', relatedId: lead.id,
+      }));
       toast('Follow-up logged');
       setFupForm(false);
-      setFupData({ date: new Date().toISOString().slice(0, 10), status: '', notes: '' });
+      setFupData({ date: todayStr(), status: '', notes: '' });
     } catch (e) { toast(e.message, 'er'); }
   };
 
@@ -486,27 +826,92 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
     } catch (e) { toast(e.message, 'er'); }
   };
 
-  /* PO Workflow */
+  /* PO Workflow — gated by the role matrix + mandatory 10% advance + Management approval */
+  // The approval request may only proceed "to Sir" once the 10% advance is recorded.
+  const requireAdvance = (po) => {
+    const g = advanceGate(po, lead);
+    if (!g.ok) {
+      toast(
+        g.cost <= 0
+          ? 'Set the PO price (agreed price) before sending for approval.'
+          : `10% advance not recorded. Required ₹${g.required.toLocaleString('en-IN')}, recorded ₹${g.paid.toLocaleString('en-IN')}. Record the advance on the lead first.`,
+        'er'
+      );
+      return false;
+    }
+    return true;
+  };
+
   const handleRecommend = async (po) => {
+    if (!canRecommendLeadPO(po, lead, user, role, users)) {
+      toast('Only this lead\u2019s Team Leader, the Operation Manager or an Admin can recommend this PO', 'er');
+      return;
+    }
+    if (!requireAdvance(po)) return;
     if (!window.confirm('Recommend this PO for approval?')) return;
     try {
       await updateDocument('leadPOs', po.id, {
-        status: 'Recommended',
+        status: PO_STATUS.RECOMMENDED,
         recommendedBy: user?.email || 'unknown',
-        recommendedDate: new Date().toISOString().slice(0, 10)
+        recommendedDate: new Date().toISOString()
       });
+      notifyAdmins(users, { title: 'PO Awaiting Management Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" was recommended and needs Management approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
       toast('PO recommended for approval');
     } catch (e) { toast(e.message, 'er'); }
   };
 
+  // Mandatory Management permission BEFORE final approval (req #3)
+  const handleManagementApprove = async (po) => {
+    if (!can(role, ACTIONS.PO_MANAGEMENT_APPROVAL)) { toast('Only Management can grant this approval', 'er'); return; }
+    if (!requireAdvance(po)) return;
+    if (!window.confirm('Grant Management approval for this PO? It can then be approved by Admin/Management.')) return;
+    try {
+      await updateDocument('leadPOs', po.id, {
+        status: PO_STATUS.MANAGEMENT_APPROVED,
+        managementApprovedBy: user?.email || 'unknown',
+        managementApprovalDate: new Date().toISOString()
+      });
+      notifyAdmins(users, { title: 'PO Ready for Final Approval', message: `PO ${po.poNumber || ''} for "${lead.name}" received Management approval and is ready for final approval`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
+      toast('Management approval granted');
+    } catch (e) { toast(e.message, 'er'); }
+  };
+
   const handleApprove = async (po) => {
+    if (!can(role, ACTIONS.PO_APPROVAL)) { toast('You are not authorised to approve POs', 'er'); return; }
+    // Management permission is mandatory before final approval
+    if (po.status !== PO_STATUS.MANAGEMENT_APPROVED) { toast('Management approval is required before this PO can be approved', 'er'); return; }
+    if (!requireAdvance(po)) return;
     if (!window.confirm('Approve this purchase order?')) return;
     try {
       await updateDocument('leadPOs', po.id, {
-        status: 'Approved',
+        status: PO_STATUS.APPROVED,
         approvedBy: user?.email || 'unknown',
-        approvalDate: new Date().toISOString().slice(0, 10)
+        approvalDate: new Date().toISOString()
       });
+      // Req 2 (30-Oct): the quotation keeps the BOM it was quoted with. The
+      // PO's materials are the PO's; they no longer replace the quotation's
+      // rows here. (The quotation's own "Use actual BOM" button still copies
+      // them across on request.)
+      // Tell the PO creator it's approved, and notify admins for visibility.
+      if (po.createdBy) createNotification({ forUser: po.createdBy, title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
+      notifyAdmins(users, { title: 'PO Approved', message: `PO ${po.poNumber || ''} for "${lead.name}" has been approved`, type: 'status_update', module: 'leadPOs', relatedId: po.id });
+      // Req 15 — and the warehouse, who are the ones who have to act on it.
+      // Without this the approval sat in the office and nobody downstream knew
+      // the material could go out.
+      warehouseUsers(users).forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: 'PO Approved \u2014 ready for dispatch',
+        message: `PO ${po.poNumber || ''} for "${lead.name}" is approved. Please verify each material (Yes / No) and submit Stock OK.`,
+        type: 'status_update', module: 'leadPOs', relatedId: po.id,
+      }));
+      // Req 2 / Req 3.1 (15-Oct): the BCO's work starts here too, and the
+      // approved PO is what opens the lead to them.
+      (users || []).filter(u => u.approved !== false && normalizeRole(u.role) === 'bco').forEach(u => createNotification({
+        forUser: u.displayName || u.email,
+        title: 'PO Approved \u2014 BCO work can begin',
+        message: `PO ${po.poNumber || ''} for "${lead.name}" is approved. The lead is now open to you under Leads for the BCO operations.`,
+        type: 'status_update', module: 'leads', relatedId: lead.id,
+      }));
       toast('PO approved');
     } catch (e) { toast(e.message, 'er'); }
   };
@@ -519,14 +924,20 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
     } catch (e) { toast(e.message, 'er'); }
   };
 
+  // BCO Operations: the seven post-sale stages, for the BCO and the
+  // authorities, and for the lead's own people to look at.
+  const myBco = (bcoOps || []).find(o => o.leadId === lead.id) || null;
+  const bcoDone = bcoProgress(myBco);
   const tabs = [
     ['overview', 'Overview', 'info'],
+    ['quotation', myQuote ? 'Quotation (' + myQuote.status + ')' : 'Quotation', 'description'],
     ['followups', 'Follow-ups (' + history.length + ')', 'history'],
-    ['pos', 'Purchase Orders (' + myPOs.length + ')', 'receipt_long']
+    ['pos', 'Purchase Orders (' + myPOs.length + ')', 'receipt_long'],
+    ...(canViewBco(lead, user, role, users) ? [['bco', `BCO Operations (${bcoDone.done}/${bcoDone.total})`, 'fact_check']] : []),
   ];
 
   return (
-    <div className="mo" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo">
       <div className="md" style={{ width: '860px', maxWidth: '96vw' }}>
         <div className="mh">
           <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -569,7 +980,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <button className="btn bsm bo" onClick={() => printLeadSummary(lead)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print Lead
                 </button>
-                <button className="btn bsm bp" onClick={() => generateQuotation(lead)}>
+                <button className="btn bsm bp" onClick={() => setTab('quotation')}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>description</span> Quotation
                 </button>
               </div>
@@ -592,14 +1003,15 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <div className="di"><div className="dl">Site Visit</div><div className="dv">{lead.siteVisit || 'No'}</div></div>
                 <div className="di"><div className="dl">Quotation Sent</div><div className="dv">{lead.quotationSent || 'No'}</div></div>
                 <div className="di"><div className="dl">Advance Paid</div><div className="dv">{lead.advancePaid || 'No'}</div></div>
+                {(lead.modeOfPayment) && <div className="di"><div className="dl">Mode of Payment</div><div className="dv">{lead.modeOfPayment === 'Other' ? (lead.modeOfPaymentOther || 'Other') : lead.modeOfPayment}</div></div>}
                 <div className="di"><div className="dl">Follow-up Status</div><div className="dv">{lead.followUpStatus || '-'}</div></div>
                 {lead.referredByName && <div className="di"><div className="dl">Referred By</div><div className="dv">{lead.referredByName} ({lead.referredByType})</div></div>}
-                {lead.siteVisit === 'Yes' && (lead.roofType || lead.structureType || lead.existingConnection) && (
+                {lead.siteVisit === 'Yes' && (lead.roofType || lead.structureType || lead.existingConnection || sitePhotoList(lead.siteVisitPhotos).length > 0) && (
                   <>
                     <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl" style={{ fontWeight: 700 }}>Site Visit Details</div><div className="dv">{lead.siteVisitDate ? formatDate(lead.siteVisitDate) : ''}</div></div>
                     {lead.roofType && <div className="di"><div className="dl">Roof Type</div><div className="dv">{lead.roofType}</div></div>}
                     {lead.floors && <div className="di"><div className="dl">Floors</div><div className="dv">{lead.floors}</div></div>}
-                    {lead.structureType && <div className="di"><div className="dl">Tilt</div><div className="dv">{lead.structureType}</div></div>}
+                    {lead.structureType && <div className="di"><div className="dl">Type of Installation</div><div className="dv">{lead.structureType}</div></div>}
                     {lead.roofType === 'Elevated' && (lead.elevatedNorthHeight || lead.elevatedHeight) && <div className="di"><div className="dl">North Pole Height</div><div className="dv">{lead.elevatedNorthHeight || lead.elevatedHeight} ft</div></div>}
                     {lead.roofType === 'Elevated' && lead.elevatedSouthHeight && <div className="di"><div className="dl">South Pole Height</div><div className="dv">{lead.elevatedSouthHeight} ft</div></div>}
                     {lead.existingConnection && <div className="di"><div className="dl">Connection</div><div className="dv">{lead.existingConnection}</div></div>}
@@ -607,6 +1019,15 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                     {lead.availableSpace && <div className="di"><div className="dl">Available Space</div><div className="dv">{lead.availableSpace} sq.ft</div></div>}
                     {(lead.customerServiceNumber || lead.meterNumber) && <div className="di"><div className="dl">Customer Service No.</div><div className="dv">{lead.customerServiceNumber || lead.meterNumber}</div></div>}
                     {lead.siteVisitNotes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Site Visit Notes</div><div className="dv">{lead.siteVisitNotes}</div></div>}
+                    {sitePhotoList(lead.siteVisitPhotos).length > 0 && (
+                      <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Site Visit Photos ({sitePhotoList(lead.siteVisitPhotos).length})</div>
+                        <div className="dv" style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {sitePhotoList(lead.siteVisitPhotos).filter(p => isSafeUrl(p.url)).map((p, i) => (
+                            <a key={p.url || i} href={p.url} target="_blank" rel="noreferrer" title={p.at ? formatDateTime(p.at) : ''}><img src={p.url} alt={`Site visit ${i + 1}`} style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--bor)' }} /></a>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </>
                 )}
                 {lead.notes && <div className="di" style={{ gridColumn: '1 / -1' }}><div className="dl">Notes</div><div className="dv">{lead.notes}</div></div>}
@@ -614,14 +1035,17 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
             </div>
           )}
 
+          {/* -------- QUOTATION TAB -------- */}
+          {tab === 'quotation' && <QuotationPanel lead={lead} />}
+
           {/* -------- FOLLOW-UPS TAB -------- */}
           {tab === 'followups' && (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 8 }}>
-                <button className="btn bsm bp" onClick={() => setFupForm(!fupForm)}>
+                {canEditLead(lead, user, role, users) ? <button className="btn bsm bp" onClick={() => setFupForm(!fupForm)}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>{fupForm ? 'close' : 'add'}</span>
                   {fupForm ? 'Cancel' : 'Log Follow-up'}
-                </button>
+                </button> : <span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>View only — follow-ups are logged by the assigned person or their Team Leader.</span>}
                 <div style={{ display: 'flex', gap: 8 }}>
                   <button className="btn bsm bo" onClick={() => shareFollowUpWhatsApp(lead)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
@@ -637,8 +1061,8 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                 <div style={{ fontSize: '.78rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', marginBottom: 8 }}>Current Follow-up</div>
                 <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
                   <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Status:</span> <strong>{lead.followUpStatus || '-'}</strong></div>
-                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Last:</span> <strong>{lead.lastFollowUp || '-'}</strong></div>
-                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Next:</span> <strong>{lead.nextFollowUpDate || '-'}</strong></div>
+                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Last:</span> <strong>{formatDate(lead.lastFollowUp)}</strong></div>
+                  <div><span style={{ fontSize: '.8rem', color: 'var(--muted)' }}>Next:</span> <strong>{formatDate(lead.nextFollowUpDate)}</strong></div>
                 </div>
               </div>
 
@@ -648,13 +1072,13 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                   <div className="fr" style={{ marginBottom: 10 }}>
                     <div className="fg" style={{ marginBottom: 0 }}>
                       <label>Date *</label>
-                      <input type="date" className="fi" value={fupData.date} onChange={e => setFupData(p => ({ ...p, date: e.target.value }))} />
+                      <DateInput value={fupData.date} onChange={e => setFupData(p => ({ ...p, date: e.target.value }))} />
                     </div>
                     <div className="fg" style={{ marginBottom: 0 }}>
                       <label>Status *</label>
                       <select className="fi" value={fupData.status} onChange={e => setFupData(p => ({ ...p, status: e.target.value }))}>
                         <option value="">-- Select --</option>
-                        {fups.map(f => <option key={f}>{f}</option>)}
+                        {withCurrent(getOptions(settings, 'followUpStatus'), fupData.status).map(f => <option key={f}>{f}</option>)}
                       </select>
                     </div>
                   </div>
@@ -677,7 +1101,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       {[...history].reverse().map((h, i) => (
                         <tr key={`fup-${h.date}-${i}`}>
                           <td>{history.length - i}</td>
-                          <td style={{ fontSize: '.84rem' }}>{h.date || '-'}</td>
+                          <td style={{ fontSize: '.84rem', whiteSpace: 'nowrap' }}>{formatDate(h.date)}{h.at ? <><br /><span style={{ fontSize: '.72rem', color: 'var(--muted)' }}>logged {formatDateTime(h.at)}</span></> : null}</td>
                           <td><StatusBadge status={h.status} /></td>
                           <td style={{ maxWidth: 220, fontSize: '.84rem' }}>{h.notes || '-'}</td>
                           <td style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{h.by || '-'}</td>
@@ -695,10 +1119,28 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           {/* -------- PURCHASE ORDERS TAB -------- */}
           {tab === 'pos' && (
             <div>
+              {/* PO → BOM open once the customer has accepted the quotation. */}
+              {quoteAccepted === false && (
+                <div style={{ background: 'rgba(243,156,18,.08)', border: '1px solid rgba(243,156,18,.3)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: '#d68910', marginBottom: 12 }}>
+                  <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>lock</span>
+                  Quotation {quotationRef(myQuote)} is <strong>{myQuote.status}</strong>. PO and BOM open once the customer accepts it.
+                </div>
+              )}
+              {quoteAccepted === null && (
+                <div style={{ background: 'rgba(26,58,122,.05)', border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 12px', fontSize: '.82rem', color: 'var(--muted)', marginBottom: 12 }}>
+                  <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 5 }}>info</span>
+                  No quotation has been raised for this lead. The proper order is Quotation &rarr; Approval &rarr; Customer Acceptance &rarr; PO &rarr; BOM.
+                </div>
+              )}
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
-                <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
-                  <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
-                </button>
+                {/* Req 13 — raising the PO happens here, in the same window as the
+                    quotation. Open to the roles that always had it and, now, to
+                    the person the lead is assigned to and their Team Leader. */}
+                {canAddLeadPO(lead, user, role, users) && quoteAccepted !== false && (
+                  <button className="btn bsm bp" onClick={() => setPOModal({ data: {} })}>
+                    <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Create PO
+                  </button>
+                )}
               </div>
 
               {myPOs.length > 0 ? (
@@ -711,52 +1153,75 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                         <StatusBadge status={po.status} />
                       </div>
                       <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                        {/* Recommend: manager or admin, only Unapproved */}
-                        {po.status === 'Unapproved' && (hasAccess(role, 'manager')) && (
+                        {/* Recommend: Operation Manager / Admin, only Unapproved */}
+                        {canRecommendLeadPO(po, lead, user, role, users) && (
                           <button className="btn bsm bo" onClick={() => handleRecommend(po)} style={{ color: '#d68910', borderColor: 'rgba(243,156,18,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>thumb_up</span> Recommend
                           </button>
                         )}
-                        {/* Approve: admin only, only Recommended */}
-                        {po.status === 'Recommended' && hasAccess(role, 'admin') && (
+                        {/* Management approval: mandatory before final approval */}
+                        {po.status === PO_STATUS.RECOMMENDED && can(role, ACTIONS.PO_MANAGEMENT_APPROVAL) && (
+                          <button className="btn bsm bo" onClick={() => handleManagementApprove(po)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
+                            <span className="material-icons-round" style={{ fontSize: 16 }}>verified_user</span> Management Approve
+                          </button>
+                        )}
+                        {/* Final approve: Admin / Management, only after Management approval */}
+                        {po.status === PO_STATUS.MANAGEMENT_APPROVED && can(role, ACTIONS.PO_APPROVAL) && (
                           <button className="btn bsm bo" onClick={() => handleApprove(po)} style={{ color: 'var(--ok)', borderColor: 'rgba(0,184,148,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>check_circle</span> Approve
                           </button>
                         )}
-                        {/* Print, Download & WhatsApp */}
-                        <button className="btn bsm bo" onClick={() => printPO(po, lead)}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print PO
+                        {/* One document: the PO letter on page 1, the Bill of
+                            Materials with its signatures on page 2 — the way the
+                            company's own reference purchase order is laid out. */}
+                        <button className="btn bsm bo" onClick={() => openPoPdf(po, m => toast(m, 'er'))} title="Open the purchase order and its BOM as a PDF">
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>picture_as_pdf</span> View PO + BOM
                         </button>
-                        <button className="btn bsm bo" onClick={() => printBOM(po, lead)}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print BOM
-                        </button>
-                        <button className="btn bsm bo" onClick={() => downloadPO(po, lead)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> PO
-                        </button>
-                        <button className="btn bsm bo" onClick={() => downloadBOM(po, lead)} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}>
-                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> BOM
+                        <button className="btn bsm bo" onClick={() => downloadPoPdf(po, m => toast(m, 'er'))} style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }} title="Download the purchase order PDF">
+                          <span className="material-icons-round" style={{ fontSize: 16 }}>download</span> Download
                         </button>
                         <button className="btn bsm bo" onClick={() => sharePOWhatsApp(po)} style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}>
                           <span className="material-icons-round" style={{ fontSize: 16 }}>share</span> WhatsApp
                         </button>
-                        {/* Edit: non-Approved, admin/manager */}
-                        {po.status !== 'Approved' && (hasAccess(role, 'manager')) && (
+                        {/* Edit: non-Approved, PO Record permission (Operation Manager / Admin) */}
+                        {canEditLeadPO(po, lead, user, role, users) && (
                           <button className="btn bsm bo" onClick={() => setPOModal({ data: po, id: po.id })}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span>
                           </button>
                         )}
-                        {/* Delete: admin only */}
-                        {hasAccess(role, 'admin') && (
-                          <button className="btn bsm bo" onClick={() => handleDeletePO(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+                        {/* Delete: the Owner only (Req 1, 28-Oct) */}
+                        {role === 'super_admin' && (
+                          <button className="btn bsm bo" onClick={() => handleDeletePO(po.id)} title="Delete (Owner only)" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
                             <span className="material-icons-round" style={{ fontSize: 16 }}>delete</span>
                           </button>
                         )}
                       </div>
                     </div>
 
+                    {/* 10% advance gate notice — approval can't proceed "to Sir" without it */}
+                    {po.status !== PO_STATUS.APPROVED && (() => {
+                      const g = advanceGate(po, lead);
+                      if (g.ok) {
+                        return (
+                          <div style={{ background: 'rgba(39,174,96,.08)', border: '1px solid rgba(39,174,96,.3)', borderRadius: 8, padding: '6px 12px', fontSize: '.8rem', color: '#1e8449', marginBottom: 10 }}>
+                            <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 4 }}>check_circle</span>
+                            10% advance recorded (₹{g.paid.toLocaleString('en-IN')} of ₹{g.required.toLocaleString('en-IN')}) — eligible for approval.
+                          </div>
+                        );
+                      }
+                      return (
+                        <div style={{ background: 'rgba(231,76,60,.08)', border: '1px solid rgba(231,76,60,.3)', borderRadius: 8, padding: '6px 12px', fontSize: '.8rem', color: '#c0392b', marginBottom: 10 }}>
+                          <span className="material-icons-round" style={{ fontSize: 15, verticalAlign: 'middle', marginRight: 4 }}>warning</span>
+                          {g.cost <= 0
+                            ? 'Set the PO agreed price to enable approval.'
+                            : `10% advance pending — required ₹${g.required.toLocaleString('en-IN')}, recorded ₹${g.paid.toLocaleString('en-IN')}. Cannot send for approval until the advance is recorded on the lead.`}
+                        </div>
+                      );
+                    })()}
+
                     {/* PO Details Grid */}
                     <div className="dg" style={{ gap: 8 }}>
-                      <div className="di"><div className="dl">PO Date</div><div className="dv">{po.poDate || '-'}</div></div>
+                      <div className="di"><div className="dl">PO Date</div><div className="dv">{formatDate(po.poDate)}</div></div>
                       <div className="di"><div className="dl">Vendor</div><div className="dv">{po.vendorName || '-'}</div></div>
                       {po.moduleCount && <div className="di"><div className="dl">Modules</div><div className="dv">{po.moduleCount}</div></div>}
                       {po.inverterDetails && <div className="di"><div className="dl">Inverter</div><div className="dv">{po.inverterDetails}</div></div>}
@@ -767,9 +1232,14 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
                       {po.extraChargesTotal > 0 && <div className="di"><div className="dl">Extra Charges</div><div className="dv" style={{ fontWeight: 600, color: 'var(--sec)' }}>{formatCurrency(po.extraChargesTotal)}</div></div>}
                       {po.agreedPrice && <div className="di"><div className="dl">Price After Subsidy</div><div className="dv" style={{ fontWeight: 700, color: 'var(--pri)' }}>{formatCurrency(po.agreedPrice)}</div></div>}
                       <div className="di"><div className="dl">Created By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.createdBy || '-'}</div></div>
-                      {po.recommendedBy && <div className="di"><div className="dl">Recommended By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.recommendedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{po.recommendedDate}</span></div></div>}
-                      {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{po.approvalDate}</span></div></div>}
+                      {po.recommendedBy && <div className="di"><div className="dl">Recommended By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.recommendedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.recommendedDate)}</span></div></div>}
+                      {po.managementApprovedBy && <div className="di"><div className="dl">Management Approved</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.managementApprovedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.managementApprovalDate)}</span></div></div>}
+                      {po.approvedBy && <div className="di"><div className="dl">Approved By</div><div className="dv" style={{ fontSize: '.84rem' }}>{po.approvedBy}<br /><span style={{ color: 'var(--muted)', fontSize: '.78rem' }}>{formatDate(po.approvalDate)}</span></div></div>}
                     </div>
+
+                    {/* Once approved, the warehouse dispatch — marked item by
+                        item, completed, and confirmed — sits under the PO. */}
+                    <DispatchPanel po={po} lead={lead} />
 
                     {/* Expandable line items */}
                     {(po.items || []).length > 0 && (
@@ -804,6 +1274,9 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
               )}
             </div>
           )}
+
+          {/* -------- BCO OPERATIONS TAB -------- */}
+          {tab === 'bco' && <BcoOperationsPanel lead={lead} />}
         </div>
       </div>
 
@@ -815,7 +1288,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
 
 /* ============ LEAD PO CREATE/EDIT MODAL (NEW) ============ */
 function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
-  const { bomTemplates } = useData();
+  const { bomTemplates, settings } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const canManageTemplates = hasAccess(role, 'manager');
@@ -823,24 +1296,43 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
 
   const [f, setF] = useState({
     poNumber: po.poNumber || autoNumber,
-    poDate: po.poDate || new Date().toISOString().slice(0, 10),
+    poDate: po.poDate || todayStr(),
+    // Printed on the quotation and on the Bill of Materials. Pre-filled from the
+    // lead where we already know it, and editable here.
+    referredBy: po.referredBy || lead.referredByName || '',
+    sourceOfLead: po.sourceOfLead || lead.leadReference || '',
+    amount: po.amount || '',
+    uscNo: po.uscNo || lead.customerServiceNumber || '',
     leadId: lead.id,
     leadName: lead.name,
     customerName: po.customerName || lead.name || '',
     customerPhone: po.customerPhone || lead.phone || '',
     customerAddress: po.customerAddress || lead.address || '',
     kwRequired: po.kwRequired || lead.kwRequired || '',
-    vendorName: po.vendorName || 'M/S. Tata Power Solar Systems Limited',
+    // "System of __ kW with __ Phase of __ kW Inverter", as the reference PO
+    // words it. The phase follows the system size until somebody sets it:
+    // above 5 kW the connection is three-phase.
+    systemKw: po.systemKw || String(po.kwRequired || lead.kwRequired || '').replace(/[^0-9.]/g, ''),
+    phase: po.phase || (toNumber(String(po.kwRequired || lead.kwRequired || '').replace(/[^0-9.]/g, '')) > 5 ? '3' : '1'),
+    inverterKw: po.inverterKw || '',
+    // Req 17 — a new purchase order is raised by Pragathi; the supplier is
+    // chosen per order, so the field no longer opens on a supplier's name.
+    vendorName: po.vendorName || 'Pragathi Power Solutions',
     moduleCount: po.moduleCount || '',
     inverterDetails: po.inverterDetails || '',
     plantLocation: po.plantLocation || lead.address || '',
     referenceNumber: po.referenceNumber || '',
-    companyScope: po.companyScope || 'System Supply and Installation as per BOM.',
-    customerScope: po.customerScope || 'Civil works, UPVC Pipes, Additional cable if required more than 20 metres and Grid Synchronization Charges and Coordination with APSPDCL.',
-    paymentTerms: po.paymentTerms || '80% Advance along with PO, 20% Before dispatching the materials against PI.',
-    warrantyTerms: po.warrantyTerms || 'Solar Inverter \u2013 5 Yrs, Solar Modules- 5 Yrs +20 Yrs',
-    deliveryTerms: po.deliveryTerms || '3-4 Weeks from the receipt of LOI /PO.',
-    installationTerms: po.installationTerms || 'Within 10 days from the date of material received.',
+    companyScope: poTerm(po, 'companyScope'),
+    customerScope: poTerm(po, 'customerScope'),
+    paymentTerms: poTerm(po, 'paymentTerms'),
+    // Printed in the Payment Details block on the PO, beside the bank account.
+    advancePayment: po.advancePayment || '',
+    secondPayment: po.secondPayment || '',
+    finalPayment: po.finalPayment || '',
+    paymentRemarks: po.paymentRemarks || '',
+    warrantyTerms: poTerm(po, 'warrantyTerms'),
+    deliveryTerms: poTerm(po, 'deliveryTerms'),
+    installationTerms: poTerm(po, 'installationTerms'),
     agreedPrice: po.agreedPrice || '',
     discomCharges: po.discomCharges || '',
     civilWork: po.civilWork || '',
@@ -854,11 +1346,14 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     status: po.status || 'Unapproved',
     notes: po.notes || ''
   });
+  // Only the materials actually chosen are rows — they are picked from the list
+  // below instead of scrolling through every material one by one.
   const [items, setItems] = useState(
     (po.items && po.items.length)
       ? po.items.map(it => ({ ...EMPTY_BOM_ITEM, ...it, _key: nextBomKey() }))
-      : DEFAULT_BOM_MATERIALS.map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))
+      : []
   );
+  const [matSearch, setMatSearch] = useState('');
   const set = (k, v) => setF(p => ({ ...p, [k]: v }));
   const [poSaving, setPoSaving] = useState(false);
 
@@ -875,12 +1370,52 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   const addItem = () => setItems(prev => [...prev, { ...EMPTY_BOM_ITEM, _key: nextBomKey() }]);
   const removeItem = (idx) => setItems(prev => prev.filter((_, i) => i !== idx));
   const totalValue = items.reduce((s, it) => s + toNumber(it.amount), 0);
+
+  // Tick a material to add it to the BOM, untick to take it out again. A row
+  // that already has figures in it asks first, so nothing is lost by a mis-tap.
+  const isPicked = (name) => items.some(it => it.materialName === name);
+  const toggleMaterial = (m) => {
+    const existing = items.find(it => it.materialName === m.materialName);
+    if (existing) {
+      const hasData = toNumber(existing.quantity) > 0 || toNumber(existing.rate) > 0 || existing.specification;
+      if (hasData && !window.confirm(`Remove "${m.materialName}" and the details entered for it?`)) return;
+      setItems(prev => prev.filter(it => it.materialName !== m.materialName));
+    } else {
+      // Dropped into its place on the printed sheet, not onto the end of the
+      // list — the BOM is read by serial number, so a material picked last
+      // still has to appear where the sheet expects it.
+      setItems(prev => sortBomItems([...prev, { ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }]));
+    }
+  };
+  const pickAllStandard = () => {
+    setItems(prev => {
+      const have = new Set(prev.map(it => it.materialName));
+      return sortBomItems([...prev, ...materialCatalogue
+        .filter(m => !have.has(m.materialName))
+        .map(m => ({ ...EMPTY_BOM_ITEM, ...m, _key: nextBomKey() }))]);
+    });
+  };
+  const clearPicked = () => {
+    if (items.length && !window.confirm('Remove all selected materials?')) return;
+    setItems([]);
+  };
+  // The standard catalogue plus anything the Admin added under
+  // Settings → Manage Options → BOM Materials.
+  const materialCatalogue = (() => {
+    const have = new Set(DEFAULT_BOM_MATERIALS.map(m => m.materialName.toLowerCase()));
+    const extra = getOptions(settings, 'bomMaterials')
+      .filter(n => !have.has(String(n).toLowerCase()))
+      .map(n => ({ materialName: n, unit: 'Nos', make: '' }));
+    return [...DEFAULT_BOM_MATERIALS, ...extra];
+  })();
+  const visibleMaterials = materialCatalogue.filter(m =>
+    !matSearch || m.materialName.toLowerCase().includes(matSearch.toLowerCase()));
   const extraChargesTotal = toNumber(f.discomCharges) + toNumber(f.civilWork) + toNumber(f.upvcPipes) + toNumber(f.additionalRelay) + toNumber(f.elevatedStructure) + toNumber(f.additionalBom) + toNumber(f.otherCharges);
   const autoScope = 'Supply and installation of ' + (f.kwRequired || '___') + ' Solar PV On-Grid System as per BOM.';
 
   /* Combined material suggestions: defaults + saved template materials */
   const allMaterials = [...new Set([
-    ...DEFAULT_BOM_MATERIALS.map(m => m.materialName),
+    ...materialCatalogue.map(m => m.materialName),
     ...bomTemplates.flatMap(t => (t.items || []).map(it => it.materialName).filter(Boolean))
   ])];
 
@@ -889,7 +1424,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
     const tpl = bomTemplates.find(t => t.id === templateId);
     if (!tpl || !tpl.items) return;
     if (items.some(it => it.materialName) && !window.confirm('This will replace current items. Continue?')) return;
-    setItems(tpl.items.map(it => ({
+    setItems(sortBomItems(tpl.items).map(it => ({
       materialName: it.materialName || '',
       quantity: it.quantity || '',
       unit: it.unit || 'Nos',
@@ -921,7 +1456,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
   };
 
   return (
-    <div className="mo" style={{ zIndex: 1001 }} onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="mo" style={{ zIndex: 1001 }}>
       <div className="md" style={{ width: '740px', maxWidth: '96vw' }}>
         <div className="mh">
           <h3>{poId ? 'Edit Purchase Order' : 'Create Purchase Order'}</h3>
@@ -933,7 +1468,7 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
           const cleaned = {
             ...f,
             companyScope: f.companyScope || autoScope,
-            items: items.filter(it => it.materialName || it.quantity).map(it => ({
+            items: sortBomItems(items.filter(it => it.materialName || it.quantity)).map(it => ({
               materialName: it.materialName || '',
               make: it.make || '',
               quantity: toNumber(it.quantity),
@@ -941,10 +1476,12 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               specification: it.specification || '',
               scopePragathi: !!it.scopePragathi,
               scopeCustomer: !!it.scopeCustomer,
+              actualQuantity: it.actualQuantity === '' || it.actualQuantity == null ? '' : toNumber(it.actualQuantity),
               rate: toNumber(it.rate),
               amount: toNumber(it.quantity) * toNumber(it.rate)
             })),
             totalValue,
+            amount: toNumber(f.amount),
             discomCharges: toNumber(f.discomCharges),
             civilWork: toNumber(f.civilWork),
             upvcPipes: toNumber(f.upvcPipes),
@@ -962,13 +1499,32 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
           <div className="mb" style={{ maxHeight: '60vh', overflowY: 'auto' }}>
             <div className="fr">
               <div className="fg"><label>PO Number</label><input className="fi" value={f.poNumber} readOnly style={{ background: '#f0f4f8' }} /></div>
-              <div className="fg"><label>PO Date *</label><input type="date" className="fi" value={f.poDate} onChange={e => set('poDate', e.target.value)} required /></div>
+              <div className="fg"><label>PO Date *</label><DateInput value={f.poDate} onChange={e => set('poDate', e.target.value)} required /></div>
             </div>
+            <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', margin: '14px 0 8px', paddingBottom: 4, borderBottom: '1px solid var(--bor)' }}>Customer Details</div>
             <div className="fr">
               <div className="fg"><label>Customer Name</label><input className="fi" value={f.customerName} onChange={e => set('customerName', e.target.value)} /></div>
-              <div className="fg"><label>Customer Phone</label><input className="fi" value={f.customerPhone} onChange={e => set('customerPhone', e.target.value)} /></div>
+              <div className="fg"><label>Mobile Number</label><input className="fi" value={f.customerPhone} onChange={e => set('customerPhone', e.target.value)} placeholder="10-digit mobile" /></div>
             </div>
-            <div className="fg"><label>Customer Address</label><input className="fi" value={f.customerAddress} onChange={e => set('customerAddress', e.target.value)} /></div>
+            <div className="fr">
+              <div className="fg"><label>Service Number</label><input className="fi" value={f.uscNo} onChange={e => set('uscNo', e.target.value)} placeholder="Electrical service / USC number" /></div>
+              <div className="fg"><label>Plant Location / Building</label><input className="fi" value={f.plantLocation} onChange={e => set('plantLocation', e.target.value)} placeholder="Residential Building / location" /></div>
+            </div>
+            <div className="fg"><label>Address</label><input className="fi" value={f.customerAddress} onChange={e => set('customerAddress', e.target.value)} /></div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: -4 }}>
+              These four print on the purchase order exactly as entered here. They are filled in from the lead, and can be corrected.
+            </div>
+
+            <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', margin: '14px 0 8px', paddingBottom: 4, borderBottom: '1px solid var(--bor)' }}>System</div>
+            {/* The PO reads "System of __ kW with __ Phase of __ kW Inverter". */}
+            <div className="fr3">
+              <div className="fg"><label>System Size (kW)</label><input className="fi" value={f.systemKw} onChange={e => set('systemKw', e.target.value)} placeholder="e.g. 5" /></div>
+              <div className="fg"><label>Phase</label><select className="fi" value={f.phase} onChange={e => set('phase', e.target.value)}><option value="1">1 Phase</option><option value="3">3 Phase</option></select></div>
+              <div className="fg"><label>Inverter (kW)</label><input className="fi" value={f.inverterKw} onChange={e => set('inverterKw', e.target.value)} placeholder={f.systemKw || 'e.g. 5'} /></div>
+            </div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: -4 }}>
+              Prints as: <strong>System of {f.systemKw || '____'} kW with {f.phase || '____'} Phase of {f.inverterKw || f.systemKw || '____'} kW Inverter</strong>
+            </div>
             <div className="fr3">
               <div className="fg"><label>kW Required</label><input className="fi" value={f.kwRequired} onChange={e => set('kwRequired', e.target.value)} placeholder="e.g. 3kW" /></div>
               <div className="fg"><label>No. of Modules</label><input className="fi" value={f.moduleCount} onChange={e => set('moduleCount', e.target.value)} placeholder="e.g. 6" /></div>
@@ -978,7 +1534,30 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
               <div className="fg"><label>Vendor</label><input className="fi" value={f.vendorName} onChange={e => set('vendorName', e.target.value)} /></div>
               <div className="fg"><label>Reference Number</label><input className="fi" value={f.referenceNumber} onChange={e => set('referenceNumber', e.target.value)} placeholder="Quote/Ref No." /></div>
             </div>
-            <div className="fg"><label>Plant Location / Building</label><input className="fi" value={f.plantLocation} onChange={e => set('plantLocation', e.target.value)} placeholder="Residential Building / location" /></div>
+
+            {/* Details that also print on the quotation and the Bill of Materials */}
+            <div className="fr">
+              <div className="fg"><label>Referred By</label><input className="fi" value={f.referredBy} onChange={e => set('referredBy', e.target.value)} placeholder="Who referred this customer" /></div>
+              <div className="fg"><label>Source of Lead</label><input className="fi" value={f.sourceOfLead} onChange={e => set('sourceOfLead', e.target.value)} list="lead-sources" placeholder="e.g. Referral, Website" /></div>
+            </div>
+            <div className="fg"><label>Amount (₹)</label><input type="number" className="fi" value={f.amount} onChange={e => set('amount', e.target.value)} placeholder={totalValue ? String(totalValue) : '0'} /></div>
+
+            <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', margin: '14px 0 8px', paddingBottom: 4, borderBottom: '1px solid var(--bor)' }}>Payment Details</div>
+            {/* These print in the Payment Details block on the PO, opposite the
+                company's bank account. The reference sheet rules three blanks
+                per line, so each takes amount / date / mode as free text. */}
+            <div className="fr">
+              <div className="fg"><label>Advance</label><input className="fi" value={f.advancePayment} onChange={e => set('advancePayment', e.target.value)} placeholder="amount / date / mode" /></div>
+              <div className="fg"><label>2nd Payment</label><input className="fi" value={f.secondPayment} onChange={e => set('secondPayment', e.target.value)} placeholder="amount / date / mode" /></div>
+            </div>
+            <div className="fr">
+              <div className="fg"><label>Final Payment</label><input className="fi" value={f.finalPayment} onChange={e => set('finalPayment', e.target.value)} placeholder="amount / date / mode" /></div>
+              <div className="fg"><label>Any Remarks</label><input className="fi" value={f.paymentRemarks} onChange={e => set('paymentRemarks', e.target.value)} placeholder="Anything the accounts team should know" /></div>
+            </div>
+            <div style={{ fontSize: '.74rem', color: 'var(--muted)', marginTop: -4 }}>
+              Left blank, each prints as a ruled line to be filled in by hand — as on the reference purchase order.
+            </div>
+            <datalist id="lead-sources">{getOptions(settings, 'leadReference').map(r => <option key={r} value={r} />)}</datalist>
 
             {/* BOM Section with Templates */}
             <div style={{ borderTop: '1px solid var(--bor)', margin: '14px 0', paddingTop: 14 }}>
@@ -999,33 +1578,68 @@ function LeadPOModal({ lead, po, poId, existingPOs, onSave, onClose }) {
                 </div>
               </div>
 
-              {items.map((item, i) => (
-                <div key={item._key || i} style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: '8px 10px', marginBottom: 8, background: '#fafbfc' }}>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
-                    <div className="fg" style={{ flex: 3, marginBottom: 0 }}>{i === 0 && <label>Description of Material</label>}<input className="fi" value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" placeholder="Material name" /></div>
-                    <div className="fg" style={{ flex: 0.6, marginBottom: 0 }}>{i === 0 && <label>UOM</label>}<input className="fi" value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></div>
-                    <div className="fg" style={{ flex: 1.2, marginBottom: 0 }}>{i === 0 && <label>Make</label>}<input className="fi" value={item.make} onChange={e => setItem(i, 'make', e.target.value)} placeholder="Brand / Make" /></div>
-                    <div className="fg" style={{ flex: 1.2, marginBottom: 0 }}>{i === 0 && <label>Model / Rating</label>}<input className="fi" value={item.specification} onChange={e => setItem(i, 'specification', e.target.value)} placeholder="Model / Rating" /></div>
-                    <div className="fg" style={{ flex: 0.7, marginBottom: 0 }}>{i === 0 && <label>Qty</label>}<input type="number" className="fi" value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></div>
-                    {items.length > 1 && <button type="button" className="btn bsm bo" onClick={() => removeItem(i)} style={{ color: 'var(--err)', marginBottom: 0 }}><span className="material-icons-round" style={{ fontSize: 16 }}>close</span></button>}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Rate</label>}<input type="number" className="fi" style={{ fontSize: '.85rem' }} value={item.rate} onChange={e => setItem(i, 'rate', e.target.value)} placeholder="Rate" /></div>
-                    <div className="fg" style={{ flex: 1, marginBottom: 0 }}>{i === 0 && <label style={{ fontSize: '.76rem' }}>Amount</label>}<input className="fi" style={{ fontSize: '.85rem' }} value={formatCurrency(toNumber(item.quantity) * toNumber(item.rate))} disabled /></div>
-                    <div style={{ display: 'flex', gap: 10, alignItems: 'center', flex: 1.2, paddingTop: i === 0 ? 18 : 0 }}>
-                      {i === 0 && <label style={{ fontSize: '.76rem', position: 'absolute', marginTop: -34 }}>Scope</label>}
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.82rem', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={!!item.scopePragathi} onChange={e => setItem(i, 'scopePragathi', e.target.checked)} /> Pragathi
-                      </label>
-                      <label style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '.82rem', cursor: 'pointer' }}>
-                        <input type="checkbox" checked={!!item.scopeCustomer} onChange={e => setItem(i, 'scopeCustomer', e.target.checked)} /> Customer
-                      </label>
-                    </div>
-                  </div>
+              {/* Pick the materials needed — every material in one place */}
+              <div style={{ border: '1px solid var(--bor)', borderRadius: 8, padding: 10, marginBottom: 12, background: '#fafbfc' }}>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <input className="fi" style={{ flex: 1, minWidth: 160, padding: '6px 10px', fontSize: '.84rem' }} value={matSearch} onChange={e => setMatSearch(e.target.value)} placeholder="Search materials..." />
+                  <button type="button" className="btn bsm bo" onClick={pickAllStandard}>Select All</button>
+                  <button type="button" className="btn bsm bo" onClick={clearPicked}>Clear</button>
+                  <span style={{ fontSize: '.78rem', color: 'var(--muted)' }}>{items.length} selected</span>
                 </div>
-              ))}
-              <button type="button" className="btn bsm bo" onClick={addItem} style={{ marginTop: 6 }}>
-                <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add Item
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(210px,1fr))', gap: 4, maxHeight: 190, overflowY: 'auto' }}>
+                  {visibleMaterials.map(m => {
+                    const on = isPicked(m.materialName);
+                    return (
+                      <label key={m.materialName} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px', borderRadius: 6, cursor: 'pointer', fontSize: '.82rem', border: '1px solid ' + (on ? 'var(--pri)' : 'var(--bor)'), background: on ? 'rgba(39,174,96,.07)' : '#fff' }}>
+                        <input type="checkbox" checked={on} onChange={() => toggleMaterial(m)} style={{ accentColor: 'var(--pri)' }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={m.materialName}>{m.materialName}</span>
+                      </label>
+                    );
+                  })}
+                  {!visibleMaterials.length && <span style={{ fontSize: '.82rem', color: 'var(--muted)', padding: 6 }}>No material matches "{matSearch}".</span>}
+                </div>
+              </div>
+
+              {/* Fill the details for the selected materials, right here */}
+              {items.length > 0 && (
+                <div className="tw" style={{ border: '1px solid var(--bor)', borderRadius: 8 }}>
+                  <table style={{ fontSize: '.8rem' }}>
+                    <thead><tr>
+                      <th style={{ minWidth: 150 }}>Material</th>
+                      <th style={{ width: 62 }}>UOM</th>
+                      <th style={{ width: 110 }}>Make</th>
+                      <th style={{ width: 110 }}>Model / Rating</th>
+                      <th style={{ width: 74 }}>Qty (Est.)</th>
+                      <th style={{ width: 74 }}>Actuals</th>
+                      <th style={{ width: 120 }}>Rate</th>
+                      <th style={{ width: 96 }}>Amount</th>
+                      <th style={{ width: 62, textAlign: 'center' }}>Pragathi</th>
+                      <th style={{ width: 66, textAlign: 'center' }}>Customer</th>
+                      <th style={{ width: 34 }}></th>
+                    </tr></thead>
+                    <tbody>
+                      {items.map((item, i) => (
+                        <tr key={item._key || i}>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.materialName} onChange={e => setItem(i, 'materialName', e.target.value)} list="bom-materials" /></td>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.unit} onChange={e => setItem(i, 'unit', e.target.value)} placeholder="Nos" /></td>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.make} onChange={e => setItem(i, 'make', e.target.value)} /></td>
+                          <td><input className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.specification} onChange={e => setItem(i, 'specification', e.target.value)} /></td>
+                          <td><input type="number" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.quantity} onChange={e => setItem(i, 'quantity', e.target.value)} /></td>
+                          <td><input type="number" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.actualQuantity} onChange={e => setItem(i, 'actualQuantity', e.target.value)} /></td>
+                          <td><input type="number" className="fi" style={{ padding: '4px 6px', fontSize: '.8rem' }} value={item.rate} onChange={e => setItem(i, 'rate', e.target.value)} /></td>
+                          <td style={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{formatCurrency(toNumber(item.quantity) * toNumber(item.rate))}</td>
+                          <td style={{ textAlign: 'center' }}><input type="checkbox" checked={!!item.scopePragathi} onChange={e => setItem(i, 'scopePragathi', e.target.checked)} /></td>
+                          <td style={{ textAlign: 'center' }}><input type="checkbox" checked={!!item.scopeCustomer} onChange={e => setItem(i, 'scopeCustomer', e.target.checked)} /></td>
+                          <td><button type="button" className="btn bsm bo" onClick={() => removeItem(i)} title="Remove" style={{ padding: '2px 6px', color: 'var(--err)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>close</span></button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {!items.length && <p style={{ fontSize: '.82rem', color: 'var(--muted)', margin: '4px 2px' }}>Tick the materials above to add them to this Bill of Materials.</p>}
+              <button type="button" className="btn bsm bo" onClick={addItem} style={{ marginTop: 8 }}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add custom material
               </button>
               <datalist id="bom-materials">{allMaterials.map(m => <option key={m} value={m} />)}</datalist>
               <div style={{ textAlign: 'right', fontWeight: 700, fontSize: '1rem', marginTop: 10 }}>Total: {formatCurrency(totalValue)}</div>
@@ -1107,106 +1721,8 @@ function generatePONumber(existingPOs) {
   return 'PO-PPSPO-' + String(maxNum + 1).padStart(4, '0') + '/' + dateStr;
 }
 
-function generateQuotation(lead) {
-  const l = lead || {};
-  const e = escapeHtml;
-  const kw = e(l.kwRequired || '___');
-  const price = l.expectedValue ? Number(l.expectedValue).toLocaleString('en-IN') : '___________';
-  const html = `<html><head><title>Quotation - ${e(l.name)}</title>
-<style>
-body{font-family:'Times New Roman',Times,serif;padding:40px 50px;line-height:1.7;font-size:14px;color:#000}
-.hdr{text-align:center;border-bottom:2px solid #000;padding-bottom:12px;margin-bottom:16px}
-.hdr img{max-height:60px;object-fit:contain}
-.hdr p{margin:2px 0;font-size:11px}
-h2{text-align:center;margin:10px 0 18px;font-size:17px;text-decoration:underline}
-.date-line{text-align:right;margin-bottom:16px;font-size:13px}
-.ref-line{margin-bottom:16px;font-size:13px}
-.to-block{margin-bottom:16px;font-size:13px;line-height:1.6}
-.to-block strong{font-size:14px}
-.section{margin:16px 0;font-size:13px;line-height:1.8}
-table{width:100%;border-collapse:collapse;margin:12px 0}
-th,td{border:1px solid #000;padding:6px 10px;text-align:left;font-size:12px}
-th{background:#f0f0f0;font-weight:700}
-.terms td{border:none;padding:4px 10px 4px 0;font-size:12px;vertical-align:top}
-.terms td:first-child{font-weight:600;white-space:nowrap}
-.sig-section{margin-top:50px;display:flex;justify-content:space-between}
-.sig-block{text-align:center;min-width:180px}
-.sig-line{border-top:1px solid #000;margin-top:60px;padding-top:5px;font-size:11px}
-.footer{margin-top:40px;font-size:10px;color:#999;text-align:center;border-top:1px solid #ccc;padding-top:8px}
-@media print{body{padding:20px 30px}}
-</style>
-</head><body>
-<div class="hdr">
-<img src="/logo.png" alt="Pragathi Power Solutions" style="max-height:60px;object-fit:contain;margin-bottom:4px" onerror="this.style.display='none'" />
-<p>19-3-12/J, Ramanuja Circle, Tiruchanoor Road, Tirupati-517501 | Mob: 9701426440 | Email: ppstirupathi@gmail.com</p>
-<p style="font-weight:600">GST: 37AAOFP6349K2ZG</p>
-</div>
-<h2>QUOTATION</h2>
-<div class="date-line">Date: ${new Date().toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' })}</div>
-<div class="ref-line">Ref: PPS/QTN/${new Date().getFullYear()}/${String(new Date().getMonth() + 1).padStart(2, '0')}</div>
-<div class="to-block">
-<strong>To,</strong><br/>
-${e(l.name || '___________')},<br/>
-${e(l.address || '___________')}${l.city ? ', ' + e(l.city) : ''}${l.district ? ', ' + e(l.district) : ''}${l.pincode ? ' - ' + e(l.pincode) : ''}<br/>
-Ph: ${e(l.phone || '___________')}${l.email ? '<br/>Email: ' + e(l.email) : ''}
-</div>
-<div class="section">
-<p><strong>Sub:</strong> Quotation for Supply &amp; Installation of <strong>${kw} kW</strong> Grid Connected Rooftop Solar Power Plant.</p>
-<p>Dear Sir/Madam,</p>
-<p>Thank you for showing interest in Solar Energy. We are pleased to submit our quotation for the supply and installation of a <strong>${kw} kW On-Grid Solar Power Plant</strong> at your premises.</p>
-</div>
-
-<table>
-<thead><tr><th>Sl.</th><th>Description</th><th>Specification</th><th>Qty</th></tr></thead>
-<tbody>
-<tr><td>1</td><td>Solar Modules</td><td>545 Wp / 550 Wp Mono PERC (Tier-1)</td><td>${(!isNaN(Number(kw)) && Number(kw) > 0) ? Math.ceil(Number(kw) * 1000 / 545) : '___'}</td></tr>
-<tr><td>2</td><td>Solar Inverter</td><td>${kw} kW On-Grid String Inverter</td><td>1</td></tr>
-<tr><td>3</td><td>Module Mounting Structure</td><td>Hot-Dip Galvanized / Anodized Aluminum</td><td>1 Set</td></tr>
-<tr><td>4</td><td>DC Cables</td><td>4 sq.mm / 6 sq.mm Solar DC Cable</td><td>As Required</td></tr>
-<tr><td>5</td><td>AC Cables</td><td>As per inverter capacity</td><td>As Required</td></tr>
-<tr><td>6</td><td>Earthing Kit</td><td>LA & Module Earthing</td><td>1 Set</td></tr>
-<tr><td>7</td><td>AC/DC Distribution Box</td><td>SPD, MCB, Isolator</td><td>1 Set</td></tr>
-<tr><td>8</td><td>Net Meter</td><td>Bi-directional (by DISCOM)</td><td>1</td></tr>
-</tbody>
-</table>
-
-<p style="font-size:14px;margin-top:16px"><strong>Total Price: Rs. ${price}/- (Including GST)</strong></p>
-
-<p style="margin-top:18px"><strong>Terms & Conditions:</strong></p>
-<table class="terms">
-<tr><td>Taxes</td><td>:</td><td>GST Included in the above price</td></tr>
-<tr><td>Warranty</td><td>:</td><td>25 Years Performance Warranty on Solar Modules, 5 Years on Inverter</td></tr>
-<tr><td>Payment Terms</td><td>:</td><td>80% Advance along with PO, 20% Before dispatch</td></tr>
-<tr><td>Delivery</td><td>:</td><td>3-4 Weeks from the date of PO receipt</td></tr>
-<tr><td>Installation</td><td>:</td><td>Within 10 days from material delivery</td></tr>
-<tr><td>Validity</td><td>:</td><td>This quotation is valid for 15 days from the date of issue</td></tr>
-<tr><td>Subsidy</td><td>:</td><td>Eligible under PM Surya Ghar / State Subsidy (subject to DISCOM approval)</td></tr>
-</table>
-
-${l.siteVisit === 'Yes' ? `
-<p style="margin-top:16px"><strong>Site Details:</strong></p>
-<table class="terms">
-${l.roofType ? '<tr><td>Roof Type</td><td>:</td><td>' + e(l.roofType) + '</td></tr>' : ''}
-${l.structureType ? '<tr><td>Tilt</td><td>:</td><td>' + e(l.structureType) + '</td></tr>' : ''}
-${l.roofType === 'Elevated' && (l.elevatedNorthHeight || l.elevatedHeight) ? '<tr><td>North Pole Height</td><td>:</td><td>' + e(l.elevatedNorthHeight || l.elevatedHeight) + ' ft</td></tr>' : ''}
-${l.roofType === 'Elevated' && l.elevatedSouthHeight ? '<tr><td>South Pole Height</td><td>:</td><td>' + e(l.elevatedSouthHeight) + ' ft</td></tr>' : ''}
-${l.existingConnection ? '<tr><td>Existing Connection</td><td>:</td><td>' + e(l.existingConnection) + '</td></tr>' : ''}
-${l.sanctionedLoad ? '<tr><td>Sanctioned Load</td><td>:</td><td>' + e(l.sanctionedLoad) + ' kW</td></tr>' : ''}
-${l.floors ? '<tr><td>Floors</td><td>:</td><td>' + e(l.floors) + '</td></tr>' : ''}
-${l.availableSpace ? '<tr><td>Available Space</td><td>:</td><td>' + e(l.availableSpace) + ' sq.ft</td></tr>' : ''}
-${(l.customerServiceNumber || l.meterNumber) ? '<tr><td>Customer Service No</td><td>:</td><td>' + e(l.customerServiceNumber || l.meterNumber) + '</td></tr>' : ''}
-</table>` : ''}
-
-<p style="margin-top:20px">We hope you find our offer competitive. Please feel free to contact us for any further clarification.</p>
-<p>Thanking you,</p>
-<div class="sig-section">
-<div class="sig-block"><div class="sig-line">For Pragathi Power Solutions<br/>Authorized Signatory</div></div>
-<div class="sig-block"><div class="sig-line">Customer Acceptance<br/>(Name & Signature)</div></div>
-</div>
-<div class="footer">Pragathi Power Solutions | 19-3-12/J, Tiruchanoor Road, Tirupati-517501 | 9701426440 | ppstirupathi@gmail.com</div>
-</body></html>`;
-  openHtmlSafely(html, true);
-}
+/* The quotation is generated from src/services/quotation.js now — it follows the
+   company's standard proposal format and carries the approval workflow. */
 
 function printLeadSummary(lead) {
   const e = escapeHtml;
@@ -1290,13 +1806,7 @@ function shareLeadWhatsApp(lead) {
     (lead.notes ? '\n\nNotes: ' + lead.notes : '') +
     '\n\n_Pragathi Power Solutions_';
 
-  if (lead.phone) {
-    const phone = String(lead.phone).replace(/\D/g, '');
-    const num = phone.length === 10 ? '91' + phone : phone;
-    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  } else {
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-  }
+  shareWhatsApp(lead.phone, msg);
 }
 
 /* ============ WHATSAPP SHARE - FOLLOW-UP HISTORY ============ */
@@ -1315,11 +1825,5 @@ function shareFollowUpWhatsApp(lead) {
     '*History:*\n' + historyText +
     '\n\n_Pragathi Power Solutions_';
 
-  if (lead.phone) {
-    const phone = String(lead.phone).replace(/\D/g, '');
-    const num = phone.length === 10 ? '91' + phone : phone;
-    window.open('https://wa.me/' + num + '?text=' + encodeURIComponent(msg), '_blank');
-  } else {
-    window.open('https://wa.me/?text=' + encodeURIComponent(msg), '_blank');
-  }
+  shareWhatsApp(lead.phone, msg);
 }

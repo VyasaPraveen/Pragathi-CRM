@@ -3,10 +3,13 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { formatCurrency, formatDate, safeStr, toNumber, escapeHtml, hasAccess, openHtmlSafely, todayStr, shareWhatsApp } from '../services/helpers';
+import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
 import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
+import { can, ACTIONS, hasModule, PO_STATUS, DISPATCH_STATUS, dispatchSummary } from '../services/permissions';
+import DispatchPanel from '../components/DispatchPanel';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
 const PAGE_SIZE = 20;
@@ -27,9 +30,12 @@ const DEFAULT_BOM_MATERIALS = [
   'Cable Glands', 'Module Earth Wire 6sqmm'
 ];
 
+// A purchase order's day for the Day / Month filter: its PO date, else when it was recorded.
+const PO_DATE_FIELDS = ['poDate', 'createdAt'];
+
 export default function PurchaseOrders() {
   const { purchaseOrders, leadPOs, leads } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
@@ -37,7 +43,11 @@ export default function PurchaseOrders() {
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [expanded, setExpanded] = useState(null);
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
-  const canEdit = hasAccess(role, 'manager');
+  // The Day / Month filter (R15) sits beside the status filters, which stay as they are.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
+  // Creating a PO needs the role action AND the per-user "New PO" permission
+  // an Admin can switch on/off for an individual employee.
+  const canEdit = can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po');
 
   // Merge both collections with a source tag (memoized so typing in search doesn't re-merge/re-sort)
   const allPOs = useMemo(() => {
@@ -57,7 +67,7 @@ export default function PurchaseOrders() {
     ].sort((a, b) => ts(b) - ts(a));
   }, [purchaseOrders, leadPOs, leads]);
 
-  const allStatuses = [...new Set([...poStatuses, 'Unapproved', 'Recommended', 'Approved'])];
+  const allStatuses = [...new Set([...poStatuses, 'Unapproved', 'Recommended', 'Management Approved', 'Approved'])];
 
   let filtered = allPOs;
   if (sourceFilter === 'standalone') filtered = filtered.filter(po => po._source === 'standalone');
@@ -72,6 +82,7 @@ export default function PurchaseOrders() {
       safeStr(po._leadName).toLowerCase().includes(q)
     );
   }
+  filtered = applyDateFilter(filtered, dateFilter, PO_DATE_FIELDS);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -97,19 +108,21 @@ export default function PurchaseOrders() {
     } catch (e) { toast(e.message, 'er'); }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Delete this purchase order permanently?')) {
-      try { await deleteDocument('purchaseOrders', id); toast('Purchase order deleted'); }
-      catch (e) { toast(e.message, 'er'); }
-    }
+  // Req 1 (28-Oct): deleting a purchase order — a vendor PO or a lead's PO —
+  // is the Owner's alone; the API refuses everyone else.
+  const handleDelete = async (po) => {
+    const what = po._source === 'lead' ? `the PO ${po.poNumber || ''} for "${po.customerName || po._leadName || ''}"` : 'this purchase order';
+    if (!window.confirm(`Delete ${what} permanently? This cannot be undone.`)) return;
+    try { await deleteDocument(po._source === 'lead' ? 'leadPOs' : 'purchaseOrders', po.id); toast('Purchase order deleted'); }
+    catch (e) { toast(e.message, 'er'); }
   };
 
   return (
     <>
       <div className="tl">
         <div className="sb-x"><span className="material-icons-round">search</span><input type="text" placeholder="Search POs..." value={search} onChange={e => setSearch(e.target.value)} /></div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <div className="tl-r">
+          <div className="chips">
             {['all', ...allStatuses].map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
           <select className="fi" value={sourceFilter} onChange={e => setSourceFilter(e.target.value)} style={{ width: 'auto', padding: '4px 28px 4px 8px', fontSize: '.78rem' }}>
@@ -120,6 +133,7 @@ export default function PurchaseOrders() {
           {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New PO</button>}
         </div>
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={allPOs} fields={PO_DATE_FIELDS} /></div>
       {/* Summary */}
       <div style={{ display: 'flex', gap: 12, marginBottom: 14, flexWrap: 'wrap' }}>
         <div style={{ fontSize: '.82rem', color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -129,36 +143,56 @@ export default function PurchaseOrders() {
         </div>
       </div>
 
-      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw"><table><thead><tr>
+      <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr>
         <th>PO #</th><th>Customer / Vendor</th><th>Date</th><th>Items</th><th>Value</th><th>Source</th><th>Status</th><th>Actions</th>
       </tr></thead><tbody>
         {displayed.map(po => (
           <React.Fragment key={po._source + '-' + po.id}>
             <tr>
-              <td style={{ fontWeight: 600 }}>{po.poNumber || '-'}</td>
-              <td>
+              <td data-l="PO #" style={{ fontWeight: 600 }}>{po.poNumber || '-'}</td>
+              <td className="m-h">
                 <strong>{po._source === 'lead' ? (po.customerName || po._leadName) : po.vendorName}</strong>
                 <br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>
                   {po._source === 'lead' ? ('Vendor: ' + (po.vendorName || '-')) : (po.vendorPhone || '')}
                 </span>
               </td>
-              <td style={{ fontSize: '.82rem' }}>{formatDate(po.poDate)}</td>
-              <td>{(po.items || []).length}</td>
-              <td style={{ fontWeight: 700 }}>{formatCurrency(po.agreedPrice || po.totalValue)}</td>
-              <td>
+              <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(po.poDate)}</td>
+              <td data-l="Items">{(po.items || []).length}</td>
+              <td data-l="Value" style={{ fontWeight: 700 }}>{formatCurrency(po.agreedPrice || po.totalValue)}</td>
+              <td data-l="Source">
                 {po._source === 'lead' ? (
                   <span style={{ background: 'rgba(99,102,241,.1)', color: '#6366f1', padding: '2px 8px', borderRadius: 10, fontSize: '.72rem', fontWeight: 600 }}>Lead</span>
                 ) : (
                   <span style={{ background: 'rgba(100,116,139,.1)', color: '#64748b', padding: '2px 8px', borderRadius: 10, fontSize: '.72rem', fontWeight: 600 }}>Standalone</span>
                 )}
               </td>
-              <td><StatusBadge status={po.status} /></td>
-              <td><div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn bsm bo" onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
-                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po, leads.find(l => l.id === po.leadId))} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
+              <td data-l="Status">
+                <StatusBadge status={po.status} />
+                {/* An approved lead PO is the warehouse's to dispatch; say how far it has got. */}
+                {po._source === 'lead' && po.status === PO_STATUS.APPROVED && (() => {
+                  const s = dispatchSummary(po);
+                  const confirmed = !!po.dispatchConfirmedAt;
+                  const text = confirmed ? 'Dispatch confirmed'
+                    : po.dispatchStatus === DISPATCH_STATUS.COMPLETED ? 'Dispatch completed'
+                      : po.dispatchStatus === DISPATCH_STATUS.PARTIAL ? `Dispatch ${s.dispatched}/${s.total}`
+                        : 'To dispatch';
+                  const color = confirmed || po.dispatchStatus === DISPATCH_STATUS.COMPLETED ? '#1e8449'
+                    : po.dispatchStatus === DISPATCH_STATUS.PARTIAL ? '#d68910' : '#6366f1';
+                  return (
+                    <div style={{ marginTop: 3 }}>
+                      <span style={{ fontSize: '.68rem', fontWeight: 700, color, border: `1px solid ${color}`, borderRadius: 10, padding: '1px 7px', whiteSpace: 'nowrap' }}>
+                        <span className="material-icons-round" style={{ fontSize: 12, verticalAlign: '-2px' }}>local_shipping</span> {text}
+                      </span>
+                    </div>
+                  );
+                })()}
+              </td>
+              <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title={expanded === (po._source + po.id) ? 'Hide items' : 'Show items'} onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
+                <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? sharePOWhatsApp(po) : shareLeadPO(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
-                {canEdit && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
-                {hasAccess(role, 'admin') && po._source === 'standalone' && <button className="btn bsm bo" onClick={() => handleDelete(po.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+                {canEdit && po._source === 'standalone' && <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
+                {role === 'super_admin' && <button className="btn bsm bo" onClick={() => handleDelete(po)} title="Delete (Owner only)" data-m="Delete" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>
             </tr>
             {expanded === (po._source + po.id) && (
@@ -188,6 +222,9 @@ export default function PurchaseOrders() {
                 )}
                 {po.paymentTerms && <p style={{ fontSize: '.84rem', color: 'var(--muted)' }}><strong>Payment Terms:</strong> {po.paymentTerms} {po.paymentDueDate && <>| Due: {formatDate(po.paymentDueDate)}</>}</p>}
                 {po.notes && <p style={{ fontSize: '.84rem', color: 'var(--muted)', marginTop: 4 }}><strong>Notes:</strong> {po.notes}</p>}
+                {/* The warehouse works the dispatch from here: item by item,
+                    then "Material Dispatch Completed". */}
+                {po._source === 'lead' && <DispatchPanel po={po} lead={leads.find(l => l.id === po.leadId) || null} />}
               </td></tr>
             )}
           </React.Fragment>
@@ -202,7 +239,9 @@ export default function PurchaseOrders() {
 }
 
 function POModal({ data, id, onSave, onClose }) {
-  const { bomTemplates } = useData();
+  const { bomTemplates: allTemplates } = useData();
+  // The quotation keeps its own templates (kind 'quotation', Req 6 27-Oct); the PO lists only its own.
+  const bomTemplates = (allTemplates || []).filter(t => !t.kind || t.kind === 'po');
   const { role } = useAuth();
   const { toast } = useToast();
   const canManageTemplates = hasAccess(role, 'manager');
@@ -210,7 +249,7 @@ function POModal({ data, id, onSave, onClose }) {
   const [f, setF] = useState({
     poNumber: data.poNumber || '', vendorName: data.vendorName || '',
     vendorPhone: data.vendorPhone || '', vendorEmail: data.vendorEmail || '',
-    poDate: data.poDate || new Date().toISOString().slice(0, 10),
+    poDate: data.poDate || todayStr(),
     expectedDeliveryDate: data.expectedDeliveryDate || '',
     status: data.status || 'Draft',
     paymentTerms: data.paymentTerms || '', paymentDueDate: data.paymentDueDate || '',
@@ -403,13 +442,5 @@ function sharePOWhatsApp(po) {
     (po.notes ? '\n\nNotes: ' + po.notes : '') +
     '\n\n_Pragathi Power Solutions_';
 
-  let url;
-  if (po.vendorPhone) {
-    const phone = po.vendorPhone.replace(/\D/g, '');
-    url = 'https://wa.me/' + (phone.length === 10 ? '91' + phone : phone) + '?text=' + encodeURIComponent(msg);
-  } else {
-    url = 'https://wa.me/?text=' + encodeURIComponent(msg);
-  }
-  const win = window.open(url, '_blank');
-  if (!win) alert('Popup blocked — please allow popups for WhatsApp sharing.');
+  shareWhatsApp(po.vendorPhone, msg);
 }

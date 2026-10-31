@@ -3,10 +3,12 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
-import { formatCurrency, formatDate, toNumber, hasAccess } from '../services/helpers';
-import { StatCard, Modal } from '../components/SharedUI';
+import { formatCurrency, formatDate, toNumber, hasAccess, todayStr } from '../services/helpers';
+import { StatCard, Modal, DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 
 const PAGE_SIZE = 20;
+const REVENUE_DATE_FIELDS = ['date', 'createdAt'];
 
 export default function Revenue() {
   const { income, expenses } = useData();
@@ -16,6 +18,10 @@ export default function Revenue() {
   const [incomeVisible, setIncomeVisible] = useState(PAGE_SIZE);
   const [expenseVisible, setExpenseVisible] = useState(PAGE_SIZE);
   const canEdit = hasAccess(role, 'coordinator');
+  // The Day / Month filter (R15) narrows both lists; the totals above stay all-time.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
+  const shownIncome = applyDateFilter(income, dateFilter, REVENUE_DATE_FIELDS);
+  const shownExpenses = applyDateFilter(expenses, dateFilter, REVENUE_DATE_FIELDS);
 
   const tI = income.reduce((s, i) => s + toNumber(i.amount), 0);
   const tE = expenses.reduce((s, i) => s + toNumber(i.amount), 0);
@@ -50,37 +56,38 @@ export default function Revenue() {
         <StatCard color="re" icon="trending_down" value={formatCurrency(tE)} label="Total Expenses" />
         <StatCard color="pu" icon="savings" value={formatCurrency(tI - tE)} label="Net Profit" />
       </div>}
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 18 }}>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={[...income, ...expenses]} fields={REVENUE_DATE_FIELDS} /></div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(300px,1fr))', gap: 18 }}>
         <div className="card">
           <div className="ch"><h3 style={{ color: 'var(--ok)' }}>Income</h3>{canEdit && <button className="btn bsm bs" onClick={() => setModal({ type: 'income' })}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>}</div>
-          <div className="cb" style={{ padding: 0 }}><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
-            {income.slice(0, incomeVisible).map(i => <tr key={i.id}>
-              <td>{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
-              <td style={{ fontWeight: 600, color: 'var(--ok)' }}>{formatCurrency(i.amount)}</td>
-              <td style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
-              {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn bsm bo" onClick={() => setModal({ type: 'income', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+          <div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
+            {shownIncome.slice(0, incomeVisible).map(i => <tr key={i.id}>
+              <td className="m-h">{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
+              <td data-l="Amount" style={{ fontWeight: 600, color: 'var(--ok)' }}>{formatCurrency(i.amount)}</td>
+              <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
+              {canEdit && <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title="Edit" onClick={() => setModal({ type: 'income', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" title="Delete" onClick={() => handleDelete('income', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
-          </tbody></table>
-          {income.length > incomeVisible && <div style={{ textAlign: 'center', padding: 12 }}><button className="btn bsm bo" onClick={() => setIncomeVisible(c => c + PAGE_SIZE)}>Show More</button></div>}
+          </tbody></table></div>
+          {shownIncome.length > incomeVisible && <div style={{ textAlign: 'center', padding: 12 }}><button className="btn bsm bo" onClick={() => setIncomeVisible(c => c + PAGE_SIZE)}>Show More</button></div>}
           </div>
         </div>
         <div className="card">
           <div className="ch"><h3 style={{ color: 'var(--err)' }}>Expenses</h3>{canEdit && <button className="btn bsm bs" onClick={() => setModal({ type: 'expenses' })}><span className="material-icons-round" style={{ fontSize: 16 }}>add</span> Add</button>}</div>
-          <div className="cb" style={{ padding: 0 }}><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
-            {expenses.slice(0, expenseVisible).map(i => <tr key={i.id}>
-              <td>{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
-              <td style={{ fontWeight: 600, color: 'var(--err)' }}>{formatCurrency(i.amount)}</td>
-              <td style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
-              {canEdit && <td><div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn bsm bo" onClick={() => setModal({ type: 'expenses', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
-                {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
+          <div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Description</th><th>Amount</th><th>Date</th>{canEdit && <th>Actions</th>}</tr></thead><tbody>
+            {shownExpenses.slice(0, expenseVisible).map(i => <tr key={i.id}>
+              <td className="m-h">{i.desc}{i.category && <><br /><span style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{i.category}</span></>}</td>
+              <td data-l="Amount" style={{ fontWeight: 600, color: 'var(--err)' }}>{formatCurrency(i.amount)}</td>
+              <td data-l="Date" style={{ fontSize: '.82rem' }}>{formatDate(i.date)}</td>
+              {canEdit && <td className="m-a"><div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn bsm bo" title="Edit" onClick={() => setModal({ type: 'expenses', data: i, id: i.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>
+                {hasAccess(role, 'admin') && <button className="btn bsm bo" title="Delete" onClick={() => handleDelete('expenses', i.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>}
             </tr>)}
-          </tbody></table>
-          {expenses.length > expenseVisible && <div style={{ textAlign: 'center', padding: 12 }}><button className="btn bsm bo" onClick={() => setExpenseVisible(c => c + PAGE_SIZE)}>Show More</button></div>}
+          </tbody></table></div>
+          {shownExpenses.length > expenseVisible && <div style={{ textAlign: 'center', padding: 12 }}><button className="btn bsm bo" onClick={() => setExpenseVisible(c => c + PAGE_SIZE)}>Show More</button></div>}
           </div>
         </div>
       </div>
@@ -93,7 +100,7 @@ function RevenueModal({ type, data, id, onSave, onClose }) {
   const [f, setF] = useState({
     desc: (data && data.desc) || '',
     amount: (data && data.amount) || '',
-    date: (data && data.date) || new Date().toISOString().slice(0, 10),
+    date: (data && data.date) || todayStr(),
     category: (data && data.category) || ''
   });
   const [saving, setSaving] = useState(false);

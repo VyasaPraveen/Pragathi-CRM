@@ -3,14 +3,21 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
+import { teamLabelOf } from '../services/teams';
 import { formatCurrency, getInitials, toNumber, getDaysInMonth, hasAccess, DESIGNATIONS } from '../services/helpers';
-import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
+import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import MyTeamPanel from '../components/MyTeamPanel';
+import PasswordManager from '../components/PasswordManager';
+import { normName } from '../services/helpers';
 
 const roles = DESIGNATIONS.map(d => d.label);
 const statusOptions = ['Active', 'On Leave', 'Inactive'];
 
+const TEAM_DATE_FIELDS = ['joiningDate', 'createdAt'];
+
 export default function Team() {
-  const { team } = useData();
+  const { team, users } = useData();
   const { role } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
@@ -19,6 +26,19 @@ export default function Team() {
   const [filterStatus, setFilterStatus] = useState('all');
   const daysInMonth = getDaysInMonth();
   const canEdit = hasAccess(role, 'manager');
+  const isAdmin = hasAccess(role, 'admin');
+  const [pwdModal, setPwdModal] = useState(null);
+  // The Day / Month filter (R15): a member belongs to the month they joined.
+  const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
+
+  // A team member and their login are two separate records, joined on email.
+  // This is what lets an Admin give someone a login, or set their password,
+  // from the same screen they manage the person on.
+  const loginOf = (member) => {
+    const key = normName(member?.email);
+    if (!key) return null;
+    return (users || []).find(u => normName(u.email) === key) || null;
+  };
 
   const handleSave = async (data, id) => {
     try {
@@ -41,7 +61,7 @@ export default function Team() {
     }
   };
 
-  const filtered = team.filter(t => {
+  const filtered = applyDateFilter(team, dateFilter, TEAM_DATE_FIELDS).filter(t => {
     if (filterStatus !== 'all' && t.status !== filterStatus) return false;
     if (search) {
       const s = search.toLowerCase();
@@ -55,6 +75,9 @@ export default function Team() {
 
   return (
     <>
+      {/* A Team Leader's own members come first; renders nothing for everyone else */}
+      <MyTeamPanel />
+
       {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(140px,1fr))', gap: 12, marginBottom: 18 }}>
         <div className="card" style={{ cursor: 'pointer', border: filterStatus === 'all' ? '2px solid var(--pri)' : undefined }} onClick={() => setFilterStatus('all')}>
@@ -91,6 +114,7 @@ export default function Team() {
         </div>
         {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Member</button>}
       </div>
+      <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={team} fields={TEAM_DATE_FIELDS} /></div>
 
       {/* Team Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(290px,1fr))', gap: 16 }}>
@@ -128,10 +152,52 @@ export default function Team() {
                 </div>
               )}
 
+              {/* The team their login puts them in (Req 5.9, 30-Oct) */}
+              {(() => {
+                const login = loginOf(t);
+                const label = login ? teamLabelOf(users, login) : '';
+                return label ? (
+                  <div style={{ textAlign: 'center', padding: '6px 0 0', fontSize: '.76rem', color: 'var(--pri)' }}>
+                    <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: 'middle', marginRight: 3 }}>groups</span>
+                    {label}{login.teamLeader ? ' · reports to ' + ((users || []).find(u => String(u.email || '').toLowerCase() === String(login.teamLeader).toLowerCase())?.displayName || login.teamLeader) : ' · Team Leader'}
+                  </div>
+                ) : null;
+              })()}
+
+              {/* Whether this person can sign in, and what an Admin can do about it */}
+              {isAdmin && (() => {
+                const login = loginOf(t);
+                return (
+                  <div style={{ textAlign: 'center', padding: '8px 0 0', fontSize: '.76rem' }}>
+                    {login
+                      ? <span style={{ color: login.approved ? '#27ae60' : '#e8830c' }}>
+                          <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: 'middle', marginRight: 3 }}>key</span>
+                          Login: {login.email}{login.approved ? '' : ' (not approved)'}
+                        </span>
+                      : <span style={{ color: 'var(--muted)' }}>
+                          <span className="material-icons-round" style={{ fontSize: 13, verticalAlign: 'middle', marginRight: 3 }}>key_off</span>
+                          {t.email ? 'No login yet' : 'No email on file — add one to give a login'}
+                        </span>}
+                  </div>
+                );
+              })()}
+
               {canEdit && (
-                <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center' }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, justifyContent: 'center', flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
                   <button className="btn bsm bo" onClick={() => setModal({ data: t, id: t.id })}><span className="material-icons-round" style={{ fontSize: 15 }}>edit</span> Edit</button>
-                  {hasAccess(role, 'admin') && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
+                  {isAdmin && t.email && (() => {
+                    const login = loginOf(t);
+                    return (
+                      <button className="btn bsm bo" style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }}
+                        onClick={() => setPwdModal(login
+                          ? { user: login }
+                          : { createFor: { name: t.name, email: t.email, phone: t.phone, designation: t.role } })}>
+                        <span className="material-icons-round" style={{ fontSize: 15 }}>key</span>
+                        {login ? 'Password' : 'Create Login'}
+                      </button>
+                    );
+                  })()}
+                  {isAdmin && <button className="btn bsm bo" onClick={() => handleDelete(t.id)} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 15 }}>delete</span></button>}
                 </div>
               )}
             </div>
@@ -146,9 +212,20 @@ export default function Team() {
       {/* Detail Modal */}
       {detailModal && (
         <Modal title="Team Member Details" onClose={() => setDetailModal(null)}>
-          <TeamDetailView member={detailModal} canEdit={canEdit} isAdmin={hasAccess(role, 'admin')} onEdit={() => { setModal({ data: detailModal, id: detailModal.id }); setDetailModal(null); }} onDelete={() => handleDelete(detailModal.id)} daysInMonth={daysInMonth} />
+          <TeamDetailView member={detailModal} canEdit={canEdit} isAdmin={isAdmin} login={loginOf(detailModal)}
+            onEdit={() => { setModal({ data: detailModal, id: detailModal.id }); setDetailModal(null); }}
+            onDelete={() => handleDelete(detailModal.id)}
+            onPassword={() => {
+              const login = loginOf(detailModal);
+              setPwdModal(login ? { user: login } : { createFor: { name: detailModal.name, email: detailModal.email, phone: detailModal.phone, designation: detailModal.role } });
+              setDetailModal(null);
+            }}
+            daysInMonth={daysInMonth} />
         </Modal>
       )}
+
+      {/* Create a login for this person, or set their password */}
+      {pwdModal && <PasswordManager user={pwdModal.user} createFor={pwdModal.createFor} onClose={() => setPwdModal(null)} />}
     </>
   );
 }
@@ -270,7 +347,7 @@ function TeamModal({ data, id, onSave, onClose }) {
 }
 
 /* ── Team Detail View ── */
-function TeamDetailView({ member: t, canEdit, isAdmin, onEdit, onDelete, daysInMonth }) {
+function TeamDetailView({ member: t, canEdit, isAdmin, login, onEdit, onDelete, onPassword, daysInMonth }) {
   const detailRow = (icon, label, value) => {
     if (!value && value !== 0) return null;
     return (
@@ -312,6 +389,9 @@ function TeamDetailView({ member: t, canEdit, isAdmin, onEdit, onDelete, daysInM
         <div style={{ fontSize: '.76rem', fontWeight: 700, color: 'var(--pri)', textTransform: 'uppercase', marginBottom: 4, letterSpacing: '.5px' }}>Contact & Basic</div>
         {detailRow('phone', 'Phone', t.phone)}
         {detailRow('email', 'Email', t.email)}
+        {isAdmin && detailRow('key', 'CRM Login',
+          login ? `${login.email} · ${login.designation || login.role}${login.approved ? '' : ' · not approved'}`
+                : (t.email ? 'No login yet — use Create Login below' : 'No email on file'))}
         {detailRow('cake', 'Age', t.age ? `${t.age} years` : null)}
         {detailRow('payments', 'Salary', t.salary ? formatCurrency(t.salary) + '/month' : null)}
         {detailRow('calendar_today', 'Joining Date', t.joiningDate ? new Date(t.joiningDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'long', year: 'numeric' }) : null)}
@@ -367,6 +447,11 @@ function TeamDetailView({ member: t, canEdit, isAdmin, onEdit, onDelete, daysInM
           <button className="btn bp" onClick={onEdit} style={{ padding: '6px 16px', fontSize: '.84rem' }}>
             <span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit
           </button>
+          {isAdmin && t.email && (
+            <button className="btn" onClick={onPassword} style={{ padding: '6px 16px', fontSize: '.84rem', color: '#6c5ce7', borderColor: 'rgba(108,92,231,.4)' }}>
+              <span className="material-icons-round" style={{ fontSize: 16 }}>key</span> {login ? 'Set Password' : 'Create Login'}
+            </button>
+          )}
           {isAdmin && (
             <button className="btn" onClick={onDelete} style={{ padding: '6px 16px', fontSize: '.84rem', color: 'var(--err)' }}>
               <span className="material-icons-round" style={{ fontSize: 16 }}>delete</span> Delete
