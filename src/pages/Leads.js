@@ -22,6 +22,29 @@ import { QT_STATUS, DEFAULT_TARIFF, daysUntil, FOLLOWUP_REMIND_DAYS, quotationRe
 import { getOptions, withCurrent } from '../services/options';
 import { sortBomItems } from '../services/bomOrder';
 import { buildLeadNotice, leadNotifyTargets, siteVisitPhotoIssue, sitePhotoList } from '../services/leadNotify';
+// 31-Oct (Customers batch): a converted lead's customer starts with the stages
+// the lead and the BCO already recorded, and the lead's Advance Received keeps
+// Stage 6 of the customer's workflow up to date.
+import { newCustomerWorkflow } from '../services/customerWorkflow';
+import { syncLeadToCustomer } from '../services/customerSync';
+
+// The customer made from a converted lead (Req 1.3, 1.8–1.10, 1.16): the
+// lead's details, the person it is assigned to, and whatever the lead and the
+// BCO already recorded for Stages 5, 6 and 12 of the customer's workflow.
+function customerFromConvertedLead(leadId, cleaned, bco, by) {
+  const fields = {
+    leadId,
+    name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
+    email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
+    city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
+    assignedTo: cleaned.assignedTo || '', salesExecutive: cleaned.salesExecutive || '',
+    advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
+    totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
+    customerServiceNumber: cleaned.customerServiceNumber || '',
+    status: 'Active',
+  };
+  return { ...fields, workflow: newCustomerWorkflow(fields, { lead: { ...cleaned, id: leadId }, bco, by }) };
+}
 
 // Lead Reference, Follow-up Status, Priority and Mode of Payment now come from
 // Settings → Manage Options (src/services/options.js holds the same defaults).
@@ -87,7 +110,7 @@ const LEAD_DATE_FIELDS = ['dateGenerated', 'createdAt'];
 
 /* ============ MAIN LEADS LIST ============ */
 export default function Leads() {
-  const { leads, customers, users, influencers, team, quotations, leadPOs } = useData();
+  const { leads, customers, users, influencers, team, quotations, leadPOs, bcoOps, installations } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -135,6 +158,17 @@ export default function Leads() {
   // Who is doing the assigning — included in the notification so the employee
   // knows at a glance who gave them the lead.
   const assignedByName = user?.displayName || user?.email || 'a team leader';
+
+  // Req 1.3: the person the lead is assigned to hears at once that it has
+  // become a customer, which now sits in their Customers list.
+  const tellAssigneeOfCustomer = (lead, customerId) => {
+    if (!lead.assignedTo) return;
+    createNotification({
+      forUser: lead.assignedTo, title: 'Your Lead Is Now a Customer',
+      message: `"${lead.name}" has been converted and added to Customers. It is in your Customers list — the workflow continues there.`,
+      type: 'customer', module: 'customers', relatedId: customerId,
+    });
+  };
 
   const handleSave = async (data, id, prevStatus, prevExpectedSignUpDate) => {
     try {
@@ -202,17 +236,9 @@ export default function Leads() {
           }));
         // Auto-create customer if lead is created directly as Converted
         if (cleaned.status === 'Converted') {
-          await addDocument('customers', {
-            leadId: newId,
-            name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
-            email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
-            city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
-            advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
-            totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
-            customerServiceNumber: cleaned.customerServiceNumber || '',
-            status: 'Active'
-          });
+          const custId = await addDocument('customers', customerFromConvertedLead(newId, cleaned, null, assignedByName));
           toast(cleaned.name + ' auto-added to Customers!');
+          tellAssigneeOfCustomer(cleaned, custId);
         }
         // Auto-create reminder for Expected Sign-Up Date on new lead
         if (cleaned.expectedSignUpDate) {
@@ -268,17 +294,13 @@ export default function Leads() {
       // Guard against duplicates: skip if a customer already exists for this lead (by leadId or name+phone).
       const existingCustomer = customers.find(c => c.leadId === id || (c.phone === cleaned.phone && c.name === cleaned.name));
       if (cleaned.status === 'Converted' && prevStatus !== 'Converted' && !existingCustomer) {
-        await addDocument('customers', {
-          leadId: id,
-          name: cleaned.name, phone: cleaned.phone, address: cleaned.address,
-          email: cleaned.email || '', kwRequired: cleaned.kwRequired || '',
-          city: cleaned.city || '', district: cleaned.district || '', pincode: cleaned.pincode || '',
-          advanceAmount: toNumber(cleaned.advanceLeadAmount), secondPayment: 0, thirdPayment: 0, finalPayment: 0,
-          totalPrice: 0, paymentType: 'Cash', agreedPrice: 0, bosAmount: 0,
-          customerServiceNumber: cleaned.customerServiceNumber || '',
-          status: 'Active'
-        });
+        const bco = (bcoOps || []).find(o => o.leadId === id) || null;
+        const custId = await addDocument('customers', customerFromConvertedLead(id, cleaned, bco, assignedByName));
         toast(cleaned.name + ' auto-added to Customers!');
+        tellAssigneeOfCustomer(cleaned, custId);
+      } else if (existingCustomer) {
+        // The lead's Advance Received → Stage 6 of the customer's workflow (Req 1.10).
+        await syncLeadToCustomer({ customers, leads, leadPOs, installations, bcoOps, lead: { ...(prevLead || {}), ...cleaned, id }, by: assignedByName }).catch(() => {});
       }
       setModal(null);
     } catch (e) { toast(e.message, 'er'); }
@@ -378,7 +400,7 @@ function LeadModal({ data, id, onSave, onClose }) {
     lastFollowUp: data.lastFollowUp || '', followUpStatus: data.followUpStatus || 'New Lead',
     siteVisitPhotos: sitePhotoList(data.siteVisitPhotos),
     siteVisit: data.siteVisit || 'No', quotationSent: data.quotationSent || 'No',
-    advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', status: data.status || 'Interested',
+    advancePaid: data.advancePaid || 'No', advanceLeadAmount: data.advanceLeadAmount || '', advanceLeadDate: data.advanceLeadDate || '', status: data.status || 'Interested',
     modeOfPayment: data.modeOfPayment || '', modeOfPaymentOther: data.modeOfPaymentOther || '',
     assignedTo: data.assignedTo || '', expectedValue: data.expectedValue || '',
     kwRequired: data.kwRequired || '', nextFollowUpDate: data.nextFollowUpDate || '',
@@ -679,7 +701,12 @@ function LeadModal({ data, id, onSave, onClose }) {
           </div>
           <div className="fr3"><div className="fg"><label>Site Visit</label><select className="fi" value={form.siteVisit} onChange={e => set('siteVisit', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Quotation Sent</label><select className="fi" value={form.quotationSent} onChange={e => set('quotationSent', e.target.value)}><option>No</option><option>Yes</option></select></div><div className="fg"><label>Advance Paid</label><select className="fi" value={form.advancePaid} onChange={e => { set('advancePaid', e.target.value); if (e.target.value === 'Yes' && !form.advanceLeadAmount) { const def = Math.round(toNumber(form.expectedValue) * 0.1); if (def > 0) set('advanceLeadAmount', def); } }}><option>No</option><option>Yes</option></select></div></div>
           {form.advancePaid === 'Yes' && (
-            <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
+            <div className="fr">
+              <div className="fg"><label>Advance Amount (₹) <span style={{ fontSize: '.76rem', color: 'var(--muted)', fontWeight: 400 }}>Default 10% of Expected Value</span></label><input type="number" className="fi" value={form.advanceLeadAmount} onChange={e => set('advanceLeadAmount', e.target.value)} placeholder={`e.g. ${Math.round(toNumber(form.expectedValue) * 0.1) || '10% of expected value'}`} /></div>
+              {/* The date travels with the amount and the Mode of Payment below to
+                  Stage 6 of the customer's workflow (Req 1.10). */}
+              <div className="fg"><label>Advance Date</label><DateInput value={form.advanceLeadDate} onChange={e => set('advanceLeadDate', e.target.value)} /></div>
+            </div>
           )}
           <div className="fr">
             <div className="fg"><label>Mode of Payment</label><select className="fi" value={form.modeOfPayment} onChange={e => set('modeOfPayment', e.target.value)}><option value="">-- Select --</option>{opt('modeOfPayment', form.modeOfPayment).map(o => <option key={o}>{o}</option>)}</select></div>

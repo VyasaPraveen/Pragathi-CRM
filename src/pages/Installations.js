@@ -13,6 +13,7 @@ import {
   installationTeamMembers, installationTeamChanges, normalizeRole,
 } from '../services/permissions';
 import { directoryPeople, assignableNames } from '../services/people';
+import { syncInstallationToCustomer } from '../services/customerSync';
 import { isSameUser } from '../services/helpers';
 
 const PAGE_SIZE = 10;
@@ -20,7 +21,7 @@ const PAGE_SIZE = 10;
 const INSTALLATION_DATE_FIELDS = ['startDate', 'createdAt'];
 
 export default function Installations() {
-  const { installations, users } = useData();
+  const { installations, users, customers, leads, leadPOs } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [search, setSearch] = useState('');
@@ -105,8 +106,13 @@ export default function Installations() {
       data.teamMembers = installationTeamMembers(data.teamMembers, data.numPeople, data.teamLeader);
       const prev = id ? installations.find(i => i.id === id) : null;
       const visitChanged = stampSiteVisit(data, prev);
+      let savedId = id;
       if (id) { await updateDocument('installations', id, data); toast('Installation updated'); tellTeam(data, prev, id); if (visitChanged) tellSiteVisitAssignee(data, id); }
-      else { const newId = await addDocument('installations', data); toast('Installation added'); tellTeam(data, null, newId); if (visitChanged) tellSiteVisitAssignee(data, newId); }
+      else { savedId = await addDocument('installations', data); toast('Installation added'); tellTeam(data, null, savedId); if (visitChanged) tellSiteVisitAssignee(data, savedId); }
+      // The installation team → Stage 9 of the customer's workflow (Req 1.13).
+      if (data.teamLeader) {
+        syncInstallationToCustomer({ customers, leads, leadPOs, inst: { ...(prev || {}), ...data, id: savedId, createdAt: prev?.createdAt || new Date().toISOString() }, by: meName }).catch(() => {});
+      }
       setModal(null);
     } catch (e) { toast(e.message, 'er'); }
   };

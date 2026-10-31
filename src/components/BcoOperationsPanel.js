@@ -7,8 +7,9 @@ import { apiUpload } from '../services/api';
 import { formatDate, isSafeUrl } from '../services/helpers';
 import {
   BCO_STAGES, emptyBcoOps, stageData, stageDone, stageUnlocked, stageWaitsFor,
-  stageCloseIssue, bcoProgress, canEditBco,
+  stageCloseIssue, bcoProgress, canEditBco, stageFields, BCO_FEEDS,
 } from '../services/bco';
+import { syncBcoToCustomer } from '../services/customerSync';
 
 const nowIso = () => new Date().toISOString();
 
@@ -22,7 +23,7 @@ const nowIso = () => new Date().toISOString();
 // reopen it. The rules for what may be closed live in services/bco.js.
 // ============================================================================
 export default function BcoOperationsPanel({ lead }) {
-  const { bcoOps } = useData();
+  const { bcoOps, customers, leads, leadPOs, installations } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const meName = user?.displayName || user?.email || '';
@@ -42,9 +43,12 @@ export default function BcoOperationsPanel({ lead }) {
 
   const startEdit = (stage) => {
     const d = stageData(ops, stage.key);
+    const fields = {};
+    stageFields(stage.key).forEach(f => { fields[f.key] = (d.fields || {})[f.key] ?? ''; });
     setDraft({
       answer: d.answer || '',
       note: d.note || '',
+      fields,
       docs: Array.isArray(d.docs) ? d.docs : [],
       // Stage 1's named slots, each with an optional file and an optional
       // typed value (the Mail ID is usually typed, not scanned).
@@ -78,6 +82,11 @@ export default function BcoOperationsPanel({ lead }) {
       }
       toast(closing ? `Stage ${stage.no} closed` : `Stage ${stage.no} updated`);
       setEditing('');
+      // One way, to the customer's workflow: Stage 2 → Registration (5),
+      // Stage 5 → DISCOM Followup (12). Closed with YES = the green tick there.
+      if (BCO_FEEDS[stage.key]) {
+        syncBcoToCustomer({ customers, leads, leadPOs, installations, lead, bco: { ...(ops || emptyBcoOps(lead)), stages }, by: meName }).catch(() => {});
+      }
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }
   };
@@ -155,6 +164,10 @@ export default function BcoOperationsPanel({ lead }) {
                 {(stage.kind === 'yesno' || stage.kind === 'redeem') && (
                   <div>Answer: <strong style={{ color: d.answer === 'NO' || d.answer === 'Not Redeemed' ? '#c0392b' : d.answer ? '#1e8449' : 'var(--muted)' }}>{d.answer || 'not yet given'}</strong></div>
                 )}
+                <FieldSummary fields={stageFields(stage.key)} values={d.fields} />
+                {BCO_FEEDS[stage.key] && done && d.answer === 'YES' && (
+                  <div style={{ marginTop: 3, fontSize: '.72rem', color: '#1e8449' }}><span className="material-icons-round" style={{ fontSize: 13, verticalAlign: '-2px' }}>sync_alt</span> Carried to {BCO_FEEDS[stage.key]}</div>
+                )}
                 {d.note && <div style={{ marginTop: 3 }}><span className="material-icons-round" style={{ fontSize: 13, verticalAlign: '-2px', color: 'var(--muted)' }}>sticky_note_2</span> {d.note}</div>}
                 <DocList docs={d.docs || []} />
                 {!d.answer && !d.note && !(d.docs || []).length && !(d.slots || []).some(s => s.url || s.text) && (
@@ -205,6 +218,29 @@ export default function BcoOperationsPanel({ lead }) {
                     ))}
                   </div>
                 )}
+                {stageFields(stage.key).length > 0 && (
+                  <div className="fr" style={{ flexWrap: 'wrap', marginBottom: 4 }}>
+                    {stageFields(stage.key).map(f => (
+                      <div className="fg" key={f.key} style={{ flex: '1 1 45%', minWidth: 180 }}>
+                        <label>{f.label}</label>
+                        {f.type === 'select' && (
+                          <select className="fi" value={draft.fields?.[f.key] || ''} onChange={e => setDraft(p => ({ ...p, fields: { ...p.fields, [f.key]: e.target.value } }))}>
+                            <option value="">Select...</option>
+                            {f.options.map(o => <option key={o} value={o}>{o}</option>)}
+                          </select>
+                        )}
+                        {f.type === 'yesno' && (
+                          <select className="fi" value={draft.fields?.[f.key] || ''} onChange={e => setDraft(p => ({ ...p, fields: { ...p.fields, [f.key]: e.target.value } }))}>
+                            <option value="">Select...</option><option value="YES">YES</option><option value="NO">NO</option>
+                          </select>
+                        )}
+                        {f.type === 'date' && <input type="date" className="fi" value={draft.fields?.[f.key] || ''} onChange={e => setDraft(p => ({ ...p, fields: { ...p.fields, [f.key]: e.target.value } }))} />}
+                        {f.type === 'text' && <input className="fi" value={draft.fields?.[f.key] || ''} onChange={e => setDraft(p => ({ ...p, fields: { ...p.fields, [f.key]: e.target.value } }))} />}
+                      </div>
+                    ))}
+                    {BCO_FEEDS[stage.key] && <div style={{ flex: '1 1 100%', fontSize: '.72rem', color: 'var(--muted)' }}>Closed with YES, these details and the documents go to {BCO_FEEDS[stage.key]} by themselves.</div>}
+                  </div>
+                )}
                 <div className="fg">
                   <label>Note{draft.answer === 'NO' ? ' * (the reason)' : ''}</label>
                   <textarea className="fi" rows="2" value={draft.note} onChange={e => setDraft(p => ({ ...p, note: e.target.value }))}
@@ -244,9 +280,24 @@ function draftToData(draft) {
   return {
     answer: draft.answer || '',
     note: draft.note || '',
+    fields: draft.fields || {},
     docs: draft.docs || [],
     slots: draft.slots || [],
   };
+}
+
+// The stage's recorded details (Registration, DISCOM), when any are filled in.
+function FieldSummary({ fields, values }) {
+  const v = values || {};
+  const shown = (fields || []).filter(f => String(v[f.key] ?? '').trim() !== '');
+  if (!shown.length) return null;
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit,minmax(170px,1fr))', gap: 4, marginTop: 4 }}>
+      {shown.map(f => (
+        <div key={f.key} style={{ fontSize: '.78rem' }}><span style={{ color: 'var(--muted)' }}>{f.label}: </span><strong>{f.type === 'date' ? formatDate(v[f.key]) : String(v[f.key])}</strong></div>
+      ))}
+    </div>
+  );
 }
 
 function SlotList({ slots, labels }) {

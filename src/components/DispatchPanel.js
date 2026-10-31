@@ -18,6 +18,7 @@ import {
   canRecordReturn, poReturns, STOCK_STATUS,
 } from '../services/stock';
 import { confirmFinalDispatch, saveDispatchDraft, submitStockReturn, newClientRef } from '../services/stockApi';
+import { syncDispatchToCustomer } from '../services/customerSync';
 import {
   handoverLines, blankHandoverMarks, handoverIssue, handoverMarksForSave, handoverSummary,
   canConfirmHandover, handoverDone, canConfirmDelivery, deliveryOpen, deliveryDone, deliveryIssue, dispatchTimeline,
@@ -111,7 +112,7 @@ function RecordedTable({ lines: hl, yesLabel, noLabel }) {
 }
 
 export default function DispatchPanel({ po, lead }) {
-  const { users, materials, stockTransactions } = useData();
+  const { users, materials, stockTransactions, customers, leads, leadPOs } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const meName = user?.displayName || user?.email || '';
@@ -292,8 +293,11 @@ export default function DispatchPanel({ po, lead }) {
     if (!window.confirm(`Approval for Dispatch — accept the verified material for ${label} as reviewed?`)) return;
     setBusy(true);
     try {
-      await updateDocument('leadPOs', po.id, { dispatchConfirmedAt: nowIso(), dispatchConfirmedBy: meName });
+      const confirmedAt = nowIso();
+      await updateDocument('leadPOs', po.id, { dispatchConfirmedAt: confirmedAt, dispatchConfirmedBy: meName });
       toast('Approved for dispatch — assign the materials to a person below');
+      // Confirm Dispatch → Stage 8 of the customer's workflow (Req 1.12).
+      syncDispatchToCustomer({ customers, leads, leadPOs, po: { ...po, dispatchConfirmedAt: confirmedAt, dispatchConfirmedBy: meName }, by: meName }).catch(() => {});
       tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Approval for Dispatch Given',
         `${meName} reviewed the material verification for ${label} and approved it for dispatch. The next step is to assign the materials to a person.`);
     } catch (e) { toast(e.message, 'er'); }

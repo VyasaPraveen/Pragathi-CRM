@@ -7,6 +7,7 @@ import { PERMISSION_MODULES, PERMISSION_GROUPS, defaultModuleAllowed } from '../
 import { DEFAULT_TARIFF } from '../services/quotation';
 import { attendanceRulesFrom, DEFAULT_ATTENDANCE_RULES } from '../services/attendance';
 import OptionListsEditor from '../components/OptionListsEditor';
+import CustomerAccessEditor from '../components/CustomerAccessEditor';
 
 const NEW_BOM_MATERIALS = [
   { materialName: 'Solar PV Module', unit: 'Nos', make: 'Tata / Others' },
@@ -509,6 +510,19 @@ export default function Settings() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Customer & Workflow Access — the Owner only (Req 1.24, 31-Oct) */}
+      {role === 'super_admin' && (
+        <div className="card" style={{ marginBottom: 18 }}>
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>manage_accounts</span>Customer &amp; Workflow Access</h3></div>
+          <div className="cb">
+            {loading
+              ? <div style={{ textAlign: 'center', padding: 20 }}><div className="spin"></div></div>
+              : <CustomerAccessEditor users={users} settings={companySettings} onSettingsSaved={setCompanySettings}
+                  onUserSaved={(u) => { setUsers(prev => prev.map(x => (x.id === u.id ? u : x))); if (selectedUser?.id === u.id) setSelectedUser(u); }} />}
           </div>
         </div>
       )}

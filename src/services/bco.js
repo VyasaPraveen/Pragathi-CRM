@@ -32,6 +32,29 @@ export const BCO_STAGES = [
 // Which stage each one waits for.
 export const BCO_UNLOCKS_AFTER = { s1: null, s2: 's1', s3: 's2', s4: 's3', s5: 's4', s6: 's5', s7: 's4' };
 
+// The details a stage records besides its answer, note and documents (31-Oct,
+// Req 1.9 and 1.16). They travel one way to the customer's workflow: Stage 2
+// fills Registration (Stage 5 there), Stage 5 fills DISCOM Followup (Stage 12).
+export const BCO_STAGE_FIELDS = {
+  s2: [
+    { key: 'regType', label: 'Registration Type', type: 'select', options: ['PM Surya Ghar', 'Net Metering (NM)', 'Loan', 'Cash'] },
+    { key: 'regNumber', label: 'Registration / Application Number', type: 'text' },
+    { key: 'regDate', label: 'Registration Date', type: 'date' },
+    { key: 'bankName', label: 'Banker Name', type: 'text' },
+    { key: 'bankNumber', label: 'Banker Number', type: 'text' },
+    { key: 'loanDocsDate', label: 'Documents Submitted to Banker – Date', type: 'date' },
+  ],
+  s5: [
+    { key: 'discomSubmitted', label: 'Completion Report Submitted to DISCOM', type: 'yesno' },
+    { key: 'gridSyncStatus', label: 'Grid Synchronization', type: 'select', options: ['Pending', 'In Progress', 'Done'] },
+    { key: 'meterChangeStatus', label: 'Meter Change', type: 'select', options: ['Pending', 'Done'] },
+  ],
+};
+export const stageFields = (key) => BCO_STAGE_FIELDS[key] || [];
+
+// Which customer workflow stage a BCO stage feeds, for the note on the card.
+export const BCO_FEEDS = { s2: 'Customer Workflow — Stage 5 Registration', s5: 'Customer Workflow — Stage 12 DISCOM Followup' };
+
 export const bcoStage = (key) => BCO_STAGES.find(s => s.key === key) || null;
 
 export const emptyBcoOps = (lead) => ({ leadId: lead.id, leadName: lead.name || '', stages: {} });

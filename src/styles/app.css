@@ -390,3 +390,6 @@ button,a,.ni,.fc,label{touch-action:manipulation}
   .lg *,.lg *::before,.lg *::after{animation-duration:.01ms!important;animation-iteration-count:1!important;animation-delay:0s!important;transition-duration:.01ms!important}
   .lg-bolt{stroke-dashoffset:0}
 }
+
+/* Settings > Customer & Workflow Access (31-Oct): one column on the phone */
+@media(max-width:768px){.ca-grid{grid-template-columns:1fr!important}.ca-grid>div:first-child{border-right:0!important;padding-right:0!important}}
