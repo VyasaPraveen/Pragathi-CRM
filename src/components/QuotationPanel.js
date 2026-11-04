@@ -19,7 +19,7 @@ import { isSafeUrl } from '../services/helpers';
 import {
   QT_STATUS, MAX_REVISION, APPROVAL_HOURS, SHARE_DAYS,
   DEFAULT_TARIFF, DEFAULT_UNITS_PER_KW_MONTH,
-  nextQuotationNumber, quotationRef, ppsRefFor, canRevise, calcQuotation,
+  nextQuotationNumber, nextPpsRefSeq, numberingSettings, quotationRef, ppsRefFor, canRevise, calcQuotation,
   defaultQuoteBOM, bomFromLeadPOs, crossCheckCustomer, quotationDue, isOverdue,
   upgradeWarranty, quotationKw, quotationKwSource, EMPTY_BOM_ROW,
 } from '../services/quotation';
@@ -42,7 +42,7 @@ function untilText(at) {
 
 /* ============ QUOTATION TAB (inside the Lead detail modal) ============ */
 export default function QuotationPanel({ lead }) {
-  const { quotations, leads, customers, users, leadPOs } = useData();
+  const { quotations, leads, customers, users, leadPOs, team, settings } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
   const [form, setForm] = useState(null);       // { mode: 'new' | 'revise', data }
@@ -98,21 +98,35 @@ export default function QuotationPanel({ lead }) {
   const leadBOM = React.useMemo(() => bomFromLeadPOs(leadPOs, lead.id), [leadPOs, lead.id]);
 
   /* ── create / revise ─────────────────────────────────────────────────── */
+  // Req 16A (4-Nov): the assigned executive's mobile comes from their account
+  // (Total Users → phone), else from the Team directory entry with their name.
+  // It stays editable on the form.
+  const executivePhoneOf = (name) => {
+    const key = String(name || '').trim().toLowerCase();
+    if (!key) return '';
+    const acc = (users || []).find(u => [u.displayName, u.email].some(v => String(v || '').trim().toLowerCase() === key));
+    if (acc && acc.phone) return String(acc.phone);
+    const member = (team || []).find(t => String(t.name || '').trim().toLowerCase() === key || (t.email && String(t.email).toLowerCase() === key));
+    return member && member.phone ? String(member.phone) : '';
+  };
+
   const openNew = () => {
-    const seq = quotations.length + 1;
+    const numbering = numberingSettings(settings);
+    const executiveName = lead.assignedTo || lead.salesExecutive || meName;
     setForm({
       mode: 'new',
       data: {
         leadId: lead.id,
         leadName: lead.name || '',
-        quotationNumber: nextQuotationNumber(quotations),
+        // Req 13 (4-Nov): both numbers follow the Owner's starting numbers.
+        quotationNumber: nextQuotationNumber(quotations, numbering.quotationStart),
         revision: 0,
-        ppsRef: ppsRefFor(9072 + seq, today()),
+        ppsRef: ppsRefFor(nextPpsRefSeq(quotations, numbering.referenceStart), today()),
         date: today(),
-        executiveName: lead.assignedTo || lead.salesExecutive || meName,
+        executiveName,
         executiveEmail: myEmail,
         executiveId: '',
-        executivePhone: '',
+        executivePhone: executivePhoneOf(executiveName),
         customerName: lead.name || '',
         customerPhone: lead.phone || '',
         customerAddress: lead.address || '',
@@ -181,6 +195,16 @@ export default function QuotationPanel({ lead }) {
           message: `${quotationRef(payload)} for "${lead.name}" (${payload.kw || '-'} kW, ${formatCurrency(payload.systemCost)}) needs approval. Any one of Admin / Operation Manager / Management / Owner can approve it.`,
           type: 'status_update', module: 'quotations', relatedId: id,
         }));
+        // Req 1 (4-Nov): the Team Leader of whoever holds the lead may recommend
+        // it, and hears of it at once.
+        const tl = leaderTarget(payload);
+        if (tl && tl !== meName && !approvers.some(u => (u.displayName || u.email) === tl)) {
+          createNotification({
+            forUser: tl, title: 'Quotation ready for your recommendation',
+            message: `${meName} raised ${quotationRef(payload)} for "${lead.name}" (${payload.kw || '-'} kW, ${formatCurrency(payload.systemCost)}). As the Team Leader you can add your recommendation for the approving authority.`,
+            type: 'status_update', module: 'quotations', relatedId: id,
+          });
+        }
         toast(`Quotation ${payload.quotationNumber} raised — sent for approval`);
       } else if (form.mode === 'edit') {
         // An edit corrects the quotation in place. It does not bump the
@@ -386,6 +410,10 @@ export default function QuotationPanel({ lead }) {
       notify(quotationApprovers(users), 'Quotation Recommended',
         `${meName} recommended ${quotationRef(q)} for "${lead.name}"`
         + `${note.trim() ? ' — ' + note.trim() : ''}. It is still awaiting your approval.`);
+      // Req 1 (4-Nov): whoever raised it hears that it was recommended.
+      if (q.raisedBy && q.raisedBy !== meName) {
+        notify([q.raisedBy], 'Your quotation was recommended', `${meName} recommended ${quotationRef(q)} for "${lead.name}"${note.trim() ? ' — ' + note.trim() : ''}. It now awaits approval.`);
+      }
       toast('Recommended — the approving authorities have been told');
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }
@@ -817,6 +845,9 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
   // quotation made without one is exactly as before.
   const { bomTemplates: allTemplates } = useData();
   const { toast: tplToast } = useToast();
+  // Req 13 (4-Nov): the quotation and referral numbers are the Owner's to change.
+  const { role: formRole } = useAuth();
+  const numbersEditable = formRole === 'super_admin';
   const quoteTemplates = (allTemplates || []).filter(t => t && t.kind === 'quotation');
   const [tplSaving, setTplSaving] = useState(false);
   const saveTemplate = async () => {
@@ -859,12 +890,12 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
       <form onSubmit={e => { e.preventDefault(); if (!busy) onSave(f); }}>
         <div className="mb">
           <div className="fr3">
-            <div className="fg"><label>Quotation No.</label><input className="fi" value={f.quotationNumber} readOnly style={{ background: '#f5f6f8' }} /></div>
+            <div className="fg"><label>Quotation No.{numbersEditable && <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}> (Owner may edit)</span>}</label><input className="fi" value={f.quotationNumber} readOnly={!numbersEditable} onChange={e => set('quotationNumber', e.target.value)} style={numbersEditable ? {} : { background: '#f5f6f8' }} title={numbersEditable ? 'The next number follows Settings → Numbering; correct it here if needed' : 'Only the Owner can change the number'} /></div>
             <div className="fg"><label>Revision</label><input className="fi" value={f.revision > 0 ? `R${f.revision}` : 'Original'} readOnly style={{ background: '#f5f6f8' }} /></div>
             <div className="fg"><label>Date</label><DateInput value={f.date} onChange={e => set('date', e.target.value)} /></div>
           </div>
           <div className="fr3">
-            <div className="fg"><label>PPS Referral No.</label><input className="fi" value={f.ppsRef} onChange={e => set('ppsRef', e.target.value)} /></div>
+            <div className="fg"><label>PPS Referral No.{numbersEditable && <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}> (Owner may edit)</span>}</label><input className="fi" value={f.ppsRef} readOnly={!numbersEditable} onChange={e => set('ppsRef', e.target.value)} style={numbersEditable ? {} : { background: '#f5f6f8' }} title={numbersEditable ? 'The next serial follows Settings → Numbering' : 'Only the Owner can change the reference number'} /></div>
             <div className="fg"><label>Assigned Executive</label><input className="fi" value={f.executiveName} onChange={e => set('executiveName', e.target.value)} /></div>
             <div className="fg"><label>Executive ID / Code</label><input className="fi" value={f.executiveId} onChange={e => set('executiveId', e.target.value)} placeholder="e.g. PPS05" /></div>
           </div>

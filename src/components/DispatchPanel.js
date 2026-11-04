@@ -258,10 +258,25 @@ export default function DispatchPanel({ po, lead }) {
       const yardItems = [...(po.yardItems || []), ...yardAdds];
       // The new lines start unmarked; the existing marks are kept as they are.
       const nextMarks = [...dispatchMarks(po), ...yardAdds.map(() => ({ dispatched: false, note: '' }))];
-      await updateDocument('leadPOs', po.id, { yardItems, dispatchItems: nextMarks, dispatchUpdatedAt: nowIso(), dispatchUpdatedBy: meName, dispatchStatus: po.dispatchStatus || DISPATCH_STATUS.NONE });
-      toast(`${yardAdds.length} yard item${yardAdds.length === 1 ? '' : 's'} added to the verification list`);
-      tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Yard Items Added',
-        `${meName} added ${yardAdds.length} yard item${yardAdds.length === 1 ? '' : 's'} to ${label}: ${yardAdds.map(y => `${y.materialName} (${y.quantity} ${y.unit})`).join(', ')}. They are verified with the PO items.`);
+      // Req 11 (4-Nov): materials added after the warehouse pressed Stock OK
+      // reopen the verification for those lines only — the earlier marks stay
+      // — and the warehouse is asked to verify the new ones and press Stock OK
+      // again. Before the Stock OK nothing changes.
+      const reverify = po.dispatchStatus === DISPATCH_STATUS.COMPLETED && !po.dispatchConfirmedAt;
+      const nextStatus = reverify ? DISPATCH_STATUS.PARTIAL : (po.dispatchStatus || DISPATCH_STATUS.NONE);
+      await updateDocument('leadPOs', po.id, { yardItems, dispatchItems: nextMarks, dispatchUpdatedAt: nowIso(), dispatchUpdatedBy: meName, dispatchStatus: nextStatus, ...(reverify ? { dispatchReverifyAt: nowIso(), dispatchReverifyCount: yardAdds.length } : {}) });
+      const n = yardAdds.length;
+      toast(reverify ? `${n} new material${n === 1 ? '' : 's'} added — the warehouse has been asked to verify ${n === 1 ? 'it' : 'them'} and press Stock OK again` : `${n} yard item${n === 1 ? '' : 's'} added to the verification list`);
+      const listText = yardAdds.map(y => `${y.materialName} (${y.quantity} ${y.unit})`).join(', ');
+      if (reverify) {
+        tell(warehouseUsers(users), `${meName} added ${n} new material${n === 1 ? '' : 's'} — please verify`,
+          `${meName} added ${n} new material${n === 1 ? '' : 's'} to ${label} after your Stock OK: ${listText}. Please verify their stock availability (Yes / No / Not) — they are the last rows of the same list; the items you already verified are unchanged — then press Stock OK again.`);
+        tell(dispatchNotifyUsers(users), 'New materials added after Stock OK',
+          `${meName} added ${n} new material${n === 1 ? '' : 's'} to ${label}: ${listText}. The warehouse has been asked to verify them and submit Stock OK again.`);
+      } else {
+        tell([...warehouseUsers(users), ...dispatchNotifyUsers(users)], 'Yard Items Added',
+          `${meName} added ${n} yard item${n === 1 ? '' : 's'} to ${label}: ${listText}. They are verified with the PO items.`);
+      }
       setYardAdds([]);
     } catch (e) { toast(e.message, 'er'); }
     finally { setBusy(false); }

@@ -8,8 +8,13 @@ import { StatusBadge, Modal, EmptyState , DateFilter } from '../components/Share
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 // Lead-sourced POs use the dedicated letter/BOM renderers (make/model/scope fields, agreed price)
 import { printBOM as printLeadBOM, sharePOWhatsApp as shareLeadPO } from '../services/poUtils';
-import { can, ACTIONS, hasModule, PO_STATUS, DISPATCH_STATUS, dispatchSummary } from '../services/permissions';
+import { can, ACTIONS, hasModule, PO_STATUS, DISPATCH_STATUS, dispatchSummary, leadLeaderEmail } from '../services/permissions';
 import DispatchPanel from '../components/DispatchPanel';
+// Req 12 (4-Nov): New PO here opens the very same form as Leads → Create PO.
+import LeadPOModal from '../components/LeadPOModal';
+import { leadPickerOptions } from '../services/installations';
+import { SearchSelect } from '../components/SharedUI';
+import { createNotification } from '../services/firestore';
 
 const poStatuses = ['Draft', 'Sent', 'Partial', 'Received', 'Cancelled'];
 const PAGE_SIZE = 20;
@@ -34,9 +39,35 @@ const DEFAULT_BOM_MATERIALS = [
 const PO_DATE_FIELDS = ['poDate', 'createdAt'];
 
 export default function PurchaseOrders() {
-  const { purchaseOrders, leadPOs, leads } = useData();
+  const { purchaseOrders, leadPOs, leads, users } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
+  // The New PO flow: pick the lead (or none), then the Leads → Create PO form.
+  const [newPo, setNewPo] = useState(null);           // { pick: true } | { lead }
+  const leadOptions = useMemo(() => leadPickerOptions(leads), [leads]);
+  const meName = user?.displayName || user?.email || '';
+  const saveNewPo = async (data) => {
+    try {
+      const lead = newPo?.lead || null;
+      const newId = await addDocument('leadPOs', { ...data, leadId: lead ? lead.id : '', leadName: lead ? lead.name : (data.customerName || ''), standalone: !lead });
+      toast('PO created');
+      // Req 1 (4-Nov): the people whose recommendation it waits on hear of it.
+      const seen = new Set();
+      const tell = (u, title, message) => {
+        const key = u && (u.displayName || u.email);
+        if (!key || seen.has(key) || key === meName) return;
+        seen.add(key);
+        createNotification({ forUser: key, title, message, type: 'status_update', module: 'leadPOs', relatedId: newId });
+      };
+      const who = data.customerName || (lead && lead.name) || 'a customer';
+      const tlEmail = lead ? leadLeaderEmail(lead, users) : '';
+      const tl = tlEmail ? (users || []).find(u => String(u.email || '').toLowerCase() === tlEmail) : null;
+      if (tl) tell(tl, 'PO needs your recommendation', `${meName} created PO ${data.poNumber || ''} for "${who}" (${formatCurrency(data.agreedPrice || data.totalValue)}). As the Team Leader, please review and recommend it.`);
+      (users || []).filter(u => u.approved !== false && u.role !== 'super_admin' && can(u.role, ACTIONS.PO_RECOMMENDATION))
+        .forEach(u => tell(u, 'New PO awaiting recommendation', `PO ${data.poNumber || ''} for "${who}" (${formatCurrency(data.agreedPrice || data.totalValue)}) was created by ${meName} in Purchase Orders and awaits recommendation.`));
+      setNewPo(null);
+    } catch (e) { toast(e.message, 'er'); }
+  };
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [modal, setModal] = useState(null);
@@ -130,7 +161,7 @@ export default function PurchaseOrders() {
             <option value="lead">From Leads</option>
             <option value="standalone">Standalone</option>
           </select>
-          {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New PO</button>}
+          {canEdit && <button className="btn bp bsm" onClick={() => setNewPo({ pick: true })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New PO</button>}
         </div>
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={allPOs} fields={PO_DATE_FIELDS} /></div>
@@ -234,6 +265,27 @@ export default function PurchaseOrders() {
       {hasMore && <div style={{ textAlign: 'center', padding: 16 }}><button className="btn bsm bo" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>Show More ({filtered.length - visibleCount} remaining)</button></div>}
       </div></div>
       {modal && <POModal data={modal.data} id={modal.id} onSave={handleSave} onClose={() => setModal(null)} />}
+      {newPo?.pick && (
+        <Modal title="New Purchase Order" onClose={() => setNewPo(null)}>
+          <div className="mb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', marginTop: 0 }}>
+              Pick the customer from the Leads by name or phone — their details fill the form, and the PO sits on that lead as well. Or continue without a lead and type the customer in.
+            </p>
+            <div className="fg"><label>Customer (from Leads)</label>
+              <SearchSelect value="" options={[...leadOptions.keys()]} allowFree={false}
+                placeholder={leadOptions.size ? 'Search a lead by name or phone…' : 'No leads on file'} emptyText="No matching lead"
+                onChange={label => { const l = leadOptions.get(label); if (l) setNewPo({ lead: l }); }} />
+            </div>
+          </div>
+          <div className="mf">
+            <button className="btn bo" onClick={() => setNewPo(null)}>Cancel</button>
+            <button className="btn bo" onClick={() => setNewPo({ lead: null })} data-po="manual"><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Enter customer manually</button>
+          </div>
+        </Modal>
+      )}
+      {newPo && !newPo.pick && (
+        <LeadPOModal lead={newPo.lead || { id: '', name: '', phone: '', address: '' }} po={{}} poId={null} existingPOs={leadPOs} onSave={saveNewPo} onClose={() => setNewPo(null)} />
+      )}
     </>
   );
 }

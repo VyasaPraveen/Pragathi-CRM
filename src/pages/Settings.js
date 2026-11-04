@@ -57,6 +57,37 @@ export default function Settings() {
 
   // Global workflow-gating toggle (company-wide)
   const [gatingEnabled, setGatingEnabled] = useState(true);
+  // Req 13 (4-Nov): where the quotation, referral and PO numbers start.
+  const [numbering, setNumbering] = useState({ quotationStart: '', referenceStart: '', poStart: '' });
+  const [numberingSaving, setNumberingSaving] = useState(false);
+  const saveNumbering = async () => {
+    const vals = {};
+    for (const k of ['quotationStart', 'referenceStart', 'poStart']) {
+      const n = Number(numbering[k]);
+      if (numbering[k] !== '' && (!Number.isInteger(n) || n < 0)) { toast('Starting numbers must be whole numbers', 'er'); return; }
+      vals[k] = numbering[k] === '' ? 0 : n;
+    }
+    setNumberingSaving(true);
+    try {
+      await apiPatch('/settings', { numbering: vals });
+      window.dispatchEvent(new Event('pps:refresh'));
+      toast('Numbering saved — the next records continue from these numbers');
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setNumberingSaving(false);
+  };
+  // Req 7 (4-Nov): My Pipeline Value back to ₹0 for everyone, from today.
+  const [pipelineSaving, setPipelineSaving] = useState(false);
+  const resetPipeline = async () => {
+    if (!window.confirm('Set My Pipeline Value to ₹0 for every employee from today? Only leads recorded from today onwards will count towards it. Nothing else is changed.')) return;
+    setPipelineSaving(true);
+    try {
+      await apiPatch('/settings', { pipelineResetAt: todayStr() });
+      setCompanySettings(s => ({ ...s, pipelineResetAt: todayStr() }));
+      window.dispatchEvent(new Event('pps:refresh'));
+      toast('My Pipeline Value reset to ₹0 for all employees');
+    } catch (err) { toast('Failed: ' + err.message, 'er'); }
+    setPipelineSaving(false);
+  };
   const [gatingSaving, setGatingSaving] = useState(false);
   useEffect(() => {
     if (!isAdmin) return;
@@ -65,6 +96,8 @@ export default function Settings() {
         if (!s) return;
         setCompanySettings(s);
         setGatingEnabled(s.workflowGatingEnabled !== false);
+        const num = s.numbering || {};
+        setNumbering({ quotationStart: num.quotationStart ? String(num.quotationStart) : '', referenceStart: num.referenceStart ? String(num.referenceStart) : '', poStart: num.poStart ? String(num.poStart) : '' });
         setEbTariff(String(s.ebTariff || DEFAULT_TARIFF));
         const r = attendanceRulesFrom(s);
         setAttRules({ halfDayHours: String(r.halfDayHours), fullDayHours: String(r.fullDayHours) });
@@ -510,6 +543,42 @@ export default function Settings() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Numbering — the Owner only (Req 13, 4-Nov) */}
+      {role === 'super_admin' && (
+        <div className="card" style={{ marginBottom: 18 }} data-card="numbering">
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>pin</span>Numbering</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              Where each series starts. The next record takes the number after the starting number, or after the highest number already used, whichever is higher: a start of <strong>35</strong> gives 36, 37, 38… Leave a box blank to keep counting on from what is on file. On the forms, only the Owner can overtype a number.
+            </p>
+            <div style={{ display: 'flex', alignItems: 'flex-end', gap: 14, flexWrap: 'wrap' }}>
+              <div className="fg" style={{ marginBottom: 0 }}><label>Quotation Number starts with</label><input type="number" min="0" className="fi" style={{ width: 160 }} value={numbering.quotationStart} onChange={e => setNumbering(n => ({ ...n, quotationStart: e.target.value }))} placeholder="e.g. 35 → QTN-036" /></div>
+              <div className="fg" style={{ marginBottom: 0 }}><label>Reference Number starts with</label><input type="number" min="0" className="fi" style={{ width: 160 }} value={numbering.referenceStart} onChange={e => setNumbering(n => ({ ...n, referenceStart: e.target.value }))} placeholder="e.g. 9080 → 9081/dd.mm.yyyy" /></div>
+              <div className="fg" style={{ marginBottom: 0 }}><label>PO Number starts with</label><input type="number" min="0" className="fi" style={{ width: 160 }} value={numbering.poStart} onChange={e => setNumbering(n => ({ ...n, poStart: e.target.value }))} placeholder="e.g. 12 → PO-PPSPO-0013" /></div>
+              <button className="btn bp" onClick={saveNumbering} disabled={numberingSaving} style={{ padding: '8px 20px', fontSize: '.86rem' }}>
+                {numberingSaving ? <><span className="ssm"></span> Saving...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>save</span> Save Numbering</>}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* My Pipeline Value reset — the Owner only (Req 7, 4-Nov) */}
+      {role === 'super_admin' && (
+        <div className="card" style={{ marginBottom: 18 }} data-card="pipeline">
+          <div className="ch"><h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>savings</span>My Pipeline Value</h3></div>
+          <div className="cb">
+            <p style={{ fontSize: '.86rem', color: 'var(--muted)', lineHeight: 1.6, marginBottom: 12 }}>
+              The figure on each employee's My Reports &amp; Planning page counts the expected value of the open leads they recorded from the reset date onwards.
+              Currently counting from <strong>{companySettings.pipelineResetAt ? String(companySettings.pipelineResetAt).slice(0, 10) : '2026-11-04 (launch)'}</strong>. Resetting sets it to ₹0 for everyone from today; leads and their values are not touched.
+            </p>
+            <button className="btn bo" onClick={resetPipeline} disabled={pipelineSaving} style={{ padding: '8px 20px', fontSize: '.86rem', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
+              {pipelineSaving ? <><span className="ssm"></span> Saving...</> : <><span className="material-icons-round" style={{ fontSize: 16 }}>restart_alt</span> Reset to ₹0 for all employees</>}
+            </button>
           </div>
         </div>
       )}

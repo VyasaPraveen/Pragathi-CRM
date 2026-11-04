@@ -32,7 +32,11 @@ export default function BcoOperationsPanel({ lead }) {
   // up. Without it, a second save made before the first record came back
   // from the server created a second record for the same lead.
   const [local, setLocal] = useState(null);
-  const fromServer = (bcoOps || []).find(o => o.leadId === lead.id) || null;
+  // Req 19B (4-Nov): should a lead ever have two records (two tabs saving at
+  // once, before the server learnt to fold them together), the one with the
+  // most stages recorded is the one shown, never a near-empty twin.
+  const fromServer = (bcoOps || []).filter(o => o.leadId === lead.id)
+    .sort((a, b) => Object.keys(b.stages || {}).length - Object.keys(a.stages || {}).length || String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')))[0] || null;
   const ops = (local && (!fromServer || fromServer.id === local.id) && (!fromServer || (fromServer.updatedAt || '') <= (local.updatedAt || '')))
     ? local : fromServer;
   const mayEdit = canEditBco(role);
@@ -193,6 +197,13 @@ export default function BcoOperationsPanel({ lead }) {
                             onChange={e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; upload(f, (url, name) => setDraft(p => ({ ...p, slots: p.slots.map((x, j) => (j === i ? { ...x, url, name } : x)) }))); }} />
                         </label>
                         {s.url && <a href={s.url} target="_blank" rel="noreferrer" style={{ color: 'var(--pri)' }}>{s.name || 'open'}</a>}
+                        {/* Req 19A (4-Nov): a Delete beside the Replace. */}
+                        {s.url && (
+                          <button type="button" className="btn bsm bo" style={{ padding: '2px 7px', color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }} title="Delete this document" disabled={busy}
+                            onClick={() => { if (window.confirm(`Delete the ${s.label} document? You can upload another one.`)) setDraft(p => ({ ...p, slots: p.slots.map((x, j) => (j === i ? { ...x, url: '', name: '' } : x)) })); }}>
+                            <span className="material-icons-round" style={{ fontSize: 14 }}>delete</span> Delete
+                          </button>
+                        )}
                         {s.url
                           ? <span style={{ color: '#1e8449', fontSize: '.72rem' }}>uploaded</span>
                           : <span style={{ color: 'var(--muted)', fontSize: '.72rem' }}>not uploaded</span>}

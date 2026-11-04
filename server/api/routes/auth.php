@@ -170,7 +170,7 @@ function handle_auth(array $seg, string $method): void {
     require_auth();
     // `teamLeader` travels with the directory so a Team Leader's own screen can
     // show the members assigned to them. No phone, permissions or profile data.
-    $rows = db()->query('SELECT id, email, display_name, role, designation, approved, data FROM users WHERE approved = 1')->fetchAll();
+    $rows = db()->query('SELECT id, email, display_name, role, designation, approved, phone, data FROM users WHERE approved = 1')->fetchAll();
     $out = [];
     foreach ($rows as $r) {
       $d = $r['data'] ? json_decode($r['data'], true) : [];
@@ -182,6 +182,9 @@ function handle_auth(array $seg, string $method): void {
         'role' => $r['role'], 'designation' => $r['designation'], 'approved' => (bool)$r['approved'],
         'teamLeader' => !empty($d['teamLeader']) ? $d['teamLeader'] : '',
         'status' => $status, 'teamName' => (string)($d['teamName'] ?? ''),
+        // Req 16A (4-Nov): the work phone, so the quotation can print the
+        // assigned executive's mobile from Total Users.
+        'phone' => (string)($r['phone'] ?? ''),
       ];
     }
     json_out(['users' => $out]);

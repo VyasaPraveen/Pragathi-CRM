@@ -6,6 +6,8 @@ import { addDocument, updateDocument, deleteDocument, createNotification, notify
 import { formatDate, formatDateTime, safeStr, priorityClass, hasAccess, todayStr } from '../services/helpers';
 import { StatCard, StatusBadge, Modal, EmptyState , DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { assignableNames } from '../services/people';
+import { hasModule } from '../services/permissions';
 
 const taskStatuses = ['Pending', 'In Progress', 'Completed', 'Overdue'];
 const taskPriorities = ['High', 'Medium', 'Low'];
@@ -16,8 +18,12 @@ const PAGE_SIZE = 20;
 const TASK_DATE_FIELDS = ['assignedDate', 'dueDate', 'createdAt'];
 
 export default function EmployeeTasks() {
-  const { employeeTasks, team, users } = useData();
+  const { employeeTasks, users } = useData();
   const { role, user } = useAuth();
+  // Req 4 (4-Nov): the member list is the current accounts (the same names as
+  // Leads → Assign To), not the old team directory. A name an existing task
+  // carries that is no longer an account stays selectable.
+  const filterNames = [...new Set([...assignableNames(users), ...employeeTasks.map(t => t.assignedTo).filter(Boolean)])];
   const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [filterStatus, setFilterStatus] = useState('all');
@@ -100,6 +106,8 @@ export default function EmployeeTasks() {
   };
 
   const canEdit = hasAccess(role, 'coordinator');
+  // Req 20 (4-Nov): creating a task is its own switch in Permission Management.
+  const canCreate = canEdit && hasModule(user, role, 'new_task');
 
   return (
     <>
@@ -118,9 +126,9 @@ export default function EmployeeTasks() {
           </div>
           <select className="fi" style={{ width: 'auto', padding: '7px 12px', fontSize: '.82rem' }} value={filterAssignee} onChange={e => setFilterAssignee(e.target.value)}>
             <option value="all">All Members</option>
-            {team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}
+            {filterNames.map(n => <option key={n} value={n}>{n}</option>)}
           </select>
-          {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New Task</button>}
+          {canCreate && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> New Task</button>}
         </div>
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={employeeTasks} fields={TASK_DATE_FIELDS} /></div>
@@ -155,7 +163,9 @@ export default function EmployeeTasks() {
 }
 
 function TaskModal({ data, id, onSave, onClose }) {
-  const { team } = useData();
+  const { users } = useData();
+  // The current accounts, with whoever this task already names kept on the list.
+  const names = assignableNames(users, data.assignedTo);
   const [f, setF] = useState({
     title: data.title || '', description: data.description || '',
     assignedTo: data.assignedTo || '', assignedDate: data.assignedDate || '',
@@ -174,7 +184,7 @@ function TaskModal({ data, id, onSave, onClose }) {
         <div className="mb">
           <div className="fg"><label>Title *</label><input className="fi" value={f.title} onChange={e => set('title', e.target.value)} required /></div>
           <div className="fg"><label>Description</label><textarea className="fi" value={f.description} onChange={e => set('description', e.target.value)} rows="3" /></div>
-          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={f.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{team.filter(t => t.status === 'Active').map(t => <option key={t.id} value={t.name}>{t.name}</option>)}</select></div><div className="fg"><label>Assigned Date</label><input type="date" className="fi" value={f.assignedDate} onChange={e => set('assignedDate', e.target.value)} /></div></div>
+          <div className="fr"><div className="fg"><label>Assigned To</label><select className="fi" value={f.assignedTo} onChange={e => set('assignedTo', e.target.value)}><option value="">-- Unassigned --</option>{names.map(n => <option key={n} value={n}>{n}</option>)}</select></div><div className="fg"><label>Assigned Date</label><input type="date" className="fi" value={f.assignedDate} onChange={e => set('assignedDate', e.target.value)} /></div></div>
           <div className="fr"><div className="fg"><label>Due Date *</label><input type="date" className="fi" value={f.dueDate} onChange={e => set('dueDate', e.target.value)} required /></div><div className="fg"><label>Related Customer</label><input className="fi" value={f.relatedCustomer} onChange={e => set('relatedCustomer', e.target.value)} placeholder="Optional" /></div></div>
           <div className="fr3"><div className="fg"><label>Priority</label><select className="fi" value={f.priority} onChange={e => set('priority', e.target.value)}>{taskPriorities.map(p => <option key={p}>{p}</option>)}</select></div><div className="fg"><label>Category</label><select className="fi" value={f.category} onChange={e => set('category', e.target.value)}>{taskCategories.map(c => <option key={c}>{c}</option>)}</select></div><div className="fg"><label>Status</label><select className="fi" value={f.status} onChange={e => set('status', e.target.value)}>{taskStatuses.map(s => <option key={s}>{s}</option>)}</select></div></div>
           <div className="fg"><label>Remarks</label><textarea className="fi" value={f.remarks} onChange={e => set('remarks', e.target.value)} rows="2" placeholder="Admin/Manager remarks" /></div>

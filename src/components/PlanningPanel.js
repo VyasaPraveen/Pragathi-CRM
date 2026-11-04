@@ -8,7 +8,7 @@ import { DateInput } from './SharedUI';
 import {
   SLOT_STATUS, STATUS_LABEL, ALL_SLOTS, allSlotRows, planSummary, writeSlots,
   validateSlot, postponeSlot, carryForward, firstFreeSlot, slotLabel, readSlot,
-  submissionState, canEditPlan, submissionIssue,
+  submissionState, canEditPlan, submissionIssue, planState, planIssue, PLAN_REMINDER,
 } from '../services/planning';
 
 // An unsaved draft survives a refresh or the app closing (Req 7.5).
@@ -146,22 +146,31 @@ function PostponeModal({ row, minDate, onCancel, onConfirm }) {
 /* The day's plan: enter the work, report on it, save it as a draft, then
    report it. Used by the Planning screen and by My Reports & Planning, so the
    two can never drift apart. */
-export default function PlanEditor({ date, employeeEmail, employeeName, compact }) {
+// `lockAfterSend` (the Planning screen, Req 5 4-Nov): once the plan is sent
+// the editor is read-only; without it (My Reports & Planning) an Edit button
+// reopens a sent plan for the day's reporting.
+export default function PlanEditor({ date, employeeEmail, employeeName, compact, lockAfterSend }) {
   const { tracking } = useData();
   const { user, role } = useAuth();
   const { toast } = useToast();
 
   const myEmail = user?.email || '';
+  const meName = user?.displayName || myEmail;
   const isSelf = String(employeeEmail || '').toLowerCase() === String(myEmail).toLowerCase();
 
   const doc = tracking.find(t => t.employeeEmail === employeeEmail && t.date === date);
   const state = submissionState(doc);
+  const plan = planState(doc);
   // Its author edits it until it is reported; a manager may unlock it after.
-  const editable = canEditPlan(doc, isSelf);
+  // A sent plan is locked on the Planning screen, and opened with Edit elsewhere.
+  const [editingSent, setEditingSent] = useState(false);
+  const sentLock = plan.sent && (lockAfterSend || !editingSent);
+  const editable = canEditPlan(doc, isSelf) && !sentLock;
   const mayUnlock = !!doc && !!doc.submitted && hasAccess(role, 'manager');
   const [slots, setSlots] = useState({});
   const [saving, setSaving] = useState(false);
   const [reporting, setReporting] = useState(false);
+  const [sending, setSending] = useState(false);
   const [postponing, setPostponing] = useState(null);
   const [dirty, setDirty] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
@@ -179,6 +188,7 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact 
       setSlots(d?.slots || {}); setDirty(false); setRestored(false);
     }
     setSaveFailed(false);
+    setEditingSent(false);
   }, [date, employeeEmail, doc?.id, doc?.submitted]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rows = useMemo(() => allSlotRows(slots), [slots]);
@@ -238,6 +248,23 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact 
     finally { setReporting(false); }
   };
 
+  // Send Plan (Req 5, 4-Nov): the plan is saved and marked sent, with when and
+  // by whom. The slots stay as planned; the day's reporting follows later.
+  const sendPlan = async () => {
+    if (!editable) return;
+    const issue = planIssue(slots);
+    if (issue) { toast(issue, 'er'); return; }
+    if (!window.confirm(`Send the plan for ${formatDate(date)}? It is then read-only on the Planning screen; you can still update and report the day from My Reports & Planning.`)) return;
+    setSending(true);
+    try {
+      const id = await save(undefined, true);
+      if (!id) return;
+      await updateDocument('tracking', id, { planSent: true, planSentAt: new Date().toISOString(), planSentBy: myEmail, planSentByName: meName });
+      toast(`Plan for ${formatDate(date)} sent`);
+    } catch (e) { toast('Not sent: ' + e.message, 'er'); }
+    finally { setSending(false); }
+  };
+
   // A manager unlocks a submitted report for a correction. The original stays
   // in the document's history.
   const unlock = async () => {
@@ -294,10 +321,17 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact 
         ) : (
           <span className={`st ${state.label === 'Draft' ? 'st-o' : 'st-x'}`} style={{ padding: '3px 10px' }}>{state.label}{state.unlocked ? ' · unlocked for correction' : ''}</span>
         )}
+        {plan.sent && (
+          <span className="st st-b" style={{ padding: '3px 10px' }} data-plan="sent"><span className="material-icons-round" style={{ fontSize: 14 }}>send</span> Plan sent {plan.at ? formatDateTime(plan.at) : ''}{plan.by ? ' · ' + plan.by : ''}</span>
+        )}
         {dirty && editable && <span style={{ color: saveFailed ? '#c0392b' : '#d68910', fontWeight: 600 }}>{saveFailed ? 'Not saved — try again' : restored ? 'Unsaved changes restored from this device' : 'Unsaved changes'}</span>}
         {!dirty && !state.submitted && doc && editable && <span style={{ color: 'var(--muted)' }}>All changes saved</span>}
         {state.submitted && isSelf && <span style={{ color: 'var(--muted)' }}>Locked — ask a manager to unlock it for a correction.</span>}
+        {sentLock && !state.submitted && isSelf && <span style={{ color: 'var(--muted)' }}>{lockAfterSend ? 'Sent — update and report this day from My Reports & Planning.' : 'Sent — press Edit to update or report it.'}</span>}
         <span style={{ flex: 1 }} />
+        {sentLock && !lockAfterSend && !state.submitted && isSelf && (
+          <button className="btn bsm bo" onClick={() => setEditingSent(true)} title="Open the sent plan to update it or report the day" data-plan="edit"><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span> Edit</button>
+        )}
         {mayUnlock && <button className="btn bsm bo" onClick={unlock} title="Unlock this report for a correction; the submitted version is kept"><span className="material-icons-round" style={{ fontSize: 16 }}>lock_open</span> Unlock</button>}
       </div>
 
@@ -311,11 +345,16 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact 
         <span style={{ flex: 1 }} />
         {editable && (
           <>
-            <button className="btn bo bsm" onClick={() => save()} disabled={saving || reporting || !dirty} title="Keep what is entered as a draft">
+            <button className="btn bo bsm" onClick={() => save()} disabled={saving || reporting || sending || !dirty} title="Keep what is entered as a draft">
               <span className="material-icons-round" style={{ fontSize: 18 }}>save</span> {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
             </button>
-            <button className="btn bp bsm" onClick={report} disabled={saving || reporting} title="Submit the day's report — it is then locked">
-              <span className="material-icons-round" style={{ fontSize: 18 }}>send</span> {reporting ? 'Reporting…' : 'Report'}
+            {!plan.sent && (
+              <button className="btn bp bsm" onClick={sendPlan} disabled={saving || reporting || sending} title={`Send the day's plan (due by ${PLAN_REMINDER.deadline})`} data-plan="send">
+                <span className="material-icons-round" style={{ fontSize: 18 }}>outgoing_mail</span> {sending ? 'Sending…' : 'Send Plan'}
+              </button>
+            )}
+            <button className="btn bp bsm" onClick={report} disabled={saving || reporting || sending} title="Submit the day's report — it is then locked" style={plan.sent ? {} : { background: '#1e8449' }}>
+              <span className="material-icons-round" style={{ fontSize: 18 }}>task_alt</span> {reporting ? 'Reporting…' : 'Report'}
             </button>
           </>
         )}

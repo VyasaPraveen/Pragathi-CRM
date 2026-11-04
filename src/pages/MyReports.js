@@ -2,11 +2,12 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
-import { formatCurrency, formatDate, toNumber, todayStr, thisMonthStr } from '../services/helpers';
+import { formatCurrency, formatDate, todayStr, thisMonthStr } from '../services/helpers';
 import { StatCard, StatusBadge, EmptyState } from '../components/SharedUI';
 import { DateInput } from '../components/SharedUI';
 import PlanEditor from '../components/PlanningPanel';
 import { planSummary, planRows } from '../services/planning';
+import { pipelineValue, pipelineResetDate } from '../services/pipeline';
 
 function downloadCSV(filename, headers, rows) {
   const esc = (v) => { const s = v == null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
@@ -25,7 +26,7 @@ const thisMonth = () => thisMonthStr();
 // Personal, per-member reports + planning — safe for all staff (no company
 // financials or team PII; each member sees only their own work). (req #10)
 export default function MyReports() {
-  const { leads, attendance, leaveRequests, tracking } = useData();
+  const { leads, attendance, leaveRequests, tracking, settings } = useData();
   const { user } = useAuth();
   const navigate = useNavigate();
 
@@ -50,7 +51,10 @@ export default function MyReports() {
     [leaveRequests, myEmail, myName]);
 
   const converted = myLeads.filter(l => l.status === 'Converted').length;
-  const pipelineValue = myLeads.reduce((s, l) => s + toNumber(l.expectedValue), 0);
+  // Req 7 (4-Nov): reset to ₹0 at launch — only leads recorded from the reset
+  // date count, so the figure is built up again from the work done since.
+  const pipeline = pipelineValue(myLeads, settings);
+  const pipelineSince = pipelineResetDate(settings);
   const attendanceDaysThisMonth = new Set(myAttendance.filter(a => (a.type === 'Check In' || (a.type === 'Manual' && a.status !== 'Absent')) && (a.date || '').startsWith(thisMonth())).map(a => a.date)).size;
   const leaveCounted = myLeave.filter(l => l.status === 'Approved').reduce((s, l) => s + (Number(l.countedDays) || 0), 0);
   // The plan being reported on — today by default, any day the user picks.
@@ -89,7 +93,7 @@ export default function MyReports() {
       <div className="sg">
         <StatCard color="bl" icon="leaderboard" value={myLeads.length} label="My Leads" />
         <StatCard color="gr" icon="verified" value={converted} label="Converted" />
-        <StatCard color="or" icon="savings" value={formatCurrency(pipelineValue)} label="My Pipeline Value" />
+        <StatCard color="or" icon="savings" value={formatCurrency(pipeline)} label={`My Pipeline Value (from ${formatDate(pipelineSince)})`} />
         <StatCard color="pu" icon="how_to_reg" value={attendanceDaysThisMonth} label="Attendance Days (Month)" />
       </div>
       <div className="sg" style={{ marginTop: 4 }}>

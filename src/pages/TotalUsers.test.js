@@ -20,6 +20,9 @@ const mockApi = {
 jest.mock('../services/api', () => mockApi);
 jest.mock('../context/AuthContext', () => ({ useAuth: () => mockAuth }));
 jest.mock('../context/ToastContext', () => ({ useToast: () => ({ toast: jest.fn() }) }));
+// The Team-section profiles (Req 16B, 4-Nov) come from the data context.
+jest.mock('../context/DataContext', () => ({ useData: () => ({ team: [] }) }));
+jest.mock('../services/firestore', () => ({ addDocument: async () => 'team1', updateDocument: async () => {} }));
 jest.mock('react-router-dom', () => ({ useNavigate: () => jest.fn() }), { virtual: true });
 jest.mock('../components/PasswordManager', () => ({ __esModule: true, default: () => null, generatePassword: () => 'PpsTemp123' }));
 

@@ -14,6 +14,8 @@ import {
   receivablePOs, poReceiptProgress,
 } from '../services/stock';
 import { submitStockReceipt, submitStockAdjustment, submitStockReturn, reviewStockEntry, approveStockEntry, newClientRef } from '../services/stockApi';
+import { hasModule } from '../services/permissions';
+import { downloadCSV, canExportData } from '../services/csv';
 
 const MATERIAL_DATE_FIELDS = ['lastStockChangeAt', 'updatedAt', 'createdAt'];
 
@@ -38,7 +40,24 @@ export default function Materials() {
   const [search, setSearch] = useState('');
   const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
 
-  const canAdd = hasAccess(role, 'manager');       // Add / edit a material's name, unit, category — as before
+  // Add / edit a material's name, unit, category — a manager's job, as before;
+  // Req 20 (4-Nov) adds the Admin's per-person "Add Materials" switch on top.
+  const canAdd = hasAccess(role, 'manager') && hasModule(user, role, 'add_materials');
+  // Req 2 (4-Nov): the Materials and Stock History exports, for the Owner,
+  // Operation Manager, Management and Admin.
+  const canExport = canExportData(role);
+  const exportMaterials = () => {
+    const headers = ['Material', 'Category', 'Stock', 'Dispatched', 'Installed', 'Balance', 'Pending Receipts', 'Pending Corrections', 'Pending Returns', 'Unit', 'Status', 'Opening Stock', 'Total Received', 'Total Returned', 'Last Movement', 'Last Movement By'];
+    const rows = shown.map(m => { const s = summaries[m.id] || materialSummary(m, []); return [m.name, m.category || '', m.stock, m.dispatched, m.installed, m.balance, s.pendingReceiptQty || 0, s.pendingAdjustmentCount || 0, s.pendingReturnQty || 0, m.unit, stockStatusOf(m.balance), s.opening, s.received, s.returned, m.lastStockChangeAt ? formatDateTime(m.lastStockChangeAt) : '', m.lastStockChangeBy || '']; });
+    downloadCSV('PPS_Materials_' + todayStr() + '.csv', headers, rows);
+  };
+  const exportHistory = () => {
+    const txns = [...applyDateFilter(stockTransactions, dateFilter, STOCK_DATE_FIELDS)].sort((a, b) => String(b.submittedAt || b.createdAt || '').localeCompare(String(a.submittedAt || a.createdAt || '')));
+    const headers = ['Date', 'Logged At', 'Material', 'Type', 'Quantity', 'Unit', 'Balance Before', 'Balance After', 'Status', 'Reference', 'PO Number', 'PO Item', 'Customer / Destination', 'Supplier', 'Entered By', 'Reviewed By', 'Approved By', 'Rejected By', 'Remarks / Reason', 'Rejection Reason'];
+    const when = (t) => t.type === STOCK_TYPES.RECEIPT ? t.receiptDate : t.type === STOCK_TYPES.DISPATCH ? t.dispatchDate : t.type === STOCK_TYPES.RETURN ? t.returnDate : (t.submittedAt || '').slice(0, 10);
+    const rows = txns.map(t => [formatDate(when(t)), t.submittedAt ? formatDateTime(t.submittedAt) : '', t.materialName, stockTypeLabel(t.type), t.type === STOCK_TYPES.DISPATCH ? -toNumber(t.quantity) : toNumber(t.quantity), t.unit || '', t.appliedAt ? t.previousBalance : '', t.appliedAt ? t.newBalance : '', t.status, t.reference, t.poNumber || '', t.poItemName || '', t.customerName || t.destination || '', t.supplier || '', t.submittedBy || t.confirmedBy || '', t.reviewedBy || '', t.approvedBy || '', t.rejectedBy || '', t.type === STOCK_TYPES.ADJUSTMENT ? (t.reason || '') : (t.remarks || ''), t.rejectReason || '']);
+    downloadCSV('PPS_Stock_History_' + todayStr() + '.csv', headers, rows);
+  };
   const mayEnter = canEnterStock(role);
   const mayReview = canReviewStock(role);
   const mayApprove = canApproveStock(role);
@@ -101,6 +120,8 @@ export default function Materials() {
           {mayEnter && <button className="btn bo bsm" onClick={() => setModal({ kind: 'adjustment' })} title={mayApprove ? 'Correct a stock figure, with the reason on record' : 'Report a physical count that differs from the book figure'}><span className="material-icons-round" style={{ fontSize: 18 }}>rule</span> {mayApprove ? 'Correct Stock' : 'Report Discrepancy'}</button>}
           {canRecordReturn(role) && <button className="btn bo bsm" onClick={() => setModal({ kind: 'return' })} title="Record material that physically came back — added to stock once the Owner approves it"><span className="material-icons-round" style={{ fontSize: 18 }}>assignment_return</span> Record Return</button>}
           {canAdd && <button className="btn bo bsm" onClick={() => setModal({ kind: 'material', data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Material</button>}
+          {canExport && tab !== 'ledger' && <button className="btn bo bsm" onClick={exportMaterials} title="Download the materials shown as a CSV (opens in Excel)" data-export="materials"><span className="material-icons-round" style={{ fontSize: 18 }}>download</span> Export Materials</button>}
+          {canExport && tab === 'ledger' && <button className="btn bo bsm" onClick={exportHistory} title="Download the stock history shown as a CSV (opens in Excel)" data-export="history"><span className="material-icons-round" style={{ fontSize: 18 }}>download</span> Export History</button>}
         </div>
       </div>
 

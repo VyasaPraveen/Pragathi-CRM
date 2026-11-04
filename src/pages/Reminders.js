@@ -5,6 +5,7 @@ import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument } from '../services/firestore';
 import { formatDate, sendWhatsApp, safeStr, hasAccess, todayStr } from '../services/helpers';
 import { StatusBadge, Modal, EmptyState } from '../components/SharedUI';
+import { hasModule } from '../services/permissions';
 
 const types = ['Payment Reminder', 'Service Due', 'Follow-up', 'Warranty', 'Other'];
 const statusOptions = ['Pending', 'Sent', 'Done'];
@@ -13,7 +14,9 @@ const PAGE_SIZE = 20;
 // Q4 fix: added full CRUD (was read-only)
 export default function Reminders() {
   const { reminders } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
+  // Req 20 (4-Nov): adding a reminder is its own switch in Permission Management.
+  const canAdd = hasModule(user, role, 'add_reminder');
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState('');
@@ -62,7 +65,7 @@ export default function Reminders() {
           <div className="chips">
             {['all', ...statusOptions].map(s => <span key={s} className={`fc ${filterStatus === s ? 'act' : ''}`} onClick={() => setFilterStatus(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
-          <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Reminder</button>
+          {canAdd && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Reminder</button>}
         </div>
       </div>
       <div className="card"><div className="cb" style={{ padding: 0 }}><div className="tw tw-m"><table><thead><tr><th>Type</th><th>Customer</th><th>Phone</th><th>Date</th><th>Message</th><th>Status</th><th>Actions</th></tr></thead><tbody>

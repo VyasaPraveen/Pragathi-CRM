@@ -8,7 +8,7 @@ import { StatusBadge, Modal, EmptyState, DateInput , DateFilter } from '../compo
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
 import {
   can, ACTIONS, PR_STATUS, PR_STAGES, nextPrStage, canTakePrStage, isOwnRequest, prProgress, leaderOf, canSeePaymentRequest,
-  PR_CATEGORIES, PR_DIRECT_PAY_LIMIT, canDirectPayPr, ownerUsers,
+  PR_CATEGORIES, PR_DIRECT_PAY_LIMIT, canDirectPayPr, ownerUsers, PR_VIEWER_ROLES, normalizeRole, teamMembersOf,
 } from '../services/permissions';
 
 // Payment Request — the step-by-step approval & payment workflow:
@@ -116,9 +116,15 @@ export default function PaymentRequests() {
   }
   filtered = applyDateFilter(filtered, dateFilter, PR_DATE_FIELDS);
 
+  // Req 15 (4-Nov): the four cards count only the person's own requests for a
+  // technician, an executive or any regular team member. The authorities who
+  // see every request (Owner, Operation Manager, Management, Admin, the
+  // Accountant) and a Team Leader with members keep the wider view.
+  const ownOnly = !(normalizeRole(role) === 'super_admin' || PR_VIEWER_ROLES.includes(normalizeRole(role)) || teamMembersOf(users, user?.email).length > 0);
+  const summaryRequests = useMemo(() => (ownOnly ? visibleRequests.filter(pr => isOwnRequest(pr, user)) : visibleRequests), [ownOnly, visibleRequests, user]);
   const summary = useMemo(() => {
     const s = { total: 0, pending: 0, approved: 0, paid: 0 };
-    visibleRequests.forEach(x => {
+    summaryRequests.forEach(x => {
       const amt = toNumber(x.amount);
       s.total += amt;
       if (x.status === PR_STATUS.REJECTED) return;
@@ -127,7 +133,7 @@ export default function PaymentRequests() {
       else s.pending += amt;
     });
     return s;
-  }, [visibleRequests]);
+  }, [summaryRequests]);
 
   const displayed = filtered.slice(0, visibleCount);
   const hasMore = filtered.length > visibleCount;
@@ -153,14 +159,7 @@ export default function PaymentRequests() {
         // Everyone concerned is told as soon as it is raised: the requester's own
         // Team Leader, plus Operation Manager, Management, Admin and the Owner.
         notifyConcerned(full);
-        if (needsRecommendation && myLeader) {
-          createNotification({
-            forUser: myLeader.displayName || myLeader.email,
-            title: 'Payment Request needs your recommendation',
-            message: `${me} raised "${cleaned.purpose || ''}" (${formatCurrency(cleaned.amount)}) — you are their Team Leader.`,
-            type: 'status_update', module: 'paymentRequests', relatedId: newId,
-          });
-        }
+        // (Req 1, 4-Nov: the Team Leader used to be told twice here; once is enough.)
         if (needsRecommendation && myLeader) {
           createNotification({
             forUser: myLeader.displayName || myLeader.email,

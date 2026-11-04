@@ -288,9 +288,14 @@ const TECHNICIAN_DEFAULT_MODULES = ['dashboard','tasks','my_reports','installati
 // payment requests. Mirrors TEAM_LEADER_DEFAULT_MODULES in permissions.js.
 const TEAM_LEADER_EXTRA_MODULES = ['team','team_members','team_attendance','team_tracking','team_tasks','team_leave','payment_requests'];
 
+// The "add" switches (Req 20, 4-Nov) follow their section until an Admin sets
+// them. Mirrors ADD_PERMISSION_PARENT in src/services/permissions.js.
+const ADD_PERMISSION_PARENT = ['add_materials' => 'materials', 'add_project' => 'ongoing_work', 'new_task' => 'tasks', 'add_reminder' => 'reminders'];
+
 function default_module_allowed(?string $role, string $key): bool {
   $r = normalize_role($role);
   if ($key === 'new_po') return can($r, 'po_record');
+  if (isset(ADD_PERMISSION_PARENT[$key])) return default_module_allowed($r, ADD_PERMISSION_PARENT[$key]);
   // Adding / editing installations (R6.3, 8-Oct): manager level by default,
   // granted to an individual by an Admin. Mirrors defaultModuleAllowed() in
   // permissions.js.

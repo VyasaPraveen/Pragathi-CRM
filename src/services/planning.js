@@ -223,3 +223,75 @@ export const REPORT_REMINDER = {
   hour: 17,   // 5 PM, local (IST) — every day but Sunday
   message: 'Your daily report is due. You have 1 hour remaining to submit your report.',
 };
+
+// ── Sending the plan (Req 5 / 6 / 8, 4-Nov) ──────────────────────────────────
+// The morning plan is SENT before the day's work (planSent); the evening
+// report is SUBMITTED after it (submitted, above). Both live on the same
+// document, so the plan flows into the report as it always did. A sent plan is
+// read-only on the Planning screen; My Reports & Planning keeps an Edit button
+// so a correction never needs a manager.
+
+export const PLAN_REMINDER = {
+  hour: 17, minute: 30,          // 5:30 PM IST, Monday to Saturday
+  deadline: '6:30 PM',
+  message: 'Your daily planning is pending. Please submit your plan by 6:30 PM.',
+};
+
+export function planState(doc) {
+  if (!doc) return { sent: false, label: 'Not started', at: '', by: '' };
+  if (doc.planSent) return { sent: true, label: 'Plan sent', at: doc.planSentAt || '', by: doc.planSentByName || doc.planSentBy || '' };
+  return { sent: false, label: planRows(doc.slots).length ? 'Draft' : 'Not started', at: doc.updatedAt || '', by: '' };
+}
+
+// What a plan needs before it can be sent: at least one slot of planned work.
+export function planIssue(slots) {
+  return planRows(slots).length ? '' : 'Enter the planned work in at least one slot before sending the plan.';
+}
+
+// Only plans actually sent, for the date or month asked for.
+export function sentPlans(docs, { date = '', month = '' } = {}) {
+  return (docs || [])
+    .filter(d => d && d.planSent === true)
+    .filter(d => (date ? d.date === date : true) && (month ? String(d.date || '').startsWith(month) : true))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.employeeName || '').localeCompare(String(b.employeeName || '')));
+}
+
+// Everyone's standing for one date: plan sent (when), draft, or nothing.
+export function planRoll(docs, people, date) {
+  return (people || []).map(p => {
+    const email = String(p.email || '').toLowerCase();
+    const doc = (docs || []).find(d => d && d.date === date && String(d.employeeEmail || '').toLowerCase() === email) || null;
+    const st = planState(doc);
+    return { email, name: p.displayName || p.email, designation: p.designation || '', doc, ...st, slots: planRows(doc && doc.slots).length };
+  }).sort((a, b) => (a.sent === b.sent ? a.name.localeCompare(b.name) : a.sent ? 1 : -1));
+}
+
+// A sent plan as flat rows, one per slot, for the CSV and the printout.
+export function planExportRows(doc) {
+  return planRows(doc && doc.slots).map(r => ({
+    employee: (doc && doc.employeeName) || '', email: (doc && doc.employeeEmail) || '', date: (doc && doc.date) || '',
+    sentAt: (doc && doc.planSentAt) || '', slot: r.label, text: r.text, status: STATUS_LABEL[r.status] || r.status,
+  }));
+}
+
+// Who sees whose planning and reports (Req 8): the Owner, Management, Admin
+// and the Operation Manager see everyone; a Team Leader their own members
+// (Total Users → the team assignments) and themselves; everyone else only
+// themselves. Mirrors nothing on the server: the records are read by all, the
+// screens decide what to show, as the rest of the planning section does.
+export const PLANNING_AUTHORITY_ROLES = ['super_admin', 'management', 'admin', 'operation_manager'];
+export const seesAllPlanning = (role) => PLANNING_AUTHORITY_ROLES.includes(role);
+
+export function planningScope(users, user, role) {
+  const list = (users || []).filter(u => u && u.approved !== false && String(u.status || 'active') !== 'deactivated');
+  const me = String(user?.email || '').toLowerCase();
+  if (seesAllPlanning(role)) return { all: true, people: list };
+  const members = list.filter(u => String(u.teamLeader || '').toLowerCase() === me && me);
+  const self = list.find(u => String(u.email || '').toLowerCase() === me) || (user ? { email: user.email, displayName: user.displayName || user.email, designation: user.designation || '' } : null);
+  return { all: false, people: [...(self ? [self] : []), ...members] };
+}
+
+export function canViewPlanOf(email, users, user, role) {
+  const e = String(email || '').toLowerCase();
+  return planningScope(users, user, role).people.some(p => String(p.email || '').toLowerCase() === e);
+}

@@ -45,13 +45,33 @@ export const DEFAULT_LOAN_RATE = 0.07;         // bank loan @7%
 
 // ── Numbering & revisions ───────────────────────────────────────────────────
 // One quotation number per lead. A revision keeps the number and bumps R1→R3.
-export function nextQuotationNumber(quotations) {
+// Req 13 (4-Nov): the Owner may set where the numbering starts (Settings →
+// Numbering). The next number is one more than the highest used so far or the
+// Owner's starting number, whichever is higher — a start of 35 gives 36, 37…
+export function nextQuotationNumber(quotations, startFrom = 0) {
   const nums = (quotations || []).map(q => {
     const m = /QTN-(\d+)/.exec(String(q.quotationNumber || ''));
     return m ? parseInt(m[1], 10) : 0;
   });
-  const max = nums.length ? Math.max(...nums) : 0;
+  const max = Math.max(nums.length ? Math.max(...nums) : 0, toNumber(startFrom));
   return 'QTN-' + String(max + 1).padStart(3, '0');
+}
+
+// The next PPS referral serial: one more than the highest on file, or than the
+// Owner's starting number. Before 4-Nov this was 9072 + the count of quotations.
+export function nextPpsRefSeq(quotations, startFrom = 0) {
+  const nums = (quotations || []).map(q => {
+    const m = /^(\d+)\s*\//.exec(String(q.ppsRef || '').trim());
+    return m ? parseInt(m[1], 10) : 0;
+  });
+  const max = Math.max(nums.length ? Math.max(...nums) : 0, toNumber(startFrom));
+  return max > 0 ? max + 1 : 9072 + (quotations || []).length + 1;
+}
+
+// The Owner's starting numbers, as saved in company settings.
+export function numberingSettings(settings) {
+  const n = (settings && settings.numbering) || {};
+  return { quotationStart: toNumber(n.quotationStart), referenceStart: toNumber(n.referenceStart), poStart: toNumber(n.poStart) };
 }
 
 // The reference number as it is printed: "QTN-001" or "QTN-001 – R2".

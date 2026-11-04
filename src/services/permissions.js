@@ -496,9 +496,14 @@ export const PERMISSION_MODULES = [
   { key: 'tasks', label: 'Tasks', icon: 'task_alt', group: 'Main' },
   { key: 'my_reports', label: 'My Reports & Planning', icon: 'insights', group: 'Main' },
 
+  // Req 20 (4-Nov): viewing a section and adding to it are separate switches.
+  { key: 'new_task', label: 'New Task (create a task)', icon: 'add_task', group: 'Main', action: true },
+
   { key: 'installations', label: 'Installations', icon: 'solar_power', group: 'Operations' },
   { key: 'ongoing_work', label: 'Ongoing Work', icon: 'construction', group: 'Operations' },
+  { key: 'add_project', label: 'Yard Project / Add Project (in Ongoing Work)', icon: 'add_business', group: 'Operations', action: true },
   { key: 'materials', label: 'Materials', icon: 'inventory_2', group: 'Operations' },
+  { key: 'add_materials', label: 'Add Materials', icon: 'add_box', group: 'Operations', action: true },
   { key: 'purchase_orders', label: 'Purchase Orders', icon: 'receipt_long', group: 'Operations' },
   { key: 'new_po', label: 'New PO (create a PO)', icon: 'post_add', group: 'Operations', action: true },
   { key: 'installations_manage', label: 'Add / edit installations', icon: 'edit_note', group: 'Operations', action: true },
@@ -519,6 +524,7 @@ export const PERMISSION_MODULES = [
   { key: 'tracking', label: 'Planning', icon: 'event_note', group: 'People' },
   { key: 'leave', label: 'Leave', icon: 'event_available', group: 'People' },
   { key: 'reminders', label: 'Reminders', icon: 'notifications_active', group: 'People' },
+  { key: 'add_reminder', label: 'Add Reminder', icon: 'add_alert', group: 'People', action: true },
   { key: 'retailers', label: 'Retailers', icon: 'storefront', group: 'People' },
   { key: 'influencers', label: 'Influencers', icon: 'campaign', group: 'People' },
 
@@ -550,9 +556,16 @@ export const TEAM_LEADER_DEFAULT_MODULES = [
   'payment_requests',
 ];
 
+// The "add" switches (Req 20, 4-Nov) follow their section until the Admin sets
+// them: whoever may open Materials may add a material, and so on. The role
+// gates the screens already apply (a manager adds materials and projects, a
+// coordinator creates tasks) stay on top of these. Mirrors lib.php.
+export const ADD_PERMISSION_PARENT = { add_materials: 'materials', add_project: 'ongoing_work', new_task: 'tasks', add_reminder: 'reminders' };
+
 export function defaultModuleAllowed(role, key) {
   const r = normalizeRole(role);
   if (key === 'new_po') return can(r, ACTIONS.PO_RECORD);
+  if (ADD_PERMISSION_PARENT[key]) return defaultModuleAllowed(r, ADD_PERMISSION_PARENT[key]);
   // Adding and editing installations (R6.3, 8-Oct) is a manager-level job by
   // default; an Admin grants it to an individual (P. Ganesh) in Settings →
   // Permission Management. Mirrors default_module_allowed() in lib.php.

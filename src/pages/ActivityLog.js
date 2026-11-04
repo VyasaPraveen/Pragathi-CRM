@@ -24,6 +24,9 @@ export default function ActivityLog() {
   const { activityLog } = useData();
   const { toast } = useToast();
   const [filterModule, setFilterModule] = useState('all');
+  // Req 14 (4-Nov): the log shows 100 at a time; Show More loads the next 100
+  // until every entry is on screen.
+  const [visibleCount, setVisibleCount] = useState(100);
   const [selected, setSelected] = useState(() => new Set());
   const [busy, setBusy] = useState(false);
   const canDelete = canDeleteActivity(role);
@@ -102,8 +105,8 @@ export default function ActivityLog() {
           {canDelete && (
             <>
               <button className="btn bsm bo" disabled={busy || !filtered.length} title="Select every entry shown"
-                onClick={() => setSelected(prev => (prev.size === Math.min(filtered.length, 100) ? new Set() : new Set(filtered.slice(0, 100).map(a => a.id).filter(Boolean))))}>
-                <span className="material-icons-round" style={{ fontSize: 16 }}>checklist</span> {selected.size && selected.size === Math.min(filtered.length, 100) ? 'Clear selection' : 'Select shown'}
+                onClick={() => setSelected(prev => (prev.size === Math.min(filtered.length, visibleCount) ? new Set() : new Set(filtered.slice(0, visibleCount).map(a => a.id).filter(Boolean))))}>
+                <span className="material-icons-round" style={{ fontSize: 16 }}>checklist</span> {selected.size && selected.size === Math.min(filtered.length, visibleCount) ? 'Clear selection' : 'Select shown'}
               </button>
               <button className="btn bsm bo" disabled={busy || !selected.size} onClick={deleteSelected} style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}>
                 <span className="material-icons-round" style={{ fontSize: 16 }}>delete</span> Delete selected{selected.size ? ` (${selected.size})` : ''}
@@ -141,7 +144,7 @@ export default function ActivityLog() {
               <p>No activities found</p>
             </div>
           ) : (
-            filtered.slice(0, 100).map((a, i) => (
+            filtered.slice(0, visibleCount).map((a, i) => (
               <div key={a.id || i} style={{ display: 'flex', gap: 12, padding: '10px 0', borderBottom: i < filtered.length - 1 ? '1px solid var(--bor)' : 'none', background: selected.has(a.id) ? 'rgba(231,76,60,.05)' : undefined }}>
                 {canDelete && a.id && <input type="checkbox" checked={selected.has(a.id)} onChange={() => toggle(a.id)} aria-label="Select this entry" style={{ marginTop: 9, width: 16, height: 16, flexShrink: 0 }} />}
                 <div style={{ width: 32, height: 32, borderRadius: '50%', background: (moduleColors[a.module] || '#64748b') + '18', color: moduleColors[a.module] || '#64748b', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, marginTop: 2 }}>
@@ -164,7 +167,14 @@ export default function ActivityLog() {
               </div>
             ))
           )}
-          {filtered.length > 100 && <p style={{ textAlign: 'center', color: 'var(--muted)', fontSize: '.82rem', marginTop: 10 }}>Showing first 100 of {filtered.length} activities</p>}
+          {filtered.length > visibleCount && (
+            <div style={{ textAlign: 'center', marginTop: 12 }}>
+              <button className="btn bsm bo" onClick={() => setVisibleCount(c => c + 100)} data-more="activity">
+                <span className="material-icons-round" style={{ fontSize: 16 }}>expand_more</span> Show More ({filtered.length - visibleCount} remaining)
+              </button>
+              <p style={{ color: 'var(--muted)', fontSize: '.78rem', marginTop: 6 }}>Showing {Math.min(visibleCount, filtered.length)} of {filtered.length} activities</p>
+            </div>
+          )}
         </div>
       </div>
     </>

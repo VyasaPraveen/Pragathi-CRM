@@ -86,6 +86,22 @@ function handle_collections(string $collection, string $id, string $method): voi
       $data['teamLeaderEmail'] = $tl;
       $data['needsRecommendation'] = ($tl !== '' && $tl !== strtolower(trim($email)));
     }
+    // Req 19B (4-Nov): one BCO operations record per lead. A second POST for the
+    // same lead (two tabs, a slow poll) folds its stages into the record that
+    // already exists instead of making a twin whose later stages come up blank.
+    if ($collection === 'bcoOps' && trim((string)($data['leadId'] ?? '')) !== '') {
+      $dup = db()->prepare("SELECT id, data FROM `$table` WHERE JSON_UNQUOTE(JSON_EXTRACT(data, '$.leadId')) = ? ORDER BY created_at ASC LIMIT 1");
+      $dup->execute([trim((string)$data['leadId'])]);
+      if ($hit = $dup->fetch()) {
+        $cur = $hit['data'] ? json_decode($hit['data'], true) : [];
+        if (!is_array($cur)) $cur = [];
+        $merged = array_merge($cur, $data);
+        $merged['stages'] = array_merge(is_array($cur['stages'] ?? null) ? $cur['stages'] : [], is_array($data['stages'] ?? null) ? $data['stages'] : []);
+        db()->prepare("UPDATE `$table` SET data = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?")
+          ->execute([json_encode($merged, JSON_UNESCAPED_UNICODE), $email, $hit['id']]);
+        json_out(['id' => $hit['id']] + $merged, 200);
+      }
+    }
     $newId = gen_id();
     $st = db()->prepare("INSERT INTO `$table` (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)");
     $st->execute([$newId, json_encode($data, JSON_UNESCAPED_UNICODE), $email]);
@@ -139,6 +155,12 @@ function handle_collections(string $collection, string $id, string $method): voi
     enforce_status_transition($collection, $role, $patch, $existing, $email);
 
     $merged = array_merge($existing, $patch);
+    // Req 19B (4-Nov): the BCO stages are merged one stage at a time, so a save
+    // made from a screen that had not yet seen the latest record can never
+    // wipe the stages it did not know about.
+    if ($collection === 'bcoOps' && is_array($patch['stages'] ?? null)) {
+      $merged['stages'] = array_merge(is_array($existing['stages'] ?? null) ? $existing['stages'] : [], $patch['stages']);
+    }
     $st = db()->prepare("UPDATE `$table` SET data = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?");
     $st->execute([json_encode($merged, JSON_UNESCAPED_UNICODE), $email, $id]);
     $merged['id'] = $id;
@@ -184,8 +206,10 @@ function handle_collections(string $collection, string $id, string $method): voi
 function handle_batch(string $method): void {
   $claims = require_auth();
   if ($method !== 'GET') fail(405, 'Method not allowed');
-  // The 5 PM report reminder rides on the poll every client makes (Req 7.8).
+  // The 5 PM report reminder rides on the poll every client makes (Req 7.8),
+  // and the 5:30 PM planning reminder with it (Req 6, 4-Nov).
   maybe_daily_report_reminder();
+  maybe_daily_plan_reminder();
   $names = array_filter(array_map('trim', explode(',', (string)($_GET['names'] ?? ''))));
   $out = [];
   foreach ($names as $name) {
@@ -314,6 +338,52 @@ function maybe_daily_report_reminder(): void {
     }
   } catch (Throwable $e) {
     error_log('daily report reminder: ' . $e->getMessage());
+  }
+}
+
+// Req 6 (4-Nov): the planning reminder. Between 5:30 and 6:30 PM IST, Monday
+// to Saturday — after 6:30 the deadline it speaks of has passed, so a first
+// poll later than that sends nothing. Mirrors PLAN_REMINDER in planning.js.
+function plan_reminder_due(DateTimeInterface $local): bool {
+  if ((int)$local->format('w') === 0) return false;
+  $m = (int)$local->format('G') * 60 + (int)$local->format('i');
+  return $m >= 17 * 60 + 30 && $m < 18 * 60 + 30;
+}
+
+// Once a day, everyone who has not SENT today's plan is reminded to send it by
+// 6:30 PM. Claimed in the company settings first, like the report reminder.
+function maybe_daily_plan_reminder(): void {
+  try {
+    $local = new DateTime('now', new DateTimeZone('Asia/Kolkata'));
+    if (!plan_reminder_due($local)) return;
+    $today = $local->format('Y-m-d');
+    $st = db()->prepare("SELECT data FROM company_settings WHERE id = 'settings' LIMIT 1");
+    $st->execute();
+    $row = $st->fetch();
+    $cur = ($row && $row['data']) ? json_decode($row['data'], true) : [];
+    if (!is_array($cur)) $cur = [];
+    if (($cur['planReminderDate'] ?? '') === $today) return;
+    $cur['planReminderDate'] = $today;
+    db()->prepare("INSERT INTO company_settings (id, data, updated_at) VALUES ('settings', ?, UTC_TIMESTAMP()) ON DUPLICATE KEY UPDATE data = VALUES(data), updated_at = UTC_TIMESTAMP()")
+      ->execute([json_encode($cur, JSON_UNESCAPED_UNICODE)]);
+    $sent = [];
+    foreach (db()->query("SELECT data FROM `tracking`")->fetchAll() as $r) {
+      $d = $r['data'] ? json_decode($r['data'], true) : [];
+      if (is_array($d) && ($d['date'] ?? '') === $today && !empty($d['planSent'])) $sent[strtolower(trim((string)($d['employeeEmail'] ?? '')))] = true;
+    }
+    $ins = db()->prepare('INSERT INTO notifications (id, data, created_at, updated_at, created_by) VALUES (?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP(),?)');
+    $message = 'Your daily planning is pending. Please submit your plan by 6:30 PM.';
+    foreach (db()->query('SELECT email, display_name, data FROM users WHERE approved = 1')->fetchAll() as $u) {
+      $ud = $u['data'] ? json_decode($u['data'], true) : [];
+      if (is_array($ud) && in_array((string)($ud['status'] ?? 'active'), ['hold', 'deactivated'], true)) continue;
+      if (isset($sent[strtolower(trim((string)$u['email']))])) continue;
+      $note = ['forUser' => (string)($u['display_name'] ?: $u['email']), 'title' => 'Daily planning pending — ' . $local->format('d M Y'), 'message' => $message,
+               'type' => 'reminder', 'module' => 'tracking', 'read' => false, 'fromUser' => 'System', 'reminderDate' => $today];
+      $ins->execute([gen_id(), json_encode($note, JSON_UNESCAPED_UNICODE), 'system']);
+      maybe_send_push($note);
+    }
+  } catch (Throwable $e) {
+    error_log('daily plan reminder: ' . $e->getMessage());
   }
 }
 
@@ -668,6 +738,19 @@ function enforce_create(string $collection, array $claims): void {
       break;
     case 'bcoOps':
       if (!bco_ops_editor($role)) fail(403, 'Only the BCO, the Operation Manager or an Admin can record BCO operations');
+      break;
+    // Req 20 (4-Nov): adding to a section is its own switch in Permission Management.
+    case 'materials':
+      if (!may_module($claims, 'add_materials')) fail(403, 'You do not have permission to add materials');
+      break;
+    case 'ongoingWork':
+      if (!may_module($claims, 'add_project')) fail(403, 'You do not have permission to add a project');
+      break;
+    case 'employeeTasks':
+      if (!may_module($claims, 'new_task')) fail(403, 'You do not have permission to create tasks');
+      break;
+    case 'reminders':
+      if (!may_module($claims, 'add_reminder')) fail(403, 'You do not have permission to add reminders');
       break;
     default:
       // other collections: any approved user may create (UI already restricts)

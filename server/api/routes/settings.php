@@ -17,8 +17,12 @@ function handle_settings(string $method): void {
   }
 
   if ($method === 'PUT' || $method === 'PATCH') {
-    if (!has_access($claims['role'] ?? '', 'admin')) fail(403, 'Admins only');
     $patch = body();
+    // Req 3 (4-Nov): the About page text may also be edited by the Operation
+    // Manager and Management; everything else in the settings stays Admin+.
+    $aboutOnly = $patch && count(array_diff(array_keys($patch), ['about'])) === 0;
+    $r = normalize_role($claims['role'] ?? '');
+    if (!has_access($claims['role'] ?? '', 'admin') && !($aboutOnly && in_array($r, ['operation_manager', 'management'], true))) fail(403, 'Admins only');
     $st = db()->prepare("SELECT data FROM company_settings WHERE id = 'settings' LIMIT 1");
     $st->execute();
     $row = $st->fetch();

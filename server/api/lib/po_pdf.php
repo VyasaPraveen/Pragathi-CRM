@@ -120,15 +120,31 @@ function popdf_bom_rank(string $name): ?int {
 // follows the twenty-five. Applied when the BOM is drawn as well as when it is
 // saved, so purchase orders already on file print in order without being
 // rewritten.
-function popdf_sort_items(array $items): array {
+//
+// Req 18 (4-Nov): a purchase order saved with the Owner's own material order
+// (bomOrder, the Manage Options list at the time) prints in that order.
+function popdf_sort_items(array $items, ?array $order = null): array {
+  $own = [];
+  if ($order) {
+    foreach (array_values($order) as $i => $n) $own[preg_replace('/[^a-z0-9]/', '', strtolower((string)$n))] = $i;
+  }
   $keyed = [];
   foreach (array_values($items) as $i => $it) {
     $name = is_array($it) ? (string)($it['materialName'] ?? '') : '';
-    $r = popdf_bom_rank($name);
+    $r = $own ? ($own[preg_replace('/[^a-z0-9]/', '', strtolower($name))] ?? null) : popdf_bom_rank($name);
     $keyed[] = ['i' => $i, 'rank' => $r === null ? PHP_INT_MAX : $r, 'it' => $it];
   }
   usort($keyed, fn($a, $b) => $a['rank'] === $b['rank'] ? $a['i'] <=> $b['i'] : $a['rank'] <=> $b['rank']);
   return array_column($keyed, 'it');
+}
+
+// A check mark drawn with two strokes, centred on (cx, cy).
+function popdf_tick(PpsPdf $pdf, float $cx, float $cy): void {
+  $pdf->setDraw(0, 0, 0);
+  $pdf->setLineWidth(1.4);
+  $pdf->line($cx - 4.5, $cy - 0.5, $cx - 1.2, $cy + 3.2);
+  $pdf->line($cx - 1.2, $cy + 3.2, $cx + 5.5, $cy - 4.5);
+  $pdf->setLineWidth(0.5);
 }
 
 function popdf_num($v, $fallback = 0) {
@@ -392,13 +408,15 @@ function pps_po_pdf(array $po, array $lead = [], string $assetDir = ''): string 
   $y += 16;
   $ruleFrom = $L + 90;
   $ruleTo = $L + 285;
+  // Req 9 (4-Nov): a 3rd Payment line between the 2nd and the Final.
   foreach ([
     ['Advance', popdf_str($po, 'advancePayment')],
     ['2nd Payment', popdf_str($po, 'secondPayment')],
+    ['3rd Payment', popdf_str($po, 'thirdPayment')],
     ['Final Payment', popdf_str($po, 'finalPayment')],
     ['Any Remarks', popdf_str($po, 'paymentRemarks')],
-  ] as $i => [$label, $value]) {
-    $pdf->setFont($i === 3 ? 'B' : '', 10);
+  ] as [$label, $value]) {
+    $pdf->setFont($label === 'Any Remarks' ? 'B' : '', 10);
     $pdf->text($L, $y, $label);
     $pdf->setFont('', 10);
     $pdf->text($ruleFrom - 8, $y, ':');
@@ -526,8 +544,10 @@ function popdf_bom_page(PpsPdf $pdf, array $po, array $lead, string $assetDir): 
 
   $items = array_values(array_filter($po['items'] ?? [], fn($it) =>
     is_array($it) && (trim((string)($it['materialName'] ?? '')) !== '' || ($it['quantity'] ?? '') !== '')));
-  // Sheet order, whatever order they were picked in.
-  $items = popdf_sort_items($items);
+  // Sheet order, whatever order they were picked in — or the Owner's own order
+  // when the purchase order carries one (Req 18, 4-Nov).
+  $order = is_array($po['bomOrder'] ?? null) ? $po['bomOrder'] : null;
+  $items = popdf_sort_items($items, $order);
 
   // How tall each row will be, worked out before any of them is drawn.
   $pdf->setFont('', 8.5);
@@ -580,10 +600,11 @@ function popdf_bom_page(PpsPdf $pdf, array $po, array $lead, string $assetDir): 
     $x += $cols[5];
     $pdf->textCentre($x + $cols[6] / 2, $mid, $act);
     $x += $cols[6];
-    $pdf->setFont('B', 10);
-    if (!empty($it['scopePragathi'])) $pdf->textCentre($x + $cols[7] / 2, $mid, 'X');
+    // Req 10 (4-Nov): a drawn check mark under the ticked scope, nothing under
+    // the other. (The core fonts have no tick glyph, so it is drawn as lines.)
+    if (!empty($it['scopePragathi'])) popdf_tick($pdf, $x + $cols[7] / 2, $y + $rowH / 2);
     $x += $cols[7];
-    if (!empty($it['scopeCustomer'])) $pdf->textCentre($x + $cols[8] / 2, $mid, 'X');
+    if (!empty($it['scopeCustomer'])) popdf_tick($pdf, $x + $cols[8] / 2, $y + $rowH / 2);
     $y += $rowH;
   }
 

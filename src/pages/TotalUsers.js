@@ -7,6 +7,12 @@ import { DESIGNATIONS, formatDateTime, hasAccess } from '../services/helpers';
 import { Modal, EmptyState } from '../components/SharedUI';
 import PasswordManager, { generatePassword } from '../components/PasswordManager';
 import { teamStructure, userStatus, STATUS_LABEL, leaderCandidates } from '../services/teams';
+// Req 16B (4-Nov): the Team section's four profile sections on the Edit screen,
+// and the team-wise / all-employee CSV exports.
+import { useData } from '../context/DataContext';
+import { addDocument, updateDocument } from '../services/firestore';
+import EmployeeProfileFields, { profileFrom, teamRecordOf, EMPLOYEE_CSV_HEADERS, employeeCsvRow } from '../components/EmployeeProfileFields';
+import { downloadCSV } from '../services/csv';
 
 // ============================================================================
 // Total Users — the Owner's one place for every account (Req 5, 30-Oct):
@@ -102,6 +108,17 @@ function UserForm({ user, users, presetLeader, onClose, onSaved }) {
   const [saving, setSaving] = useState(false);
   const leaders = useMemo(() => leaderCandidates(users).filter(u => u.id !== user?.id), [users, user]);
   const isLeader = f.designation === 'Team Leader';
+  // The person's Team-section record (Basic Info, Bank Details, Personal, Work
+  // Info), edited here as well and saved back to the same record.
+  const { team } = useData();
+  const member = editing ? teamRecordOf(team, user) : null;
+  const [profile, setProfile] = useState(() => profileFrom(member, user));
+  const setP = (k, v) => setProfile(p => ({ ...p, [k]: v }));
+  const saveProfile = async (email) => {
+    const data = { ...profile, name: f.displayName.trim(), email, phone: f.phone || profile.phone || '', role: f.designation || profile.role };
+    if (member) await updateDocument('team', member.id, data);
+    else await addDocument('team', { ...data, status: data.status || 'Active', joiningDate: data.joiningDate || '' });
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -117,8 +134,13 @@ function UserForm({ user, users, presetLeader, onClose, onSaved }) {
         const data = {};
         ['displayName', 'phone', 'designation', 'address', 'department', 'notes', 'teamLeader', 'teamName'].forEach(k => { if ((f[k] || '') !== (user[k] || '')) data[k] = f[k]; });
         if (email !== lc(user.email)) data.email = email;
-        if (!Object.keys(data).length) { onClose(); return; }
-        const res = await apiPatch('/auth/users/' + user.id, data);
+        const profileChanged = JSON.stringify(profile) !== JSON.stringify(profileFrom(member, user));
+        if (!Object.keys(data).length && !profileChanged) { onClose(); return; }
+        const res = Object.keys(data).length ? await apiPatch('/auth/users/' + user.id, data) : {};
+        if (profileChanged || !member) {
+          try { await saveProfile(email); }
+          catch (err) { toast('Account saved; the profile details were not: ' + err.message, 'er'); }
+        }
         toast(res.linked ? `Saved — ${res.linked} linked record(s) updated to match` : 'Saved');
       } else {
         await apiPost('/auth/users', { email, password: f.password.trim(), displayName: f.displayName.trim(), phone: f.phone, designation: f.designation, teamLeader: f.teamLeader, approved: true, mustChangePassword: f.mustChangePassword, addTeamRecord: f.addTeamRecord });
@@ -171,6 +193,12 @@ function UserForm({ user, users, presetLeader, onClose, onSaved }) {
               <div className="fg"><label>Address</label><input className="fi" value={f.address} onChange={e => set('address', e.target.value)} /></div>
             </div>
             <div className="fg"><label>Notes</label><textarea className="fi" rows={2} value={f.notes} onChange={e => set('notes', e.target.value)} /></div>
+            <div style={{ borderTop: '1px solid var(--bor)', marginTop: 10, paddingTop: 12 }}>
+              <div style={{ fontWeight: 700, fontSize: '.86rem', color: 'var(--pri)', marginBottom: 8 }}>
+                Employee profile <span style={{ fontSize: '.74rem', color: 'var(--muted)', fontWeight: 400 }}>— the same details as Team → Edit{member ? '' : ' (no Team record yet; one is created on save)'}</span>
+              </div>
+              <EmployeeProfileFields f={profile} set={setP} hideIdentity />
+            </div>
           </>}
         </div>
         <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Cancel</button><button type="submit" className="btn bp" disabled={saving}>{saving ? 'Saving…' : editing ? 'Save' : 'Create account'}</button></div>
@@ -482,6 +510,21 @@ export default function TotalUsers() {
 
   const structure = useMemo(() => teamStructure(users), [users]);
   const q = lc(search);
+  // Req 16B (4-Nov): the Owner's CSV exports — one team, or every employee —
+  // with the account and the four profile sections.
+  const { team } = useData();
+  const isOwner = role === 'super_admin';
+  const csvRows = (list, labelOf) => list.map(u => {
+    const t = structure.teams.find(x => x.leader.id === u.id || x.members.some(m => m.id === u.id));
+    return employeeCsvRow(u, labelOf ? labelOf(u) : (t ? t.label : ''), teamRecordOf(team, u), t && t.leader.id !== u.id ? nameOf(t.leader) : (t ? 'Team Leader' : ''));
+  });
+  const exportTeam = (t) => downloadCSV(`PPS_${t.label.replace(/[^A-Za-z0-9]+/g, '_')}_${new Date().toISOString().slice(0, 10)}.csv`, EMPLOYEE_CSV_HEADERS, csvRows([t.leader, ...t.members], () => t.label));
+  const exportAll = () => {
+    const inTeams = structure.teams.flatMap(t => [t.leader, ...t.members].map(u => ({ u, label: t.label })));
+    const rest = [...structure.others.map(u => ({ u, label: 'Other users' })), ...structure.unassigned.map(u => ({ u, label: 'Not in a team' }))];
+    const rows = [...inTeams, ...rest].map(({ u, label }) => employeeCsvRow(u, label, teamRecordOf(team, u), (() => { const t = structure.teams.find(x => x.members.some(m => m.id === u.id)); return t ? nameOf(t.leader) : (structure.teams.some(x => x.leader.id === u.id) ? 'Team Leader' : ''); })()));
+    downloadCSV(`PPS_All_Employees_${new Date().toISOString().slice(0, 10)}.csv`, EMPLOYEE_CSV_HEADERS, rows);
+  };
   const matches = (u) => !q || lc(nameOf(u)).includes(q) || lc(u.email).includes(q) || lc(u.designation).includes(q) || lc(u.phone).includes(q);
   const leaderLabelOf = (u) => {
     const t = structure.teams.find(x => x.leader.id === u.id || x.members.some(m => m.id === u.id));
@@ -532,6 +575,7 @@ export default function TotalUsers() {
             <span className={`fc ${openTeams.size ? '' : 'act'}`} onClick={() => setOpenTeams(new Set())}>Collapse all</span>
             <span className="fc" onClick={() => setOpenTeams(new Set(structure.teams.map(t => t.key).concat(['others', 'unassigned'])))}>Expand all</span>
           </div>
+          {isOwner && <button className="btn bo bsm" onClick={exportAll} title="Every employee with their profile details, as a CSV (opens in Excel)" data-export="all"><span className="material-icons-round" style={{ fontSize: 18 }}>download</span> Export all (CSV)</button>}
           <button className="btn bp bsm" onClick={() => setDialog({ kind: 'new', presetLeader: '' })}><span className="material-icons-round" style={{ fontSize: 18 }}>person_add</span> New User</button>
         </div>
       </div>
@@ -578,7 +622,8 @@ export default function TotalUsers() {
                 {t.label}
                 <span style={{ fontSize: '.8rem', fontWeight: 500, color: 'var(--muted)' }}>Leader: {nameOf(t.leader)} · {t.members.length} member{t.members.length === 1 ? '' : 's'}</span>
               </h3>
-              <div style={{ display: 'flex', gap: 6 }} onClick={e => e.stopPropagation()}>
+              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }} onClick={e => e.stopPropagation()}>
+                {isOwner && <button className="btn bsm bo" onClick={() => exportTeam(t)} title={`${t.label} — the leader and members with their profile details, as a CSV`} data-export="team"><span className="material-icons-round" style={{ fontSize: 15 }}>download</span> CSV</button>}
                 <button className="btn bsm bo" onClick={() => setDialog({ kind: 'rename', team: t })} title="Rename the team"><span className="material-icons-round" style={{ fontSize: 15 }}>drive_file_rename_outline</span></button>
                 <button className="btn bsm bo" onClick={() => setDialog({ kind: 'leader', team: t })}><span className="material-icons-round" style={{ fontSize: 15 }}>swap_horizontal_circle</span> Change leader</button>
                 <button className="btn bsm bp" onClick={() => setDialog({ kind: 'add', team: t })}><span className="material-icons-round" style={{ fontSize: 15 }}>group_add</span> Add user</button>

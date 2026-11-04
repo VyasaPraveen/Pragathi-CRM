@@ -6,6 +6,7 @@ import { addDocument, updateDocument, deleteDocument } from '../services/firesto
 import { formatDate, toNumber, safeStr, hasAccess } from '../services/helpers';
 import { StatusBadge, ProgressBar, Modal, EmptyState , DateFilter } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
+import { hasModule } from '../services/permissions';
 
 const statuses = ['In Progress', 'Pending', 'Completed', 'Delayed'];
 
@@ -15,13 +16,15 @@ const WORK_DATE_FIELDS = ['startDate', 'installDate', 'createdAt'];
 // Q4 fix: added full CRUD (was read-only)
 export default function OngoingWork() {
   const { ongoingWork } = useData();
-  const { role } = useAuth();
+  const { role, user } = useAuth();
   const { toast } = useToast();
   const [modal, setModal] = useState(null);
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
   const canEdit = hasAccess(role, 'manager');
+  // Req 20 (4-Nov): adding a project is its own switch in Permission Management.
+  const canAdd = canEdit && hasModule(user, role, 'add_project');
 
   let filtered = ongoingWork;
   if (filter !== 'all') filtered = filtered.filter(w => w.status === filter);
@@ -55,7 +58,7 @@ export default function OngoingWork() {
           <div className="chips">
             {['all', ...statuses].map(s => <span key={s} className={`fc ${filter === s ? 'act' : ''}`} onClick={() => setFilter(s)}>{s === 'all' ? 'All' : s}</span>)}
           </div>
-          {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Project</button>}
+          {canAdd && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Project</button>}
         </div>
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={ongoingWork} fields={WORK_DATE_FIELDS} /></div>

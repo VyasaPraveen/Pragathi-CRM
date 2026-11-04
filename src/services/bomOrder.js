@@ -69,9 +69,21 @@ export const isReferenceMaterial = (materialName) => bomRank(materialName) !== n
 //
 // The sort is stable in both directions: re-sorting an already-sorted list
 // changes nothing, which matters because this runs on every pick.
-export function sortBomItems(items, nameOf = (it) => (it && it.materialName)) {
+//
+// Req 18 (4-Nov): when the Owner has set an order of their own in Settings →
+// Manage Options → BOM Materials, that list is the order — passed in as
+// `order` (the material names, top to bottom). The printed sheet's fixed order
+// is used only when no such list is given.
+export function rankIn(order, materialName) {
+  if (!order || !order.length) return bomRank(materialName);
+  const k = key(materialName);
+  const i = order.findIndex(n => key(n) === k);
+  return i === -1 ? null : i;
+}
+
+export function sortBomItems(items, nameOf = (it) => (it && it.materialName), order = null) {
   return (items || [])
-    .map((item, i) => ({ item, i, rank: bomRank(nameOf(item)) }))
+    .map((item, i) => ({ item, i, rank: rankIn(order, nameOf(item)) }))
     .sort((a, b) => {
       if (a.rank === null && b.rank === null) return a.i - b.i;   // both extra
       if (a.rank === null) return 1;                               // extras last
