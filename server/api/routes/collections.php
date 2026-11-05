@@ -161,6 +161,13 @@ function handle_collections(string $collection, string $id, string $method): voi
     if ($collection === 'bcoOps' && is_array($patch['stages'] ?? null)) {
       $merged['stages'] = array_merge(is_array($existing['stages'] ?? null) ? $existing['stages'] : [], $patch['stages']);
     }
+    // 5-Nov QC: the customer's 18-stage workflow the same way. Several screens
+    // (BCO operations, dispatch, installations, the customer itself) each write
+    // the whole `workflow` from their own copy of the customer; a copy that
+    // had not yet seen another person's stage must not wipe it.
+    if ($collection === 'customers' && is_array($patch['workflow'] ?? null)) {
+      $merged['workflow'] = customer_workflow_merge(is_array($existing['workflow'] ?? null) ? $existing['workflow'] : [], $patch['workflow']);
+    }
     $st = db()->prepare("UPDATE `$table` SET data = ?, updated_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?");
     $st->execute([json_encode($merged, JSON_UNESCAPED_UNICODE), $email, $id]);
     $merged['id'] = $id;
@@ -279,6 +286,21 @@ function enforce_tracking_write(string $method, array $claims, array &$data, arr
   // Not submitted yet: the author (or a manager) edits; only the author reports.
   if (!$owner && !$manager) fail(403, 'This plan belongs to someone else.');
   foreach (['submittedAt', 'submittedBy', 'submittedByName', 'submissions', 'unlockedAt', 'unlockedBy'] as $k) unset($data[$k]);
+  // Sending the plan (Req 5, 4-Nov; 5-Nov QC): the stamp is the server's clock,
+  // by its author, and a sent plan is not un-sent by anyone but a manager.
+  if (array_key_exists('planSent', $data)) {
+    if ($data['planSent']) {
+      if (!$owner) fail(403, 'Only the person whose plan it is can send it.');
+      $data['planSent'] = true;
+      $data['planSentAt'] = gmdate('Y-m-d\TH:i:s\Z');
+      $data['planSentBy'] = $email;
+      $data['planSentByName'] = (string)($claims['name'] ?? $email);
+    } elseif (!empty($existing['planSent']) && !$manager) {
+      unset($data['planSent'], $data['planSentAt'], $data['planSentBy'], $data['planSentByName']);
+    }
+  } else {
+    foreach (['planSentAt', 'planSentBy', 'planSentByName'] as $k) unset($data[$k]);
+  }
   if (array_key_exists('submitted', $data)) {
     if (!$data['submitted']) { unset($data['submitted']); return; }
     if (!$owner) fail(403, 'Only the person whose report it is can submit it.');
@@ -701,6 +723,27 @@ function enforce_site_visit_photos(array $patch, array $existing): void {
   if (!$now) fail(422, 'Upload at least one site visit photo before marking the Site Visit as done. Until then the Site Visit stays "No".');
 }
 
+// The customer workflow's stages in order (mirrors WORKFLOW_STAGES in
+// src/services/workflow.js; the first four are automatic). currentStage is the
+// sno of the first stage not yet completed, as nextOpenStageSno() computes it.
+const CUSTOMER_STAGE_ORDER = ['registration' => 5, 'advance' => 6, 'materialRequest' => 7, 'deliveryApproval' => 8, 'teamAllotment' => 9,
+  'installation' => 10, 'completionReports' => 11, 'discom' => 12, 'demo' => 13, 'finalPayment' => 14,
+  'customerCare' => 15, 'cleaning' => 16, 'review' => 17, 'finalReview' => 18];
+function customer_workflow_merge(array $existing, array $patch): array {
+  $out = array_merge($existing, $patch);
+  $stages = is_array($existing['stages'] ?? null) ? $existing['stages'] : [];
+  if (is_array($patch['stages'] ?? null)) {
+    foreach ($patch['stages'] as $k => $rec) { $stages[$k] = $rec; }
+  }
+  $out['stages'] = $stages;
+  $current = 18;
+  foreach (CUSTOMER_STAGE_ORDER as $key => $sno) {
+    if ((($stages[$key]['status'] ?? '') !== 'completed')) { $current = $sno; break; }
+  }
+  $out['currentStage'] = $current;
+  return $out;
+}
+
 // Who may CREATE in a given collection.
 function enforce_create(string $collection, array $claims, array $data = []): void {
   $role = $claims['role'] ?? '';
@@ -743,7 +786,13 @@ function enforce_create(string $collection, array $claims, array $data = []): vo
     // converting a lead (it carries the leadId) is the lead workflow, not an
     // "Add Customer", and stays open to whoever may work the lead.
     case 'customers':
-      if (empty($data['leadId']) && !may_module($claims, 'add_customer')) fail(403, 'You do not have permission to add customers');
+      if (empty($data['leadId'])) {
+        if (!may_module($claims, 'add_customer')) fail(403, 'You do not have permission to add customers');
+      } else {
+        $lq = db()->prepare('SELECT 1 FROM leads WHERE id = ? LIMIT 1');
+        $lq->execute([(string)$data['leadId']]);
+        if (!$lq->fetchColumn()) fail(422, 'The lead this customer comes from was not found');
+      }
       break;
     // Req 20 (4-Nov): adding to a section is its own switch in Permission Management.
     case 'materials':
@@ -801,6 +850,8 @@ const PO_DISPATCH_FIELDS = [
   'dispatchCompletedAt', 'dispatchCompletedBy', 'dispatchNote',
   // Req 3 (27-Oct): the Operation Manager's yard items, verified like PO lines.
   'yardItems',
+  // Req 11 (4-Nov): materials added after Stock OK reopen the verification.
+  'dispatchReverifyAt', 'dispatchReverifyCount',
 ];
 const PO_DISPATCH_CONFIRM_FIELDS = ['dispatchConfirmedAt', 'dispatchConfirmedBy', 'dispatchConfirmNote'];
 // The handover (R6, 8-Oct): the Operation Manager assigns the sent items to
@@ -1234,6 +1285,9 @@ function po_advance_ok(array $po): bool {
   if ($cost <= 0) return false; // unknown cost → cannot verify the advance
   $required = round($cost * 0.10);
   $leadId = (string)($po['leadId'] ?? '');
+  // A PO raised from Purchase Orders -> New PO with the customer entered by
+  // hand (5-Nov QC) has no lead, so there is no lead advance to verify.
+  if ($leadId === '' && !empty($po['standalone'])) return true;
   if ($leadId === '') return false;
   $st = db()->prepare('SELECT data FROM leads WHERE id = ? LIMIT 1');
   $st->execute([$leadId]);

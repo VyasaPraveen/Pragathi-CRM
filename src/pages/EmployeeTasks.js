@@ -62,7 +62,7 @@ export default function EmployeeTasks() {
   const handleSave = async (data, id) => {
     try {
       // Req 6 (5-Nov): several assignees; `assignedTo` stays the first of them.
-      const cleaned = { ...data, ...assigneeFields(data.assignees && data.assignees.length ? data.assignees : [data.assignedTo]) };
+      const cleaned = { ...data, ...assigneeFields(Array.isArray(data.assignees) ? data.assignees : [data.assignedTo]) };
       const tell = (name, title, message, relatedId) => createNotification({ forUser: name, title, message, type: 'task', module: 'employeeTasks', relatedId });
       if (cleaned.status === 'Completed' && !cleaned.completedDate) {
         cleaned.completedDate = todayStr();

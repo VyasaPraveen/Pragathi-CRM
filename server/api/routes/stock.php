@@ -390,6 +390,14 @@ function stock_apply(array $doc, array &$material, array $actor, string $how): a
   $type = (string)($doc['type'] ?? '');
   $q = stock_num($doc['quantity'] ?? 0);
   $before = $f['balance'];
+  // A correction says what was COUNTED. Stock may have moved between the count
+  // and the Owner's approval (a dispatch, another receipt), so the difference
+  // is worked out against the balance as it stands now - the balance after
+  // approval is the counted figure, as the screen promises (5-Nov QC).
+  if ($type === 'adjustment' && isset($doc['countedQuantity']) && is_numeric($doc['countedQuantity'])) {
+    $q = round(stock_num($doc['countedQuantity']) - $before, 3);
+    $doc['quantity'] = $q;
+  }
   if ($type === 'receipt') { $f['stock'] += $q; $f['balance'] += $q; }
   elseif ($type === 'adjustment') { $f['stock'] += $q; $f['balance'] += $q; }
   elseif ($type === 'dispatch') { $f['dispatched'] += $q; $f['balance'] -= $q; }

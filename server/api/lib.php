@@ -202,6 +202,29 @@ function current_user(): ?array {
   if (stripos($hdr, 'Bearer ') !== 0) return null;
   $claims = jwt_verify(trim(substr($hdr, 7)));
   if ($claims && !session_check($claims)) return null;
+  return $claims ? claims_from_account($claims) : null;
+}
+
+// The token carries the role and approval as they were at sign-in; a change
+// an Admin makes afterwards (a promotion, a revoked approval) must take effect
+// at once, not at the next sign-in up to 30 days later (5-Nov QC). One small
+// query per request, cached for the request.
+function claims_from_account(array $claims): array {
+  static $cache = [];
+  $uid = (string)($claims['sub'] ?? '');
+  if ($uid === '') return $claims;
+  if (!array_key_exists($uid, $cache)) {
+    try {
+      $st = db()->prepare('SELECT role, approved FROM users WHERE id = ? LIMIT 1');
+      $st->execute([$uid]);
+      $cache[$uid] = $st->fetch() ?: null;
+    } catch (Throwable $e) { $cache[$uid] = null; }
+  }
+  $r = $cache[$uid];
+  if ($r) {
+    if (!empty($r['role'])) $claims['role'] = (string)$r['role'];
+    $claims['approved'] = (int)$r['approved'];
+  }
   return $claims;
 }
 

@@ -131,7 +131,8 @@ export function attendanceSummary(days) {
   return {
     present: list.filter(d => d.present).length,
     absent: list.filter(d => d.absent).length,
-    incomplete: list.filter(d => d.present && !d.out && !d.manual).length,
+    // A day still in progress is not "without check-out" yet (5-Nov QC).
+    incomplete: list.filter(d => d.present && !d.out && !d.manual && d.date < new Date().toLocaleDateString('en-CA')).length,
     totalHours: Math.round(totalHours * 10) / 10,
     avgHours: worked.length ? Math.round((totalHours / worked.length) * 10) / 10 : 0,
     fullDays, halfDays, shortDays,

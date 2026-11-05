@@ -76,9 +76,36 @@ export default function PurchaseOrders() {
   const [sourceFilter, setSourceFilter] = useState('all'); // 'all', 'standalone', 'lead'
   // The Day / Month filter (R15) sits beside the status filters, which stay as they are.
   const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
-  // Creating a PO needs the role action AND the per-user "New PO" permission
-  // an Admin can switch on/off for an individual employee.
-  const canEdit = can(role, ACTIONS.PO_RECORD) && hasModule(user, role, 'new_po');
+  // Creating a PO follows the per-user "New PO" switch, whose default is the
+  // role action (5-Nov QC: the role was checked on top, so the Owner's tick did
+  // nothing for anyone below the PO-recording roles).
+  const canEdit = hasModule(user, role, 'new_po');
+
+  // A PO raised here with the customer entered by hand has no lead, so it has
+  // no lead page to be recommended and approved from (5-Nov QC). The same
+  // chain as on a lead: Recommend -> Management Approve -> Approve.
+  const advancePo = async (po, status, extra, question, okMsg) => {
+    if (!window.confirm(question)) return;
+    try {
+      await updateDocument('leadPOs', po.id, { status, ...extra });
+      toast(okMsg);
+    } catch (e) { toast(e.message, 'er'); }
+  };
+  const nowIso = () => new Date().toISOString();
+  const poActions = (po) => {
+    if (po._source !== 'lead' || po.leadId) return null;   // lead POs are decided on the lead
+    const out = [];
+    if (po.status === PO_STATUS.UNAPPROVED && can(role, ACTIONS.PO_RECOMMENDATION) && String(po.createdBy || '').toLowerCase() !== String(user?.email || '').toLowerCase()) {
+      out.push(<button key="rec" className="btn bsm bo" style={{ color: '#d68910', borderColor: 'rgba(243,156,18,.3)' }} title="Recommend for approval" onClick={() => advancePo(po, PO_STATUS.RECOMMENDED, { recommendedBy: user?.email || 'unknown', recommendedDate: nowIso() }, 'Recommend this PO for approval?', 'PO recommended for approval')}><span className="material-icons-round" style={{ fontSize: 16 }}>thumb_up</span></button>);
+    }
+    if (po.status === PO_STATUS.RECOMMENDED && can(role, ACTIONS.PO_MANAGEMENT_APPROVAL)) {
+      out.push(<button key="mgmt" className="btn bsm bo" style={{ color: '#6c5ce7', borderColor: 'rgba(108,92,231,.3)' }} title="Management approval" onClick={() => advancePo(po, PO_STATUS.MANAGEMENT_APPROVED, { managementApprovedBy: user?.email || 'unknown', managementApprovalDate: nowIso() }, 'Grant Management approval for this PO?', 'Management approval granted')}><span className="material-icons-round" style={{ fontSize: 16 }}>verified_user</span></button>);
+    }
+    if (po.status === PO_STATUS.MANAGEMENT_APPROVED && can(role, ACTIONS.PO_APPROVAL)) {
+      out.push(<button key="ok" className="btn bsm bo" style={{ color: 'var(--ok)', borderColor: 'rgba(0,184,148,.3)' }} title="Approve" onClick={() => advancePo(po, PO_STATUS.APPROVED, { approvedBy: user?.email || 'unknown', approvalDate: nowIso() }, 'Approve this purchase order?', 'PO approved')}><span className="material-icons-round" style={{ fontSize: 16 }}>check_circle</span></button>);
+    }
+    return out.length ? out : null;
+  };
 
   // Merge both collections with a source tag (memoized so typing in search doesn't re-merge/re-sort)
   const allPOs = useMemo(() => {
@@ -222,6 +249,7 @@ export default function PurchaseOrders() {
                 <button className="btn bsm bo" title={expanded === (po._source + po.id) ? 'Hide items' : 'Show items'} onClick={() => setExpanded(expanded === (po._source + po.id) ? null : (po._source + po.id))}><span className="material-icons-round" style={{ fontSize: 16 }}>{expanded === (po._source + po.id) ? 'expand_less' : 'expand_more'}</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? printPO(po) : printLeadBOM(po)} title="Print"><span className="material-icons-round" style={{ fontSize: 16 }}>print</span></button>
                 <button className="btn bsm bo" onClick={() => po._source === 'standalone' ? sharePOWhatsApp(po) : shareLeadPO(po)} title="WhatsApp" style={{ color: '#25d366', borderColor: 'rgba(37,211,102,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>share</span></button>
+                {poActions(po)}
                 {canEdit && po._source === 'standalone' && <button className="btn bsm bo" title="Edit" onClick={() => setModal({ data: po, id: po.id })}><span className="material-icons-round" style={{ fontSize: 16 }}>edit</span></button>}
                 {role === 'super_admin' && <button className="btn bsm bo" onClick={() => handleDelete(po)} title="Delete (Owner only)" data-m="Delete" style={{ color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }}><span className="material-icons-round" style={{ fontSize: 16 }}>delete</span></button>}
               </div></td>

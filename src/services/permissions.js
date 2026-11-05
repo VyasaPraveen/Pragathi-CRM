@@ -740,8 +740,12 @@ export function canAddLeadPO(lead, user, role, users) {
   if (poExplicitlyDenied(user, role)) return false;
   if (can(role, ACTIONS.PO_RECORD)) return true;          // the roles that always could
   if (hasAccess(role, 'admin')) return true;              // Admin / Management / Owner
-  if (isLeadOwner(lead, user)) return true;               // the person it is assigned to
-  return isLeadLeader(lead, user, users);                 // and their Team Leader
+  // The person the lead is assigned to, and their Team Leader - when the
+  // Owner's "New PO" switch is on for them, which is what the server checks
+  // (5-Nov QC: the button used to show and the save then failed with 403).
+  if (!hasModule(user, role, 'new_po')) return false;
+  if (isLeadOwner(lead, user)) return true;
+  return isLeadLeader(lead, user, users);
 }
 
 // Before final approval a PO is still a draft, so the people above may correct
@@ -751,7 +755,10 @@ export const PO_EDITABLE_STATUSES = [PO_STATUS.UNAPPROVED, PO_STATUS.RECOMMENDED
 
 export function canEditLeadPO(po, lead, user, role, users) {
   const status = (po && po.status) || PO_STATUS.UNAPPROVED;
-  if (status === PO_STATUS.APPROVED) return false;        // approved is final
+  // Approved is final for everyone but Admin, Management and the Owner, who
+  // may add materials until the dispatch is confirmed (Req 11, 4-Nov) - the
+  // server allows exactly them.
+  if (status === PO_STATUS.APPROVED) return hasAccess(role, 'admin') && !(po && po.dispatchConfirmedAt);
   if (!PO_EDITABLE_STATUSES.includes(status)) return false;
   return canAddLeadPO(lead, user, role, users);
 }

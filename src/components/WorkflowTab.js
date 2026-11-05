@@ -259,7 +259,7 @@ export default function WorkflowTab({ customer, canEdit }) {
                         Completed by {stage.data.completedBy || '-'}{stage.data.completedAt ? ' on ' + formatDate(stage.data.completedAt) : ''}
                         {src ? ` · ${src}` : ''}
                       </div>
-                      {canEdit && isAdmin && (
+                      {canEdit && isAdmin && access === ACCESS.EDIT && (
                         <button type="button" className="btn bsm bo" style={{ marginTop: 10, color: 'var(--err)', borderColor: 'rgba(231,76,60,.3)' }} onClick={() => reopenStage(stage)} disabled={saving}>
                           <span className="material-icons-round" style={{ fontSize: 15 }}>lock_open</span> Reopen
                         </button>

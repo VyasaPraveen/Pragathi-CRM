@@ -784,9 +784,15 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
         const reverify = prev && added > 0 && prev.dispatchStatus === DISPATCH_STATUS.COMPLETED && !prev.dispatchConfirmedAt;
         let patch = data;
         if (reverify) {
+          // The saved list is re-sorted into the Owner's BOM order, so a new
+          // material can land anywhere: each existing mark follows its
+          // material by name; the new ones start blank (5-Nov QC).
           const marks = dispatchMarks(prev);
-          const blanks = Array.from({ length: added }, () => ({ dispatched: false, note: '' }));
-          patch = { ...data, dispatchItems: [...marks.slice(0, prevCount), ...blanks, ...marks.slice(prevCount)], dispatchStatus: DISPATCH_STATUS.PARTIAL, dispatchReverifyAt: new Date().toISOString(), dispatchReverifyCount: added };
+          const keyOf = (it) => `${it.materialName || ''}|${it.specification || ''}`.trim().toLowerCase();
+          const pool = new Map();
+          (prev.items || []).forEach((it, i) => { const k = keyOf(it); if (!pool.has(k)) pool.set(k, []); pool.get(k).push(marks[i]); });
+          const itemMarks = (data.items || []).map(it => { const q = pool.get(keyOf(it)); return q && q.length ? q.shift() : { dispatched: false, note: '' }; });
+          patch = { ...data, dispatchItems: [...itemMarks, ...marks.slice(prevCount)], dispatchStatus: DISPATCH_STATUS.PARTIAL, dispatchReverifyAt: new Date().toISOString(), dispatchReverifyCount: added };
         }
         await updateDocument('leadPOs', poId, patch);
         toast(reverify ? `PO updated — the warehouse has been asked to verify the ${added} new material${added === 1 ? '' : 's'}` : 'PO updated');
@@ -796,7 +802,7 @@ function LeadDetailModal({ lead, initialTab, onClose }) {
           [...warehouseUsers(users), ...dispatchNotifyUsers(users)].forEach(u => {
             const key = u.displayName || u.email;
             if (!key || key === me) return;
-            createNotification({ forUser: key, title: `${me} added ${added} new material${added === 1 ? '' : 's'} — please verify`, message: `${me} added ${added} new material${added === 1 ? '' : 's'} to PO ${data.poNumber || ''} for "${lead.name}" after Stock OK: ${names}. Please verify their stock availability — they appear below the items already verified, which are unchanged — then press Stock OK again.`, type: 'status_update', module: 'leadPOs', relatedId: poId });
+            createNotification({ forUser: key, title: `${me} added ${added} new material${added === 1 ? '' : 's'} — please verify`, message: `${me} added ${added} new material${added === 1 ? '' : 's'} to PO ${data.poNumber || ''} for "${lead.name}" after Stock OK: ${names}. Please verify their stock availability — the items already verified keep their marks — then press Stock OK again.`, type: 'status_update', module: 'leadPOs', relatedId: poId });
           });
         }
       } else {

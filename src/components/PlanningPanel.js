@@ -49,8 +49,8 @@ function SlotRow({ row, editable, onChange, onPostpone }) {
                   onChange={e => onChange({ ...row, text: e.target.value })} />)
           : <div style={{ fontSize: '.88rem', color: row.text ? 'var(--txt)' : 'var(--light)', padding: '9px 0', whiteSpace: 'pre-wrap' }}>{row.text || '—'}</div>}
 
-        {/* Nothing to report on until something is planned. */}
-        {row.text && (
+        {/* Nothing to report on until something is planned (spaces alone are nothing). */}
+        {row.text.trim() && (
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
             {editable ? (
               <>
@@ -210,7 +210,7 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact,
     const next = override || slots;
     // A slot that says it was not done, or moved, has to say why or where.
     for (const row of allSlotRows(next)) {
-      if (!row.text) continue;
+      if (!row.text.trim()) continue;        // an empty slot, spaces included
       const problem = validateSlot(row);
       if (problem) { toast(`${row.label}: ${problem}`, 'er'); return null; }
     }
@@ -280,6 +280,7 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact,
   // up there instead of only being marked as gone from here.
   const confirmPostpone = async (toDate, toSlotKey, reason) => {
     const row = postponing;
+    if (toDate === date) { toast('Choose another day to move this work to', 'er'); return; }
     setPostponing(null);
     const updated = postponeSlot(row, toDate, toSlotKey, reason);
     const next = { ...slots, [row.key]: updated };

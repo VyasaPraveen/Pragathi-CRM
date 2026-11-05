@@ -186,13 +186,15 @@ export function deliveryFromDispatch(po) {
   if (!po || !po.dispatchConfirmedAt) return null;
   return {
     fields: {
-      dcNumber: po.dcNumber || po.challanNumber || po.poNumber || '',
+      dcNumber: po.dcNumber || po.challanNumber || '',
       managerApproved: true,
       finalDcSubmitted: true,
       dispatchConfirmedAt: po.dispatchConfirmedAt,
       dispatchConfirmedBy: po.dispatchConfirmedBy || '',
       poNumber: po.poNumber || '',
     },
+    // The PO number stands in for the DC No only while nobody has typed one.
+    defaults: { dcNumber: po.poNumber || '' },
     complete: true,
   };
 }
@@ -224,9 +226,11 @@ export function finalPaymentFromPayment(customer) {
   return {
     fields: {
       finalPaymentAmount: p.paid,
-      finalPaymentDate: customer.finalPaymentDate || customer.finalAmountDate || todayStr(),
+      finalPaymentDate: customer.finalPaymentDate || customer.finalAmountDate || '',
       balanceCleared: true,
     },
+    // Dated the day it was first seen as fully paid; never moved by a later save (5-Nov QC).
+    defaults: { finalPaymentDate: todayStr() },
     complete: true,
   };
 }
@@ -236,10 +240,17 @@ export function finalPaymentFromPayment(customer) {
 // The stage record after an automation has written to it. What was already on
 // the stage stays (a photo someone added by hand, a note); the source's fields
 // go on top; a tick already given is never taken away.
+const blank = (v) => v === undefined || v === null || v === '';
 export function autoRecord(customer, key, update, source, by) {
   const prev = ((customer && customer.workflow && customer.workflow.stages) || {})[key] || {};
   const now = new Date().toISOString();
-  const rec = { ...prev, ...update.fields, syncedFrom: source, syncedAt: now, updatedAt: now };
+  // A source field that is empty never blanks what somebody typed on the stage
+  // (a DC number, a registration number); `defaults` fill a field only while
+  // it has nothing at all (5-Nov QC).
+  const fields = {};
+  Object.entries(update.fields || {}).forEach(([k, v]) => { if (!(blank(v) && !blank(prev[k]))) fields[k] = v; });
+  const rec = { ...prev, ...fields, syncedFrom: source, syncedAt: now, updatedAt: now };
+  Object.entries(update.defaults || {}).forEach(([k, v]) => { if (blank(rec[k])) rec[k] = v; });
   if (update.complete) {
     rec.status = 'completed';
     rec.completedAt = prev.status === 'completed' && prev.completedAt ? prev.completedAt : now;

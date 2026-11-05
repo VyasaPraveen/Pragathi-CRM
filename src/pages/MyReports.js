@@ -98,7 +98,7 @@ export default function MyReports() {
       </div>
       <div className="sg" style={{ marginTop: 4 }}>
         <StatCard color="or" icon="event_note" value={leaveCounted} label="Leave Counted (Approved)" />
-        <StatCard color="bl" icon="event_note" value={`${plan.completed}/${plan.planned}`} label="Planned Work Completed" />
+        <StatCard color="bl" icon="event_note" value={`${plan.completed + (plan.preCompleted || 0)}/${plan.planned}`} label="Planned Work Completed" />
         <StatCard color="or" icon="pending_actions" value={outstanding.length} label="Work Still Outstanding" />
       </div>
 

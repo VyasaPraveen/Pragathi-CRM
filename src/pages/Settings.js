@@ -211,13 +211,24 @@ export default function Settings() {
     setPerms(p);
   };
 
+  // What is saved for a person (5-Nov QC): their existing permission record is
+  // kept - the Customer & Workflow Access (customerTabs / customerStages) lives
+  // in the same record and used to be wiped by this Save - and a switch that
+  // simply matches the role default is stored as unset, so a later change of
+  // role brings that role's defaults with it.
+  const permissionsToSave = (u, p) => {
+    const out = { ...((u && u.permissions) || {}) };
+    PERMISSION_MODULES.forEach(m => { out[m.key] = p[m.key] === defaultModuleAllowed(u.role, m.key) ? null : !!p[m.key]; });
+    return out;
+  };
   const savePermissions = async () => {
     if (!selectedUser) return;
     setSaving(true);
     try {
-      await apiPatch('/auth/users/' + selectedUser.id, { permissions: perms });
-      setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, permissions: perms } : u));
-      setSelectedUser(prev => ({ ...prev, permissions: perms }));
+      const saved = permissionsToSave(selectedUser, perms);
+      await apiPatch('/auth/users/' + selectedUser.id, { permissions: saved });
+      setUsers(prev => prev.map(u => u.id === selectedUser.id ? { ...u, permissions: saved } : u));
+      setSelectedUser(prev => ({ ...prev, permissions: saved }));
       toast('Permissions saved');
     } catch (err) {
       toast('Failed to save: ' + err.message, 'er');
@@ -368,10 +379,13 @@ export default function Settings() {
     if (!window.confirm(`Apply current permissions to ${bulkSelected.length} user(s)?`)) return;
     setSaving(true);
     try {
+      const savedFor = {};
       for (const uid of bulkSelected) {
-        await apiPatch('/auth/users/' + uid, { permissions: perms });
+        const target = users.find(u => u.id === uid) || { id: uid };
+        savedFor[uid] = permissionsToSave(target, perms);
+        await apiPatch('/auth/users/' + uid, { permissions: savedFor[uid] });
       }
-      setUsers(prev => prev.map(u => bulkSelected.includes(u.id) ? { ...u, permissions: perms } : u));
+      setUsers(prev => prev.map(u => bulkSelected.includes(u.id) ? { ...u, permissions: savedFor[u.id] } : u));
       setBulkSelected([]);
       setBulkMode(false);
       toast(`Permissions applied to ${bulkSelected.length} user(s)`);

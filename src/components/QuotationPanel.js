@@ -848,6 +848,9 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
   // Req 13 (4-Nov): the quotation and referral numbers are the Owner's to change.
   const { role: formRole } = useAuth();
   const numbersEditable = formRole === 'super_admin';
+  // The quotation number is fixed once the quotation exists (the server keeps
+  // it the same across revisions); the Owner sets it only on a new one (5-Nov QC).
+  const quoteNoEditable = numbersEditable && form.mode === 'new';
   const quoteTemplates = (allTemplates || []).filter(t => t && t.kind === 'quotation');
   const [tplSaving, setTplSaving] = useState(false);
   const saveTemplate = async () => {
@@ -890,7 +893,7 @@ function QuotationForm({ form, lead, leads, customers, busy, onSave, onClose }) 
       <form onSubmit={e => { e.preventDefault(); if (!busy) onSave(f); }}>
         <div className="mb">
           <div className="fr3">
-            <div className="fg"><label>Quotation No.{numbersEditable && <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}> (Owner may edit)</span>}</label><input className="fi" value={f.quotationNumber} readOnly={!numbersEditable} onChange={e => set('quotationNumber', e.target.value)} style={numbersEditable ? {} : { background: '#f5f6f8' }} title={numbersEditable ? 'The next number follows Settings → Numbering; correct it here if needed' : 'Only the Owner can change the number'} /></div>
+            <div className="fg"><label>Quotation No.{quoteNoEditable && <span style={{ fontSize: '.72rem', color: 'var(--muted)', fontWeight: 400 }}> (Owner may edit)</span>}</label><input className="fi" value={f.quotationNumber} readOnly={!quoteNoEditable} onChange={e => set('quotationNumber', e.target.value)} style={quoteNoEditable ? {} : { background: '#f5f6f8' }} title={quoteNoEditable ? 'The next number follows Settings → Numbering; correct it here if needed' : form.mode === 'new' ? 'Only the Owner can change the number' : 'The quotation number stays the same across revisions'} /></div>
             <div className="fg"><label>Revision</label><input className="fi" value={f.revision > 0 ? `R${f.revision}` : 'Original'} readOnly style={{ background: '#f5f6f8' }} /></div>
             <div className="fg"><label>Date</label><DateInput value={f.date} onChange={e => set('date', e.target.value)} /></div>
           </div>

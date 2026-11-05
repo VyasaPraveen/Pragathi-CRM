@@ -102,7 +102,9 @@ export function canSeeCustomer(customer, lead, user, role, users, team, settings
 export function canEditCustomer(customer, lead, user, role, users, settings) {
   const r = normalizeRole(role);
   if (isOwnerRole(r) || hasAccess(r, 'coordinator')) return true;
-  return assignedLeadAccess(settings) === 'edit' && isSalesContact(customer, lead, user, users);
+  // The customer's sales contact - and whoever added the customer by hand
+  // with the Owner's Add Customers switch (5-Nov QC), as with leads.
+  return assignedLeadAccess(settings) === 'edit' && (isSalesContact(customer, lead, user, users) || isMine(customer && customer.createdBy, user));
 }
 
 const explicit = (user, bag, key) => {

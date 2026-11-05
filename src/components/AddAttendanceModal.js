@@ -86,7 +86,7 @@ export default function AddAttendanceModal({ users, attendance, initial, presetE
           <div className="fr">
             <div className="fg"><label>Attendance date *</label><DateInput value={f.date} max={todayStr()} onChange={e => set('date', e.target.value)} required /></div>
             <div className="fg"><label>Status *</label>
-              <select className="fi" value={f.status} onChange={e => set('status', e.target.value)}>
+              <select className="fi" value={f.status} onChange={e => setF(p => ({ ...p, status: e.target.value, hours: e.target.value === 'Absent' ? '' : p.hours }))}>
                 {MANUAL_STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>

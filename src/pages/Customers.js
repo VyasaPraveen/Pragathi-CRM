@@ -99,7 +99,7 @@ export default function Customers() {
       if (id) {
         const prevCustomer = customers.find(c => c.id === id);
         // The Payment tab completes Stage 7 (90% received, PO approved) and
-        // Stage 13 (the full agreed price) by itself (Req 1.11, 1.17).
+        // Stage 14 (the full agreed price) by itself (Req 1.11, 1.17).
         const auto = customerSavePatch({ ...(prevCustomer || {}), ...cleaned, id }, { leads, leadPOs, installations, bcoOps, by: meName });
         await updateDocument('customers', id, { ...cleaned, ...auto });
         toast('Customer updated');
@@ -458,12 +458,12 @@ function CustomerModal({ data, id, onSave, onClose }) {
               )}
 
               {/* Where the payments stand against the agreed price: 90% releases
-                  the material (Stage 7), the full amount completes Stage 13. */}
+                  the material (Stage 7), the full amount completes Stage 14. */}
               {id && payProgress.agreed > 0 && (
                 <div style={{ fontSize: '.78rem', marginBottom: 10, color: payProgress.fullyPaid ? 'var(--ok)' : payProgress.releaseReached ? '#10b981' : 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span className="material-icons-round" style={{ fontSize: 16 }}>{payProgress.fullyPaid ? 'task_alt' : payProgress.releaseReached ? 'local_shipping' : 'hourglass_empty'}</span>
                   {payProgress.percent}% of the agreed price received
-                  {payProgress.fullyPaid ? ' — fully paid; Stage 13 Final Payment completes on save.' : payProgress.releaseReached ? ' — 90% reached; Stage 7 Material Delivery Request completes on save once a PO is approved.' : ` — ${90 - payProgress.percent}% more releases the material (Stage 7).`}
+                  {payProgress.fullyPaid ? ' — fully paid; Stage 14 Final Payment completes on save.' : payProgress.releaseReached ? ' — 90% reached; Stage 7 Material Delivery Request completes on save once a PO is approved.' : ` — ${90 - payProgress.percent}% more releases the material (Stage 7).`}
                 </div>
               )}
               {/* Live balance summary */}
@@ -654,7 +654,10 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
   const { toast } = useToast();
   const leadById = leads.find(l => l.id === customer.leadId) || null;
   const canEdit = canEditCustomer(customer, leadById, user, role, users, settings);
+  // The Installation tab follows the person's tab access too (5-Nov QC): a
+  // 'View only' setting from the Owner means no edits and no Save here.
   const detailCtx = { customer, lead: leadById, user, role, users, settings };
+  const instEdit = canEdit && tabAccess('installation', detailCtx) === ACCESS.EDIT;
   const meName = user?.displayName || user?.email || '';
 
   const blankInst = { customerName: customer.name, phone: customer.phone, address: customer.address || '',
@@ -930,27 +933,27 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
             <form onSubmit={handleInstSave}>
               <SectionTitle>Site & Roof</SectionTitle>
               <div className="fr">
-                <div className="fg"><label>Site Visit Status</label><select className="fi" value={instF.siteVisitStatus} onChange={e => setIF('siteVisitStatus', e.target.value)} disabled={!canEdit}><option>Not Visited</option><option>Visited</option></select></div>
-                <div className="fg"><label>Roof Type</label><select className="fi" value={instF.roofType} onChange={e => setIF('roofType', e.target.value)} disabled={!canEdit}><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div>
+                <div className="fg"><label>Site Visit Status</label><select className="fi" value={instF.siteVisitStatus} onChange={e => setIF('siteVisitStatus', e.target.value)} disabled={!instEdit}><option>Not Visited</option><option>Visited</option></select></div>
+                <div className="fg"><label>Roof Type</label><select className="fi" value={instF.roofType} onChange={e => setIF('roofType', e.target.value)} disabled={!instEdit}><option>RCC</option><option>Sheet</option><option>Tile</option><option>Elevated</option></select></div>
               </div>
               <div className="fr">
-                <div className="fg"><label>Floors</label><input type="number" className="fi" value={instF.floors} onChange={e => setIF('floors', e.target.value)} disabled={!canEdit} /></div>
-                <div className="fg"><label>Structure</label><select className="fi" value={instF.structureType} onChange={e => setIF('structureType', e.target.value)} disabled={!canEdit}><option>Flat</option><option>Sloped</option></select></div>
+                <div className="fg"><label>Floors</label><input type="number" className="fi" value={instF.floors} onChange={e => setIF('floors', e.target.value)} disabled={!instEdit} /></div>
+                <div className="fg"><label>Structure</label><select className="fi" value={instF.structureType} onChange={e => setIF('structureType', e.target.value)} disabled={!instEdit}><option>Flat</option><option>Sloped</option></select></div>
               </div>
 
               <SectionTitle>Schedule & Team</SectionTitle>
               <div className="fr3">
-                <div className="fg"><label>Start Date</label><input type="date" className="fi" value={instF.startDate} onChange={e => setIF('startDate', e.target.value)} disabled={!canEdit} /></div>
-                <div className="fg"><label>Total Days</label><input type="number" className="fi" value={instF.totalDays} onChange={e => setIF('totalDays', e.target.value)} disabled={!canEdit} /></div>
-                <div className="fg"><label>Team Leader</label><select className="fi" value={instF.teamLeader} onChange={e => setIF('teamLeader', e.target.value)} disabled={!canEdit}><option value="">-- Select --</option>{users.filter(u => u.displayName).map(u => <option key={u.id} value={u.displayName}>{u.displayName}</option>)}</select></div>
+                <div className="fg"><label>Start Date</label><input type="date" className="fi" value={instF.startDate} onChange={e => setIF('startDate', e.target.value)} disabled={!instEdit} /></div>
+                <div className="fg"><label>Total Days</label><input type="number" className="fi" value={instF.totalDays} onChange={e => setIF('totalDays', e.target.value)} disabled={!instEdit} /></div>
+                <div className="fg"><label>Team Leader</label><select className="fi" value={instF.teamLeader} onChange={e => setIF('teamLeader', e.target.value)} disabled={!instEdit}><option value="">-- Select --</option>{users.filter(u => u.displayName).map(u => <option key={u.id} value={u.displayName}>{u.displayName}</option>)}</select></div>
               </div>
               <div className="fr3">
-                <div className="fg"><label>Team Size</label><input type="number" className="fi" value={instF.numPeople} onChange={e => setIF('numPeople', e.target.value)} disabled={!canEdit} /></div>
-                <div className="fg"><label>Material Dispatched</label><select className="fi" value={instF.materialDispatched} onChange={e => setIF('materialDispatched', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></div>
-                <div className="fg"><label>Guarantee Card</label><select className="fi" value={instF.guaranteeCard} onChange={e => setIF('guaranteeCard', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></div>
+                <div className="fg"><label>Team Size</label><input type="number" className="fi" value={instF.numPeople} onChange={e => setIF('numPeople', e.target.value)} disabled={!instEdit} /></div>
+                <div className="fg"><label>Material Dispatched</label><select className="fi" value={instF.materialDispatched} onChange={e => setIF('materialDispatched', e.target.value)} disabled={!instEdit}><option>No</option><option>Yes</option></select></div>
+                <div className="fg"><label>Guarantee Card</label><select className="fi" value={instF.guaranteeCard} onChange={e => setIF('guaranteeCard', e.target.value)} disabled={!instEdit}><option>No</option><option>Yes</option></select></div>
               </div>
               <div className="fr">
-                <div className="fg"><label>Quality Inspection</label><select className="fi" value={instF.qualityInspection} onChange={e => setIF('qualityInspection', e.target.value)} disabled={!canEdit}><option>Pending</option><option>Done</option><option>Approved</option></select></div>
+                <div className="fg"><label>Quality Inspection</label><select className="fi" value={instF.qualityInspection} onChange={e => setIF('qualityInspection', e.target.value)} disabled={!instEdit}><option>Pending</option><option>Done</option><option>Approved</option></select></div>
               </div>
 
               <SectionTitle>DISCOM & Subsidy</SectionTitle>
@@ -963,33 +966,33 @@ function CustomerDetailModal({ customer, onClose, onEdit }) {
                 { label: 'Subsidy',             key: 'subsidyStatus',     dateKey: 'subsidyDate',           opts: ['Not Applied','Pending','Approved','Released'] },
               ].map(row => (
                 <div className="fr" key={row.key}>
-                  <div className="fg"><label>{row.label}</label><select className="fi" value={instF[row.key]} onChange={e => setIF(row.key, e.target.value)} disabled={!canEdit}>{row.opts.map(o => <option key={o}>{o}</option>)}</select></div>
-                  <div className="fg"><label>Date</label><input type="date" className="fi" value={instF[row.dateKey]} onChange={e => setIF(row.dateKey, e.target.value)} disabled={!canEdit} /></div>
+                  <div className="fg"><label>{row.label}</label><select className="fi" value={instF[row.key]} onChange={e => setIF(row.key, e.target.value)} disabled={!instEdit}>{row.opts.map(o => <option key={o}>{o}</option>)}</select></div>
+                  <div className="fg"><label>Date</label><input type="date" className="fi" value={instF[row.dateKey]} onChange={e => setIF(row.dateKey, e.target.value)} disabled={!instEdit} /></div>
                 </div>
               ))}
 
               <SectionTitle>Material Consumption</SectionTitle>
-              <div className="fr"><div className="fg"><label>AC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.acCableQty} onChange={e => setIF('acCableQty', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>AC Cable Size (mm)</label><input className="fi" value={instF.acCableSize} onChange={e => setIF('acCableSize', e.target.value)} placeholder="e.g. 4mm" disabled={!canEdit} /></div></div>
-              <div className="fr"><div className="fg"><label>DC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.dcCableQty} onChange={e => setIF('dcCableQty', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>DC Cable Size (mm)</label><input className="fi" value={instF.dcCableSize} onChange={e => setIF('dcCableSize', e.target.value)} placeholder="e.g. 6mm" disabled={!canEdit} /></div></div>
-              <div className="fr"><div className="fg"><label>Earth Cable (mtrs)</label><input type="number" className="fi" value={instF.earthCable} onChange={e => setIF('earthCable', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>Earth Cable Size (mm)</label><input className="fi" value={instF.earthCableSize} onChange={e => setIF('earthCableSize', e.target.value)} placeholder="e.g. 4mm" disabled={!canEdit} /></div></div>
-              <div className="fr"><div className="fg"><label>UPVC Pipes (pcs)</label><input type="number" className="fi" value={instF.upvcPipes} onChange={e => setIF('upvcPipes', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>UPVC Pipe Size (mm)</label><input className="fi" value={instF.upvcPipeSize} onChange={e => setIF('upvcPipeSize', e.target.value)} placeholder="e.g. 25mm" disabled={!canEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>AC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.acCableQty} onChange={e => setIF('acCableQty', e.target.value)} disabled={!instEdit} /></div><div className="fg"><label>AC Cable Size (mm)</label><input className="fi" value={instF.acCableSize} onChange={e => setIF('acCableSize', e.target.value)} placeholder="e.g. 4mm" disabled={!instEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>DC Cable Qty (mtrs)</label><input type="number" className="fi" value={instF.dcCableQty} onChange={e => setIF('dcCableQty', e.target.value)} disabled={!instEdit} /></div><div className="fg"><label>DC Cable Size (mm)</label><input className="fi" value={instF.dcCableSize} onChange={e => setIF('dcCableSize', e.target.value)} placeholder="e.g. 6mm" disabled={!instEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>Earth Cable (mtrs)</label><input type="number" className="fi" value={instF.earthCable} onChange={e => setIF('earthCable', e.target.value)} disabled={!instEdit} /></div><div className="fg"><label>Earth Cable Size (mm)</label><input className="fi" value={instF.earthCableSize} onChange={e => setIF('earthCableSize', e.target.value)} placeholder="e.g. 4mm" disabled={!instEdit} /></div></div>
+              <div className="fr"><div className="fg"><label>UPVC Pipes (pcs)</label><input type="number" className="fi" value={instF.upvcPipes} onChange={e => setIF('upvcPipes', e.target.value)} disabled={!instEdit} /></div><div className="fg"><label>UPVC Pipe Size (mm)</label><input className="fi" value={instF.upvcPipeSize} onChange={e => setIF('upvcPipeSize', e.target.value)} placeholder="e.g. 25mm" disabled={!instEdit} /></div></div>
 
               <SectionTitle>Service Dates</SectionTitle>
               <div className="fr">
-                <div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={instF.firstServiceDate} onChange={e => setIF('firstServiceDate', e.target.value)} disabled={!canEdit} /></div>
-                <div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={instF.nextServiceDate} onChange={e => setIF('nextServiceDate', e.target.value)} disabled={!canEdit} /></div>
+                <div className="fg"><label>1st Service Date</label><input type="date" className="fi" value={instF.firstServiceDate} onChange={e => setIF('firstServiceDate', e.target.value)} disabled={!instEdit} /></div>
+                <div className="fg"><label>Next Service Date</label><input type="date" className="fi" value={instF.nextServiceDate} onChange={e => setIF('nextServiceDate', e.target.value)} disabled={!instEdit} /></div>
               </div>
 
               <SectionTitle>Documents</SectionTitle>
-              <div className="fg"><label>Hand Sketch URL (with Signature)</label><input className="fi" type="url" value={instF.handSketch} onChange={e => setIF('handSketch', e.target.value)} placeholder="https://..." disabled={!canEdit} /></div>
+              <div className="fg"><label>Hand Sketch URL (with Signature)</label><input className="fi" type="url" value={instF.handSketch} onChange={e => setIF('handSketch', e.target.value)} placeholder="https://..." disabled={!instEdit} /></div>
               {instF.handSketch && <img src={instF.handSketch} alt="Hand Sketch" style={{ width: '100%', maxHeight: 200, objectFit: 'contain', borderRadius: 8, border: '1px solid var(--bor)', marginBottom: 8 }} onError={e => { e.target.style.display = 'none'; }} />}
-              <div className="fg"><label>Installation Report / Notes</label><textarea className="fi" value={instF.installationReport} onChange={e => setIF('installationReport', e.target.value)} rows="4" placeholder="Enter installation report details..." disabled={!canEdit} /></div>
+              <div className="fg"><label>Installation Report / Notes</label><textarea className="fi" value={instF.installationReport} onChange={e => setIF('installationReport', e.target.value)} rows="4" placeholder="Enter installation report details..." disabled={!instEdit} /></div>
 
               <SectionTitle>Customer Reference</SectionTitle>
-              <div className="fg"><label>Has Reference?</label><select className="fi" value={instF.customerReference} onChange={e => setIF('customerReference', e.target.value)} disabled={!canEdit}><option>No</option><option>Yes</option></select></div>
-              {instF.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={instF.referenceLeadName} onChange={e => setIF('referenceLeadName', e.target.value)} disabled={!canEdit} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={instF.referencePhoneNumber} onChange={e => setIF('referencePhoneNumber', e.target.value)} disabled={!canEdit} /></div></div>}
+              <div className="fg"><label>Has Reference?</label><select className="fi" value={instF.customerReference} onChange={e => setIF('customerReference', e.target.value)} disabled={!instEdit}><option>No</option><option>Yes</option></select></div>
+              {instF.customerReference === 'Yes' && <div className="fr"><div className="fg"><label>Reference Lead Name</label><input className="fi" value={instF.referenceLeadName} onChange={e => setIF('referenceLeadName', e.target.value)} disabled={!instEdit} /></div><div className="fg"><label>Reference Phone</label><input className="fi" value={instF.referencePhoneNumber} onChange={e => setIF('referencePhoneNumber', e.target.value)} disabled={!instEdit} /></div></div>}
 
-              {canEdit && (
+              {instEdit && (
                 <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
                   <button type="submit" className="btn bp" disabled={instSaving}>
                     <span className="material-icons-round" style={{ fontSize: 16 }}>{inst?.id ? 'save' : 'add'}</span>

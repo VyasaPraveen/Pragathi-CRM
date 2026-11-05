@@ -168,7 +168,7 @@ export default function Revenue() {
 
 function RevenueModal({ type, data, id, onSave, onClose }) {
   const [f, setF] = useState({
-    desc: (data && data.desc) || '',
+    desc: (data && (data.desc || data.description)) || '',
     amount: (data && data.amount) || '',
     date: (data && data.date) || todayStr(),
     category: (data && data.category) || ''
