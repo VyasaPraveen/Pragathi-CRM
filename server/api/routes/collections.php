@@ -52,8 +52,8 @@ function handle_collections(string $collection, string $id, string $method): voi
 
   // ── CREATE ──
   if ($method === 'POST' && $id === '') {
-    enforce_create($collection, $claims);
     $data = body();
+    enforce_create($collection, $claims, $data);
     unset($data['id'], $data['createdAt'], $data['updatedAt']);
     if ($collection === 'materials') enforce_materials_write('POST', $claims, $data, []);
     if ($collection === 'leads') enforce_site_visit_photos($data, []);
@@ -702,7 +702,7 @@ function enforce_site_visit_photos(array $patch, array $existing): void {
 }
 
 // Who may CREATE in a given collection.
-function enforce_create(string $collection, array $claims): void {
+function enforce_create(string $collection, array $claims, array $data = []): void {
   $role = $claims['role'] ?? '';
   // A section switched off for this user (Settings -> Permission Management, or
   // the Technician role default) cannot be written to through the raw API either.
@@ -738,6 +738,12 @@ function enforce_create(string $collection, array $claims): void {
       break;
     case 'bcoOps':
       if (!bco_ops_editor($role)) fail(403, 'Only the BCO, the Operation Manager or an Admin can record BCO operations');
+      break;
+    // Req 1 (5-Nov): adding a customer is its own switch. A customer made by
+    // converting a lead (it carries the leadId) is the lead workflow, not an
+    // "Add Customer", and stays open to whoever may work the lead.
+    case 'customers':
+      if (empty($data['leadId']) && !may_module($claims, 'add_customer')) fail(403, 'You do not have permission to add customers');
       break;
     // Req 20 (4-Nov): adding to a section is its own switch in Permission Management.
     case 'materials':

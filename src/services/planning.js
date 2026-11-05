@@ -47,16 +47,22 @@ const str = (v) => (v == null ? '' : String(v));
 // Read a slot in whichever shape it was stored. A plan saved before any of
 // this existed is a bare string, and reads back as planned work with nothing
 // reported against it yet.
-export function readSlot(value) {
+//
+// `trim` is false only for the editor (Req 3, 5-Nov): the text is trimmed when
+// it is saved, summarised or validated, never while it is being typed -
+// trimming a controlled input on every keystroke ate the space the person had
+// just typed at the end of a word.
+export function readSlot(value, trim = true) {
+  const tidy = (v) => (trim ? str(v).trim() : str(v));
   if (value == null) return { text: '', status: SLOT_STATUS.PLANNED, reason: '', postponedDate: '', postponedSlot: '', updatedAt: '' };
   if (typeof value === 'string') {
-    return { text: value.trim(), status: SLOT_STATUS.PLANNED, reason: '', postponedDate: '', postponedSlot: '', updatedAt: '' };
+    return { text: tidy(value), status: SLOT_STATUS.PLANNED, reason: '', postponedDate: '', postponedSlot: '', updatedAt: '' };
   }
   const status = Object.values(SLOT_STATUS).includes(value.status) ? value.status : SLOT_STATUS.PLANNED;
   return {
-    text: str(value.text).trim(),
+    text: tidy(value.text),
     status,
-    reason: str(value.reason).trim(),
+    reason: tidy(value.reason),
     postponedDate: str(value.postponedDate).trim(),
     postponedSlot: str(value.postponedSlot).trim(),
     updatedAt: str(value.updatedAt),
@@ -98,8 +104,9 @@ export function planRows(slots) {
 }
 
 // Every slot in clock order, including the empty ones — what the editor shows.
+// The text is exactly as typed (see readSlot); it is trimmed when saved.
 export function allSlotRows(slots) {
-  return ALL_SLOTS.map(s => ({ key: s.key, label: s.label, ...readSlot((slots || {})[s.key]) }));
+  return ALL_SLOTS.map(s => ({ key: s.key, label: s.label, ...readSlot((slots || {})[s.key], false) }));
 }
 
 // How the day went.

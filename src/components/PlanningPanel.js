@@ -322,7 +322,7 @@ export default function PlanEditor({ date, employeeEmail, employeeName, compact,
           <span className={`st ${state.label === 'Draft' ? 'st-o' : 'st-x'}`} style={{ padding: '3px 10px' }}>{state.label}{state.unlocked ? ' · unlocked for correction' : ''}</span>
         )}
         {plan.sent && (
-          <span className="st st-b" style={{ padding: '3px 10px' }} data-plan="sent"><span className="material-icons-round" style={{ fontSize: 14 }}>send</span> Plan sent {plan.at ? formatDateTime(plan.at) : ''}{plan.by ? ' · ' + plan.by : ''}</span>
+          <span className="st st-b" style={{ padding: '3px 10px' }} data-plan="sent"><span className="material-icons-round" style={{ fontSize: 14 }}>send</span> Plan sent · for {formatDate(date)}{plan.at ? ' · submitted on ' + formatDateTime(plan.at) : ''}{plan.by ? ' · ' + plan.by : ''}</span>
         )}
         {dirty && editable && <span style={{ color: saveFailed ? '#c0392b' : '#d68910', fontWeight: 600 }}>{saveFailed ? 'Not saved — try again' : restored ? 'Unsaved changes restored from this device' : 'Unsaved changes'}</span>}
         {!dirty && !state.submitted && doc && editable && <span style={{ color: 'var(--muted)' }}>All changes saved</span>}

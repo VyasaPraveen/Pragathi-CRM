@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useData } from '../context/DataContext';
 import { useToast } from '../context/ToastContext';
 import { addDocument, updateDocument, deleteDocument, createNotification, notifyAdmins } from '../services/firestore';
-import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, shareWhatsApp, escapeHtml, hasAccess, makeCall, openHtmlSafely } from '../services/helpers';
+import { formatCurrency, formatDate, safeStr, toNumber, sendWhatsApp, shareWhatsApp, escapeHtml, makeCall, openHtmlSafely } from '../services/helpers';
 import { useAuth } from '../context/AuthContext';
 import { StatusBadge, Modal, EmptyState, DateFilter , SearchSelect } from '../components/SharedUI';
 import { DATE_FILTER_ALL, applyDateFilter } from '../services/dateFilter';
@@ -15,6 +15,7 @@ import { completedCount, TOTAL_STAGES } from '../services/workflow';
 import { CUSTOMER_TABS, ACCESS, tabLocked as tabLockedFor, tabAccess, canSeeCustomer, canEditCustomer } from '../services/customerAccess';
 import { customerSavePatch, syncInstallationToCustomer } from '../services/customerSync';
 import { paymentProgress } from '../services/customerWorkflow';
+import { hasModule } from '../services/permissions';
 
 const PAGE_SIZE = 20;
 const customerTypes = ['Residential', 'Commercial', 'Industrial', 'Other'];
@@ -32,9 +33,11 @@ export default function Customers() {
   const { customers, leadPOs, installations, leads, users, team, settings, bcoOps } = useData();
   const { role, user } = useAuth();
   const { toast } = useToast();
-  // Adding a customer stays with the coordinator level and up. Editing one is
-  // decided per customer: those roles, plus the customer's own sales contact.
-  const canEdit = hasAccess(role, 'coordinator');
+  // Adding a customer is its own switch in Permission Management (Req 1,
+  // 5-Nov), with the coordinator level as its default. Editing one is decided
+  // per customer (canEditC): the coordinator level, plus the customer's own
+  // sales contact.
+  const canAdd = hasModule(user, role, 'add_customer');
   const meName = user?.displayName || user?.email || '';
   const leadOf = (c) => (c.leadId && leads.find(l => l.id === c.leadId)) || null;
   const canEditC = (c) => canEditCustomer(c, leadOf(c), user, role, users, settings);
@@ -131,7 +134,7 @@ export default function Customers() {
               {areas.map(a => <option key={a} value={a}>{a}</option>)}
             </select>
           )}
-          {canEdit && <button className="btn bp bsm" onClick={() => setModal({ data: {} })}><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>}
+          {canAdd && <button className="btn bp bsm" onClick={() => setModal({ data: {} })} data-add="customer"><span className="material-icons-round" style={{ fontSize: 18 }}>add</span> Add Customer</button>}
         </div>
       </div>
       <div style={{ marginBottom: 12 }}><DateFilter value={dateFilter} onChange={setDateFilter} records={customers} fields={CUSTOMER_DATE_FIELDS} /></div>

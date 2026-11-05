@@ -87,18 +87,18 @@ export const WORKFLOW_STAGES = [
   ] },
 
   // Completed by itself once the full agreed price is in the Payment tab.
-  { sno: 13, key: 'finalPayment', title: 'Final Payment Collection', detail: 'Collect the final payment', team: 'Sales Team / Accounts', source: 'Customer Payment tab — the full agreed price', fields: [
-    { key: 'finalPaymentAmount', label: 'Final Payment Received (₹)', type: 'number', required: true, min: 1 },
-    { key: 'finalPaymentDate', label: 'Final Payment Date', type: 'date', required: true },
-    { key: 'balanceCleared', label: 'Full payment received (no balance pending)', type: 'checkbox', required: true },
-  ] },
-
-  { sno: 14, key: 'demo', title: 'DEMO', detail: 'System switch on · app install & demo · DISCOM import/export · flagging', team: 'Quality / Service / BCO', fields: [
+  { sno: 13, key: 'demo', title: 'DEMO', detail: 'System switch on · app install & demo · DISCOM import/export · flagging', team: 'Quality / Service / BCO', fields: [
     { key: 'systemSwitchOn', label: 'System switched ON', type: 'checkbox', required: true },
     { key: 'appInstalled', label: 'App installed & DEMO given', type: 'checkbox', required: true },
     { key: 'discomChecked', label: 'DISCOM site import/export verified', type: 'checkbox', required: true },
     { key: 'flaggingStatus', label: 'System Flagging', type: 'select', options: ['Pending', 'Done'], required: true, mustEqual: 'Done' },
     { key: 'demoPhotos', label: 'DEMO photos (optional)', type: 'photo' },
+  ] },
+
+  { sno: 14, key: 'finalPayment', title: 'Final Payment Collection', detail: 'Collect the final payment', team: 'Sales Team / Accounts', source: 'Customer Payment tab — the full agreed price', fields: [
+    { key: 'finalPaymentAmount', label: 'Final Payment Received (₹)', type: 'number', required: true, min: 1 },
+    { key: 'finalPaymentDate', label: 'Final Payment Date', type: 'date', required: true },
+    { key: 'balanceCleared', label: 'Full payment received (no balance pending)', type: 'checkbox', required: true },
   ] },
 
   { sno: 15, key: 'customerCare', title: 'Customer Care', detail: '1st bill check', team: 'Sales Team', fields: [

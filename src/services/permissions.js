@@ -493,6 +493,8 @@ export const PERMISSION_MODULES = [
   { key: 'dashboard', label: 'Dashboard', icon: 'dashboard', group: 'Main' },
   { key: 'leads', label: 'Leads', icon: 'leaderboard', group: 'Main' },
   { key: 'customers', label: 'Customers', icon: 'people', group: 'Main' },
+  // Req 1 (5-Nov): adding a customer is its own switch.
+  { key: 'add_customer', label: 'Add Customers', icon: 'person_add', group: 'Main', action: true },
   { key: 'tasks', label: 'Tasks', icon: 'task_alt', group: 'Main' },
   { key: 'my_reports', label: 'My Reports & Planning', icon: 'insights', group: 'Main' },
 
@@ -556,16 +558,24 @@ export const TEAM_LEADER_DEFAULT_MODULES = [
   'payment_requests',
 ];
 
-// The "add" switches (Req 20, 4-Nov) follow their section until the Admin sets
-// them: whoever may open Materials may add a material, and so on. The role
-// gates the screens already apply (a manager adds materials and projects, a
-// coordinator creates tasks) stay on top of these. Mirrors lib.php.
-export const ADD_PERMISSION_PARENT = { add_materials: 'materials', add_project: 'ongoing_work', new_task: 'tasks', add_reminder: 'reminders' };
+// The "add" switches (Req 20, 4-Nov; Req 1, 5-Nov). Until the Owner sets one
+// for a person it follows the role floor the screen always applied - a
+// manager adds materials and projects, the coordinator level adds customers
+// and creates tasks - AND the person's access to the section. Once the Owner
+// ticks it, the grant is the answer: a Sales Executive given "New Task" gets
+// the New Task button, whatever the role floor says. (Before 5-Nov the screens
+// checked the floor on top of the switch, so the Owner's tick did nothing for
+// anyone below it.) Mirrors lib.php.
+export const ADD_PERMISSION_PARENT = { add_customer: 'customers', add_materials: 'materials', add_project: 'ongoing_work', new_task: 'tasks', add_reminder: 'reminders' };
+export const ADD_PERMISSION_FLOOR = { add_customer: 'coordinator', add_materials: 'manager', add_project: 'manager', new_task: 'coordinator' };
 
 export function defaultModuleAllowed(role, key) {
   const r = normalizeRole(role);
   if (key === 'new_po') return can(r, ACTIONS.PO_RECORD);
-  if (ADD_PERMISSION_PARENT[key]) return defaultModuleAllowed(r, ADD_PERMISSION_PARENT[key]);
+  if (ADD_PERMISSION_PARENT[key]) {
+    if (ADD_PERMISSION_FLOOR[key] && !hasAccess(r, ADD_PERMISSION_FLOOR[key])) return false;
+    return defaultModuleAllowed(r, ADD_PERMISSION_PARENT[key]);
+  }
   // Adding and editing installations (R6.3, 8-Oct) is a manager-level job by
   // default; an Admin grants it to an individual (P. Ganesh) in Settings →
   // Permission Management. Mirrors default_module_allowed() in lib.php.

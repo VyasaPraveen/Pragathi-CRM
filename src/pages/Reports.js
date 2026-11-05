@@ -109,9 +109,10 @@ function DailyPlanning() {
   const exportPlans = () => {
     const docs = docsFor();
     if (!docs.length) { window.alert(`No plans sent for ${label}.`); return; }
-    const headers = ['Employee', 'Email', 'Plan Date', 'Plan Sent At', 'Time Slot', 'Planned Work', 'Status'];
+    // Req 4 (5-Nov): the day the plan is FOR and the day it was actually SUBMITTED, side by side.
+    const headers = ['Employee', 'Email', 'Plan For', 'Submitted On', 'Submission Status', 'Time Slot', 'Planned Work', 'Status'];
     const rows = [];
-    docs.forEach(d => planExportRows(d).forEach(r => rows.push([r.employee, r.email, formatDate(r.date), r.sentAt ? formatDateTime(r.sentAt) : '', r.slot, r.text, r.status])));
+    docs.forEach(d => planExportRows(d).forEach(r => rows.push([r.employee, r.email, formatDate(r.date), r.sentAt ? formatDateTime(r.sentAt) : '', 'Submitted', r.slot, r.text, r.status])));
     downloadCSV('PPS_Daily_Planning_' + (view === 'day' ? date : month) + '.csv', headers, rows);
   };
   const printPlans = () => {
@@ -119,7 +120,7 @@ function DailyPlanning() {
     if (!docs.length) { window.alert(`No plans sent for ${label}.`); return; }
     const e = escapeHtml;
     const byEmployee = docs.map(d => `
-      <div class="emp"><h2>${e(d.employeeName || d.employeeEmail)} <span>${e(formatDate(d.date))}${d.planSentAt ? ' · sent ' + e(formatDateTime(d.planSentAt)) : ''}</span></h2>
+      <div class="emp"><h2>${e(d.employeeName || d.employeeEmail)} <span>Plan for ${e(formatDate(d.date))}${d.planSentAt ? ' · submitted on ' + e(formatDateTime(d.planSentAt)) : ''}</span></h2>
       <table><thead><tr><th style="width:170px">Time slot</th><th>Planned work</th><th style="width:110px">Status</th></tr></thead><tbody>
       ${planExportRows(d).map(r => `<tr><td>${e(r.slot)}</td><td>${e(r.text)}</td><td>${e(r.status)}</td></tr>`).join('')}
       </tbody></table></div>`).join('');
@@ -146,14 +147,14 @@ function DailyPlanning() {
       <div className="cb" style={{ padding: 0 }}>
         {view === 'day' ? (
           <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
-            <thead><tr><th>Employee</th><th>Plan date</th><th>Status</th><th>Sent at</th><th>Slots</th><th>Report</th></tr></thead>
+            <thead><tr><th>Employee</th><th>Plan for</th><th>Submitted on</th><th>Submission status</th><th>Slots</th><th>Report</th></tr></thead>
             <tbody>
               {roll.map(r => (
                 <tr key={r.email}>
                   <td className="m-h"><strong>{r.name}</strong>{r.designation && <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{r.designation}</div>}</td>
-                  <td data-l="Plan date" style={{ whiteSpace: 'nowrap' }}>{formatDate(date)}</td>
-                  <td data-l="Status"><span className={`st ${r.sent ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.sent ? 'Plan sent' : r.label === 'Draft' ? 'Draft / not sent' : 'Not submitted'}</span></td>
-                  <td data-l="Sent at" style={{ fontSize: '.8rem' }}>{r.sent && r.at ? formatDateTime(r.at) : '-'}</td>
+                  <td data-l="Plan for" style={{ whiteSpace: 'nowrap' }}>{formatDate(date)}</td>
+                  <td data-l="Submitted on" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{r.sent && r.at ? formatDateTime(r.at) : '-'}</td>
+                  <td data-l="Submission status"><span className={`st ${r.sent ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.sent ? 'Submitted' : r.label === 'Draft' ? 'Draft / not submitted' : 'Not submitted'}</span></td>
                   <td data-l="Slots">{r.slots || '-'}</td>
                   <td data-l="Report" style={{ fontSize: '.78rem' }}>{r.doc && r.doc.submitted ? <span className="st st-g" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Reported</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
                 </tr>
@@ -182,7 +183,7 @@ function DailyPlanning() {
           </table></div>
         )}
         <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: 0, padding: '10px 16px' }}>
-          {view === 'day' ? `${sent} of ${roll.length} sent their plan for ${formatDate(date)}.` : `${monthDocs.length} plans sent in ${label}.`} The CSV and the printout carry sent plans only. The reminder goes out at 5:30 PM to anyone whose plan is still pending; plans are due by 6:30 PM.
+          {view === 'day' ? `${sent} of ${roll.length} submitted their plan for ${formatDate(date)}. "Plan for" is the day the plan covers; "Submitted on" is when it was actually sent.` : `${monthDocs.length} plans sent in ${label}.`} The CSV and the printout carry sent plans only. The reminder goes out at 5:30 PM to anyone whose plan is still pending; plans are due by 6:30 PM.
         </p>
       </div>
     </div>

@@ -11,7 +11,8 @@
 //   Stage 8  Delivery Approvals     ← the Operation Manager's Confirm Dispatch
 //   Stage 9  Team Allotment         ← Installations → New Installation
 //   Stage 12 DISCOM Followup        ← BCO Operations, Stage 5 (Net Meter Processing)
-//   Stage 13 Final Payment          ← the Payment tab: the full agreed price
+//   Stage 14 Final Payment          ← the Payment tab: the full agreed price
+//   (Stage 13 is the DEMO - Req 2, 5-Nov: 12 DISCOM, 13 DEMO, 14 Final Payment)
 //
 // Everything here is pure: given the records, it says what the customer's
 // workflow should now hold. customerSync.js does the writing.
@@ -214,7 +215,7 @@ export function allotmentFromInstallation(inst) {
   };
 }
 
-// The Payment tab → Final Payment Collection (Stage 13): the FULL agreed
+// The Payment tab → Final Payment Collection (Stage 14): the FULL agreed
 // price. A part payment never completes it.
 export function finalPaymentFromPayment(customer) {
   if (!customer) return null;

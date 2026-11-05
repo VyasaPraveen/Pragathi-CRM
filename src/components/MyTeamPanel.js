@@ -3,6 +3,7 @@ import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { getInitials, formatDate, isSafeUrl, todayStr } from '../services/helpers';
 import { teamMembersOf, hasModule, roleLabel } from '../services/permissions';
+import { taskAssignees } from '../services/tasks';
 
 // "My Team" — what a Team Leader sees for the members assigned under them:
 // who they are, whether they have marked attendance, what they are working on,
@@ -38,7 +39,7 @@ export default function MyTeamPanel() {
     const checkOut = todays.find(a => a.type === 'Check Out');
     const monthDays = new Set(att.filter(a => a.type === 'Check In' && String(a.date || '').startsWith(thisMonth())).map(a => a.date)).size;
 
-    const tasks = (employeeTasks || []).filter(t => t.assignedTo === name || t.assignedTo === m.email);
+    const tasks = (employeeTasks || []).filter(t => taskAssignees(t).some(n => n === name || n === m.email));
     const openTasks = tasks.filter(t => t.status !== 'Completed');
 
     const leaves = (leaveRequests || []).filter(mine);

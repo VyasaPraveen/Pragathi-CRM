@@ -290,12 +290,19 @@ const TEAM_LEADER_EXTRA_MODULES = ['team','team_members','team_attendance','team
 
 // The "add" switches (Req 20, 4-Nov) follow their section until an Admin sets
 // them. Mirrors ADD_PERMISSION_PARENT in src/services/permissions.js.
-const ADD_PERMISSION_PARENT = ['add_materials' => 'materials', 'add_project' => 'ongoing_work', 'new_task' => 'tasks', 'add_reminder' => 'reminders'];
+const ADD_PERMISSION_PARENT = ['add_customer' => 'customers', 'add_materials' => 'materials', 'add_project' => 'ongoing_work', 'new_task' => 'tasks', 'add_reminder' => 'reminders'];
+// Req 1 (5-Nov): until the Owner sets a switch it follows the role floor the
+// screen always applied; the Owner's explicit tick overrides the floor.
+// Mirrors ADD_PERMISSION_FLOOR in permissions.js.
+const ADD_PERMISSION_FLOOR = ['add_customer' => 'coordinator', 'add_materials' => 'manager', 'add_project' => 'manager', 'new_task' => 'coordinator'];
 
 function default_module_allowed(?string $role, string $key): bool {
   $r = normalize_role($role);
   if ($key === 'new_po') return can($r, 'po_record');
-  if (isset(ADD_PERMISSION_PARENT[$key])) return default_module_allowed($r, ADD_PERMISSION_PARENT[$key]);
+  if (isset(ADD_PERMISSION_PARENT[$key])) {
+    if (isset(ADD_PERMISSION_FLOOR[$key]) && !has_access($r, ADD_PERMISSION_FLOOR[$key])) return false;
+    return default_module_allowed($r, ADD_PERMISSION_PARENT[$key]);
+  }
   // Adding / editing installations (R6.3, 8-Oct): manager level by default,
   // granted to an individual by an Admin. Mirrors defaultModuleAllowed() in
   // permissions.js.

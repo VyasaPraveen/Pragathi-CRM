@@ -56,8 +56,15 @@ test('a Sales Executive sees only the customers of their own leads, with an Edit
   expect(r[0].textContent).toContain('Sai Krishna');
   expect(host.textContent).not.toContain('Ravi Kumar');
   expect(r[0].querySelector('button[title="Edit"]')).not.toBeNull();
-  // adding customers stays with the coordinator level and up
+  // adding customers stays with the coordinator level and up by default (Req 1, 5-Nov: a switch)
   expect([...host.querySelectorAll('button')].some(b => /Add Customer/.test(b.textContent))).toBe(false);
+  unmount();
+});
+
+test('Req 1 (5-Nov): the Owner ticks Add Customers for the executive and the button appears', () => {
+  mockAuth = { role: 'executive', user: { ...users[1], permissions: { add_customer: true } } };
+  const { host, unmount } = mount(<Customers />);
+  expect(host.querySelector('button[data-add="customer"]')).not.toBeNull();
   unmount();
 });
 

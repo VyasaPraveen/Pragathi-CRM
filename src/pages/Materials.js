@@ -42,7 +42,8 @@ export default function Materials() {
 
   // Add / edit a material's name, unit, category — a manager's job, as before;
   // Req 20 (4-Nov) adds the Admin's per-person "Add Materials" switch on top.
-  const canAdd = hasAccess(role, 'manager') && hasModule(user, role, 'add_materials');
+  // Req 1 (5-Nov): the switch decides; its default is the manager floor.
+  const canAdd = hasModule(user, role, 'add_materials');
   // Req 2 (4-Nov): the Materials and Stock History exports, for the Owner,
   // Operation Manager, Management and Admin.
   const canExport = canExportData(role);
@@ -63,6 +64,25 @@ export default function Materials() {
   const mayApprove = canApproveStock(role);
   const pending = useMemo(() => pendingStockEntries(stockTransactions), [stockTransactions]);
   const myPending = pending.filter(t => { const a = stockEntryActions(t, user, role); return a.forward || a.approve || a.reject; });
+  // Req 5 (5-Nov): the Owner may approve every entry waiting on them in one go.
+  // Each one still goes through the same approval route, one after another,
+  // so the stock figures, history lines and notifications are exactly what the
+  // individual button produces.
+  const approvable = pending.filter(t => stockEntryActions(t, user, role).approve);
+  const [bulk, setBulk] = useState(false);
+  const approveAll = async () => {
+    if (!approvable.length) return;
+    if (!window.confirm(`Approve all ${approvable.length} pending entr${approvable.length === 1 ? 'y' : 'ies'} and update the stock?`)) return;
+    setBulk(true);
+    let done = 0; const failed = [];
+    for (const t of approvable) {
+      try { await approveStockEntry(t.id, 'approve', ''); done++; }
+      catch (e) { failed.push(`${t.materialName} (${t.reference}): ${e.message}`); }
+    }
+    setBulk(false);
+    if (failed.length) toast(`${done} approved; ${failed.length} not approved - ${failed.join('; ')}`, 'er');
+    else toast(`${done} entr${done === 1 ? 'y' : 'ies'} approved - the stock has been updated`);
+  };
 
   // The Day / Month filter (R15): a material belongs to the day its stock last moved.
   const shown = useMemo(() => {
@@ -173,7 +193,8 @@ export default function Materials() {
       )}
 
       {tab === 'approvals' && (
-        <ApprovalsPanel entries={pending} user={user} role={role} onDecide={(t, action) => setModal({ kind: 'decide', id: t.id, action })} />
+        <ApprovalsPanel entries={pending} user={user} role={role} onDecide={(t, action) => setModal({ kind: 'decide', id: t.id, action })}
+          approveAll={mayApprove && approvable.length ? { count: approvable.length, run: approveAll, busy: bulk } : null} />
       )}
 
       {tab === 'ledger' && <LedgerTable txns={applyDateFilter(stockTransactions, dateFilter, STOCK_DATE_FIELDS)} showMaterial />}
@@ -441,10 +462,19 @@ function ReturnModal({ materials, pos, onClose }) {
 }
 
 // ── Where the entries waiting on somebody are decided ───────────────────────
-function ApprovalsPanel({ entries, user, role, onDecide }) {
+function ApprovalsPanel({ entries, user, role, onDecide, approveAll }) {
   if (!entries.length) return <div className="card"><div className="cb"><EmptyState icon="fact_check" title="Nothing awaiting approval" message="Receipts and discrepancy reports appear here until the Owner decides them." /></div></div>;
   return (
     <div style={{ display: 'grid', gap: 10 }}>
+      {approveAll && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '.82rem', color: 'var(--muted)' }}>{approveAll.count} entr{approveAll.count === 1 ? 'y' : 'ies'} awaiting your approval. Each can still be approved or rejected on its own below.</span>
+          <span style={{ flex: 1 }} />
+          <button className="btn bsm bp" style={{ background: '#1e8449' }} onClick={approveAll.run} disabled={approveAll.busy} title="Approve every entry listed here and update the stock" data-stock="approve-all">
+            <span className="material-icons-round" style={{ fontSize: 16 }}>done_all</span> {approveAll.busy ? 'Approving…' : `Approve All (${approveAll.count})`}
+          </button>
+        </div>
+      )}
       {entries.map(t => {
         const a = stockEntryActions(t, user, role);
         const isAdj = t.type === STOCK_TYPES.ADJUSTMENT;

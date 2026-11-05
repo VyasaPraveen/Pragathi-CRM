@@ -22,9 +22,11 @@ export default function OngoingWork() {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState(DATE_FILTER_ALL);
-  const canEdit = hasAccess(role, 'manager');
-  // Req 20 (4-Nov): adding a project is its own switch in Permission Management.
-  const canAdd = canEdit && hasModule(user, role, 'add_project');
+  // Req 20 (4-Nov) / Req 1 (5-Nov): adding a project is its own switch in
+  // Permission Management. Its default is the manager floor this screen always
+  // had; the Owner's tick gives it to anyone, who may then also edit projects.
+  const canAdd = hasModule(user, role, 'add_project');
+  const canEdit = hasAccess(role, 'manager') || canAdd;
 
   let filtered = ongoingWork;
   if (filter !== 'all') filtered = filtered.filter(w => w.status === filter);

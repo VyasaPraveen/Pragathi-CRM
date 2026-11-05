@@ -68,6 +68,18 @@ export function AuthProvider({ children }) {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Req 1 (5-Nov): what the Owner changes in Permission Management reaches a
+  // person already signed in the next time they come back to the app (the tab
+  // or the installed app becoming visible), not only at their next sign-in.
+  useEffect(() => {
+    const onShow = () => {
+      if (typeof document === 'undefined' || document.visibilityState !== 'visible' || !getToken()) return;
+      apiGet('/auth/me', { skipAuthHandler: true }).then(res => { if (res && res.user) applyUser(res.user); }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onShow);
+    return () => document.removeEventListener('visibilitychange', onShow);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // `force` = sign the other device out and take the account over; offered
   // only when the server says this person may (the Owner, an Admin).
   const login = async (email, password, force = false) => {
