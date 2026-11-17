@@ -1,7 +1,73 @@
-import React from 'react';
+import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
-import { formatCurrency, toNumber } from '../services/helpers';
-import { StatCard, ProgressBar } from '../components/SharedUI';
+import { useAuth } from '../context/AuthContext';
+import { formatCurrency, toNumber, todayStr, formatDate, formatDateTime, escapeHtml, openHtmlSafely } from '../services/helpers';
+import { StatCard, ProgressBar, DateInput, EmptyState, Modal } from '../components/SharedUI';
+import { submittedReports, reportRows, reportRoll, planningScope, sentPlans, planRoll, planExportRows, allSlotRows, readSlot, STATUS_LABEL, WHOLE_DAY_SLOT } from '../services/planning';
+
+// ── View Planning / Subject (Req 4A, 4B — 17-Nov) ───────────────────────────
+// Both report cards keep their columns and gain two more: Subject, the text
+// the person entered in the whole-day slot (a short preview, ☰ opens it in
+// full), and View Planning, a ☰ that opens every time slot with what was
+// entered against it. The main tables stay simple; the detail lives in the
+// dialog.
+const SUBJECT_PREVIEW = 70;
+const wholeDayText = (doc) => readSlot(doc && doc.slots ? doc.slots[WHOLE_DAY_SLOT.key] : null).text;
+
+function PlanDetailModal({ doc, name, date, subjectOnly, onClose }) {
+  const rows = allSlotRows(doc && doc.slots).map(r => ({ ...r, text: r.text.trim() }));
+  const subject = wholeDayText(doc);
+  return (
+    <Modal title={subjectOnly ? `Subject — ${name}` : `Planning — ${name}`} onClose={onClose} wide={!subjectOnly}>
+      <div className="mb" data-plan="detail">
+        <p style={{ fontSize: '.82rem', color: 'var(--muted)', margin: '0 0 10px' }}>
+          {formatDate(date)}{doc && doc.planSentAt ? ' · plan sent ' + formatDateTime(doc.planSentAt) : ''}{doc && doc.submittedAt ? ' · report submitted ' + formatDateTime(doc.submittedAt) : ''}
+        </p>
+        {subjectOnly ? (
+          <div style={{ fontSize: '.9rem', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{subject || <span style={{ color: 'var(--muted)' }}>Nothing entered in the {WHOLE_DAY_SLOT.label} slot.</span>}</div>
+        ) : (
+          <div className="tw"><table style={{ fontSize: '.84rem' }}>
+            <thead><tr><th style={{ width: 190 }}>Time slot</th><th>Employee's plan</th><th style={{ width: 120 }}>Status</th></tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.key}>
+                  <td style={{ whiteSpace: 'nowrap', fontWeight: r.key === WHOLE_DAY_SLOT.key ? 700 : 500 }}>{r.label}</td>
+                  <td style={{ whiteSpace: 'pre-wrap' }}>{r.text || <span style={{ color: 'var(--light)' }}>—</span>}{r.reason ? <div style={{ fontSize: '.76rem', color: '#c0392b' }}>Reason: {r.reason}</div> : null}</td>
+                  <td style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{r.text ? (STATUS_LABEL[r.status] || r.status) : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+      </div>
+      <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Close</button></div>
+    </Modal>
+  );
+}
+
+// The Subject cell: a short preview of the whole-day text and a ☰ to open it.
+function SubjectCell({ doc, onOpen }) {
+  const text = wholeDayText(doc);
+  if (!text) return <td data-l="Subject" style={{ color: 'var(--muted)' }}>-</td>;
+  const short = text.length > SUBJECT_PREVIEW ? text.slice(0, SUBJECT_PREVIEW).trimEnd() + '…' : text;
+  return (
+    <td data-l="Subject" style={{ fontSize: '.8rem', maxWidth: 260 }}>
+      <span title={text}>{short}</span>
+      <button type="button" className="btn bsm bo" style={{ marginLeft: 6, padding: '1px 6px', verticalAlign: 'middle' }} onClick={onOpen} title="Open the whole-day planning in full" aria-label="View subject" data-plan="subject">
+        <span className="material-icons-round" style={{ fontSize: 16 }}>menu</span>
+      </button>
+    </td>
+  );
+}
+const ViewPlanningCell = ({ doc, onOpen }) => (
+  <td data-l="View Planning">
+    {doc ? (
+      <button type="button" className="btn bsm bo" style={{ padding: '2px 8px' }} onClick={onOpen} title="View the complete planning, slot by slot" aria-label="View planning" data-plan="view">
+        <span className="material-icons-round" style={{ fontSize: 18 }}>menu</span>
+      </button>
+    ) : <span style={{ color: 'var(--muted)' }}>-</span>}
+  </td>
+);
 
 function downloadCSV(filename, headers, rows) {
   const escape = (v) => {
@@ -17,6 +83,185 @@ function downloadCSV(filename, headers, rows) {
   URL.revokeObjectURL(link.href);
 }
 
+// Daily reports (Req 7, 30-Oct): who has reported for a work date, and the
+// submitted reports as a CSV — never a draft, never a plan for another day.
+function DailyReports() {
+  const { tracking, users } = useData();
+  const { user, role } = useAuth();
+  const [date, setDate] = useState(todayStr());
+  // Req 8 (4-Nov): the Owner, Management, Admin and the Operation Manager see
+  // everyone; a Team Leader their own members and themselves; nobody else sees
+  // this card at all.
+  const scope = useMemo(() => planningScope(users, user, role), [users, user, role]);
+  const people = useMemo(() => (scope.all || scope.people.length > 1 ? scope.people : []), [scope]);
+  const roll = useMemo(() => reportRoll(tracking, people, date), [tracking, people, date]);
+  const submitted = roll.filter(r => r.submitted).length;
+  const [open, setOpen] = useState(null);           // { r, subjectOnly }
+  if (!people.length) return null;
+
+  const exportDay = () => {
+    const docs = submittedReports(tracking, { date }).filter(d => people.some(p => String(p.email || '').toLowerCase() === String(d.employeeEmail || '').toLowerCase()));
+    if (!docs.length) { window.alert(`No submitted reports for ${formatDate(date)}.`); return; }
+    exportReports(docs, 'PPS_Daily_Reports_' + date + '.csv');
+  };
+  const exportMonth = () => {
+    const month = date.slice(0, 7);
+    const docs = submittedReports(tracking, { month }).filter(d => people.some(p => String(p.email || '').toLowerCase() === String(d.employeeEmail || '').toLowerCase()));
+    if (!docs.length) { window.alert('No submitted reports in that month.'); return; }
+    exportReports(docs, 'PPS_Daily_Reports_' + month + '.csv');
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 18 }}>
+      <div className="ch" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>fact_check</span>Daily Reports</h3>
+        <div className="df">
+          <DateInput value={date} onChange={e => setDate(e.target.value || todayStr())} />
+          <button className="btn bsm bo" onClick={exportDay} title="Only the reports submitted for this work date"><span className="material-icons-round" style={{ fontSize: 16 }}>download</span> Submitted ({submitted})</button>
+          <button className="btn bsm bo" onClick={exportMonth} title="Every report submitted in this month, by work date"><span className="material-icons-round" style={{ fontSize: 16 }}>download</span> Month</button>
+        </div>
+      </div>
+      <div className="cb" style={{ padding: 0 }}>
+        <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
+          <thead><tr><th>Employee</th><th>Work date</th><th>Status</th><th>Submitted at</th><th>Slots</th><th>Subject</th><th>View Planning</th></tr></thead>
+          <tbody>
+            {roll.map(r => (
+              <tr key={r.email}>
+                <td className="m-h"><strong>{r.name}</strong>{r.designation && <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{r.designation}</div>}</td>
+                <td data-l="Work date" style={{ whiteSpace: 'nowrap' }}>{formatDate(date)}</td>
+                <td data-l="Status"><span className={`st ${r.submitted ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.submitted ? 'Submitted' : r.label === 'Draft' ? 'Draft / incomplete' : 'Missing'}</span></td>
+                <td data-l="Submitted at" style={{ fontSize: '.8rem' }}>{r.submitted && r.at ? formatDateTime(r.at) : '-'}</td>
+                <td data-l="Slots">{r.slots || '-'}</td>
+                <SubjectCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: true })} />
+                <ViewPlanningCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: false })} />
+              </tr>
+            ))}
+            {!roll.length && <tr><td colSpan="7"><EmptyState icon="groups" title="Nobody to report" message="" /></td></tr>}
+          </tbody>
+        </table></div>
+        {open && <PlanDetailModal doc={open.r.doc} name={open.r.name} date={date} subjectOnly={open.subjectOnly} onClose={() => setOpen(null)} />}
+        <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: 0, padding: '10px 16px' }}>
+          {submitted} of {roll.length} submitted for {formatDate(date)}. The CSV carries submitted reports only, by the work date they belong to; drafts and plans for other days are left out.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function exportReports(docs, filename) {
+  const headers = ['Employee', 'Email', 'Report Date', 'Submitted At', 'Status', 'Time Slot', 'Report Details', 'Notes', 'Postponed To'];
+  const rows = [];
+  docs.forEach(d => reportRows(d).forEach(r => rows.push([r.employee, r.email, formatDate(r.date), r.submittedAt ? formatDateTime(r.submittedAt) : '', r.status, r.slot, r.text, r.reason, r.postponedTo ? formatDate(r.postponedTo.slice(0, 10)) + r.postponedTo.slice(10) : ''])));
+  downloadCSV(filename, headers, rows);
+}
+
+// Daily planning (Req 5, 4-Nov): who has SENT their plan for a date, employee
+// by employee, with the sent plans as a CSV and as a printable sheet — for the
+// day or the month. Same people rule as the Daily Reports card.
+function DailyPlanning() {
+  const { tracking, users } = useData();
+  const { user, role } = useAuth();
+  const [date, setDate] = useState(todayStr());
+  const [view, setView] = useState('day');            // 'day' | 'month'
+  const scope = useMemo(() => planningScope(users, user, role), [users, user, role]);
+  const people = useMemo(() => (scope.all || scope.people.length > 1 ? scope.people : []), [scope]);
+  const roll = useMemo(() => planRoll(tracking, people, date), [tracking, people, date]);
+  const month = date.slice(0, 7);
+  const mine = (d) => people.some(p => String(p.email || '').toLowerCase() === String(d.employeeEmail || '').toLowerCase());
+  const monthDocs = useMemo(() => sentPlans(tracking, { month }).filter(mine), [tracking, month, people]); // eslint-disable-line react-hooks/exhaustive-deps
+  const sent = roll.filter(r => r.sent).length;
+  const [open, setOpen] = useState(null);           // { r, subjectOnly }
+  if (!people.length) return null;
+
+  const docsFor = () => (view === 'day' ? sentPlans(tracking, { date }).filter(mine) : monthDocs);
+  const label = view === 'day' ? formatDate(date) : new Date(date + 'T00:00:00').toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  const exportPlans = () => {
+    const docs = docsFor();
+    if (!docs.length) { window.alert(`No plans sent for ${label}.`); return; }
+    // Req 4 (5-Nov): the day the plan is FOR and the day it was actually SUBMITTED, side by side.
+    const headers = ['Employee', 'Email', 'Plan For', 'Submitted On', 'Submission Status', 'Time Slot', 'Planned Work', 'Status'];
+    const rows = [];
+    docs.forEach(d => planExportRows(d).forEach(r => rows.push([r.employee, r.email, formatDate(r.date), r.sentAt ? formatDateTime(r.sentAt) : '', 'Submitted', r.slot, r.text, r.status])));
+    downloadCSV('PPS_Daily_Planning_' + (view === 'day' ? date : month) + '.csv', headers, rows);
+  };
+  const printPlans = () => {
+    const docs = docsFor();
+    if (!docs.length) { window.alert(`No plans sent for ${label}.`); return; }
+    const e = escapeHtml;
+    const byEmployee = docs.map(d => `
+      <div class="emp"><h2>${e(d.employeeName || d.employeeEmail)} <span>Plan for ${e(formatDate(d.date))}${d.planSentAt ? ' · submitted on ' + e(formatDateTime(d.planSentAt)) : ''}</span></h2>
+      <table><thead><tr><th style="width:170px">Time slot</th><th>Planned work</th><th style="width:110px">Status</th></tr></thead><tbody>
+      ${planExportRows(d).map(r => `<tr><td>${e(r.slot)}</td><td>${e(r.text)}</td><td>${e(r.status)}</td></tr>`).join('')}
+      </tbody></table></div>`).join('');
+    const html = `<html><head><title>Daily Planning - ${e(label)}</title>
+<style>body{font-family:Arial,sans-serif;padding:28px 36px;color:#222;font-size:12.5px}h1{font-size:18px;color:#1a3a7a;margin:0 0 2px}.sub{color:#666;margin-bottom:18px}.emp{page-break-inside:avoid;margin-bottom:18px}h2{font-size:14px;margin:0 0 6px;color:#1a3a7a}h2 span{font-weight:400;color:#666;font-size:12px;margin-left:8px}table{width:100%;border-collapse:collapse}th,td{border:1px solid #ddd;padding:5px 8px;text-align:left;vertical-align:top}th{background:#f3f5f9}@media print{body{padding:10px 14px}}</style></head><body>
+<h1>Pragathi Power Solutions — Daily Planning</h1><div class="sub">${e(label)} · ${docs.length} plan${docs.length === 1 ? '' : 's'} sent · printed ${e(formatDateTime(new Date().toISOString()))}</div>${byEmployee}</body></html>`;
+    openHtmlSafely(html, true);
+  };
+
+  return (
+    <div className="card" style={{ marginBottom: 18 }} data-card="daily-planning">
+      <div className="ch" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <h3><span className="material-icons-round" style={{ fontSize: 20, verticalAlign: 'middle', marginRight: 6 }}>event_note</span>Daily Planning</h3>
+        <div className="df">
+          <DateInput value={date} onChange={e => setDate(e.target.value || todayStr())} />
+          <span className="chips">
+            <span className={`fc ${view === 'day' ? 'act' : ''}`} onClick={() => setView('day')}>Day</span>
+            <span className={`fc ${view === 'month' ? 'act' : ''}`} onClick={() => setView('month')}>Month</span>
+          </span>
+          <button className="btn bsm bo" onClick={exportPlans} title={`The plans sent for the ${view}, as a CSV`}><span className="material-icons-round" style={{ fontSize: 16 }}>download</span> CSV</button>
+          <button className="btn bsm bo" onClick={printPlans} title={`The plans sent for the ${view}, laid out for printing`}><span className="material-icons-round" style={{ fontSize: 16 }}>print</span> Print</button>
+        </div>
+      </div>
+      <div className="cb" style={{ padding: 0 }}>
+        {view === 'day' ? (
+          <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
+            <thead><tr><th>Employee</th><th>Plan for</th><th>Submitted on</th><th>Submission status</th><th>Slots</th><th>Report</th><th>Subject</th><th>View Planning</th></tr></thead>
+            <tbody>
+              {roll.map(r => (
+                <tr key={r.email}>
+                  <td className="m-h"><strong>{r.name}</strong>{r.designation && <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{r.designation}</div>}</td>
+                  <td data-l="Plan for" style={{ whiteSpace: 'nowrap' }}>{formatDate(date)}</td>
+                  <td data-l="Submitted on" style={{ fontSize: '.8rem', whiteSpace: 'nowrap' }}>{r.sent && r.at ? formatDateTime(r.at) : '-'}</td>
+                  <td data-l="Submission status"><span className={`st ${r.sent ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.sent ? 'Submitted' : r.label === 'Draft' ? 'Draft / not submitted' : 'Not submitted'}</span></td>
+                  <td data-l="Slots">{r.slots || '-'}</td>
+                  <td data-l="Report" style={{ fontSize: '.78rem' }}>{r.doc && r.doc.submitted ? <span className="st st-g" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Reported</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+                  <SubjectCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: true })} />
+                  <ViewPlanningCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: false })} />
+                </tr>
+              ))}
+              {!roll.length && <tr><td colSpan="8"><EmptyState icon="groups" title="Nobody to show" message="" /></td></tr>}
+            </tbody>
+          </table></div>
+        ) : (
+          <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
+            <thead><tr><th>Employee</th><th>Plans sent in {label}</th><th>Days reported</th><th>Last plan sent</th></tr></thead>
+            <tbody>
+              {people.map(p => {
+                const em = String(p.email || '').toLowerCase();
+                const docs = monthDocs.filter(d => String(d.employeeEmail || '').toLowerCase() === em);
+                const last = docs.map(d => d.planSentAt || '').sort().pop() || '';
+                return (
+                  <tr key={em}>
+                    <td className="m-h"><strong>{p.displayName || p.email}</strong>{p.designation && <div style={{ fontSize: '.74rem', color: 'var(--muted)' }}>{p.designation}</div>}</td>
+                    <td data-l="Plans sent" style={{ fontWeight: 600 }}>{docs.length}</td>
+                    <td data-l="Days reported">{docs.filter(d => d.submitted).length}</td>
+                    <td data-l="Last plan sent" style={{ fontSize: '.8rem' }}>{last ? formatDateTime(last) : '-'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table></div>
+        )}
+        {open && <PlanDetailModal doc={open.r.doc} name={open.r.name} date={date} subjectOnly={open.subjectOnly} onClose={() => setOpen(null)} />}
+        <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: 0, padding: '10px 16px' }}>
+          {view === 'day' ? `${sent} of ${roll.length} submitted their plan for ${formatDate(date)}. "Plan for" is the day the plan covers; "Submitted on" is when it was actually sent.` : `${monthDocs.length} plans sent in ${label}.`} The CSV and the printout carry sent plans only. The reminder goes out at 5:30 PM to anyone whose plan is still pending; plans are due by 6:30 PM.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function Reports() {
   const { leads, customers, installations, income, expenses, retailers, influencers, team, leadPOs } = useData();
   const tI = income.reduce((s, i) => s + toNumber(i.amount), 0);
@@ -25,38 +270,38 @@ export default function Reports() {
   const exportLeads = () => {
     const headers = ['Name', 'Phone', 'Email', 'Address', 'City', 'District', 'Pincode', 'Status', 'Priority', 'kW Required', 'Monthly Bill', 'Expected Value', 'Lead Source', 'Assigned To', 'Sales Executive', 'Site Visit', 'Quotation Sent', 'Advance Paid', 'Existing Connection', 'Follow-up Status', 'Next Follow-up', 'Date Generated', 'Notes'];
     const rows = leads.map(l => [l.name, l.phone, l.email, l.address, l.city, l.district, l.pincode, l.status, l.priority, l.kwRequired, l.monthlyBill, l.expectedValue, l.leadReference, l.assignedTo, l.salesExecutive, l.siteVisit, l.quotationSent, l.advancePaid, l.existingConnection, l.followUpStatus, l.nextFollowUpDate, l.dateGenerated, l.notes]);
-    downloadCSV('PPS_Leads_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Leads_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportCustomers = () => {
     const headers = ['Name', 'Phone', 'Email', 'Address', 'City', 'kW', 'Total Price', 'Payment Type', 'Advance Amount', 'Status'];
     const rows = customers.map(c => [c.name, c.phone, c.email, c.address, c.city, c.kw, c.totalPrice, c.paymentType, c.advanceAmount, c.status]);
-    downloadCSV('PPS_Customers_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Customers_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportTeam = () => {
     const headers = ['Name', 'Phone', 'Email', 'Role', 'Status', 'Age', 'Salary', 'Attendance', 'Joining Date', 'Bank Name', 'Account Number', 'IFSC Code', 'Aadhar', 'PAN', 'Address', 'Emergency Contact', 'Qualification'];
     const rows = team.map(t => [t.name, t.phone, t.email, t.role, t.status, t.age, t.salary, t.attendance, t.joiningDate, t.bankName, t.accountNumber, t.ifscCode, t.aadharNumber, t.panNumber, t.address, t.emergencyContactName, t.qualification]);
-    downloadCSV('PPS_Team_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Team_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportRevenue = () => {
     const headers = ['Date', 'Type', 'Category', 'Amount', 'Description', 'Customer'];
     const incRows = income.map(i => [i.date, 'Income', i.category || '', i.amount, i.desc || i.description || '', i.customer || '']);
     const expRows = expenses.map(e => [e.date, 'Expense', e.category || '', e.amount, e.desc || e.description || '', e.vendor || '']);
-    downloadCSV('PPS_Revenue_' + new Date().toISOString().slice(0, 10) + '.csv', headers, [...incRows, ...expRows]);
+    downloadCSV('PPS_Revenue_' + todayStr() + '.csv', headers, [...incRows, ...expRows]);
   };
 
   const exportInstallations = () => {
     const headers = ['Customer', 'Phone', 'Address', 'kW', 'Progress', 'Status', 'Start Date', 'Completion Date', 'Notes'];
     const rows = installations.map(i => [i.customerName, i.phone, i.address, i.kw, i.progress, i.status, i.startDate, i.completionDate, i.notes]);
-    downloadCSV('PPS_Installations_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_Installations_' + todayStr() + '.csv', headers, rows);
   };
 
   const exportPOs = () => {
     const headers = ['PO Number', 'Date', 'Customer', 'Vendor', 'kW', 'Agreed Price', 'Status'];
     const rows = leadPOs.map(p => [p.poNumber, p.poDate, p.customerName, p.vendorName, p.kwRequired, p.agreedPrice || p.totalValue, p.status]);
-    downloadCSV('PPS_PurchaseOrders_' + new Date().toISOString().slice(0, 10) + '.csv', headers, rows);
+    downloadCSV('PPS_PurchaseOrders_' + todayStr() + '.csv', headers, rows);
   };
 
   return (
@@ -67,6 +312,9 @@ export default function Reports() {
         <StatCard color="or" icon="solar_power" value={installations.length} label="Installations" />
         <StatCard color="pu" icon="savings" value={formatCurrency(tI - tE)} label="Net Profit" />
       </div>
+
+      <DailyPlanning />
+      <DailyReports />
 
       {/* Export Section */}
       <div className="card" style={{ marginBottom: 18 }}>

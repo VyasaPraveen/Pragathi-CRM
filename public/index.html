@@ -2,15 +2,26 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#1a3a7a" />
   <meta name="description" content="Pragathi Power Solutions - Solar CRM" />
+  <!-- Installable app (PWA): the manifest, the home-screen icons, and the
+       iOS/Android flags that open it full screen without the browser bar. -->
+  <link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
+  <meta name="application-name" content="Pragathi CRM" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Pragathi CRM" />
+  <link rel="apple-touch-icon" href="%PUBLIC_URL%/apple-touch-icon.png" />
+  <link rel="icon" type="image/png" sizes="32x32" href="%PUBLIC_URL%/favicon-32.png" />
   <link rel="icon" href="%PUBLIC_URL%/favicon.ico" />
   <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet" />
   <title>Pragathi Power CRM</title>
 </head>
 <body>
+  <noscript>Pragathi Power CRM needs JavaScript enabled.</noscript>
   <div id="root"></div>
 </body>
 </html>
