@@ -118,6 +118,12 @@ function jwt_verify(string $token): ?array {
 // person out for good.
 const SESSION_IDLE_SECONDS = 12 * 3600;
 const SESSION_TAKEOVER_ROLES = ['super_admin', 'admin', 'management'];
+// Req 5 (17-Nov): the Owner, the Operation Manager and the Accountant work
+// from a desktop, a laptop and a phone at once, so for them a new sign-in
+// neither waits for the old device to be released nor signs it out. Everyone
+// else keeps the one-device rule exactly as it is.
+const SESSION_MULTI_DEVICE_ROLES = ['super_admin', 'operation_manager', 'accountant'];
+function session_multi_device(string $role): bool { return in_array($role, SESSION_MULTI_DEVICE_ROLES, true); }
 const SESSION_BUSY_MESSAGE = 'This account is already active on another device. Please log out from the existing device or contact the administrator for assistance.';
 
 function session_is_active(?array $s, int $now): bool {
@@ -129,6 +135,7 @@ function session_is_active(?array $s, int $now): bool {
 // May this device sign in? ok = yes; busy = another device holds the account
 // (canForce says whether this person may take it over); otherwise the reason.
 function session_login_decision(?array $s, string $device, bool $force, string $role, int $now): array {
+  if (session_multi_device($role)) return ['ok' => true, 'reason' => 'multi-device'];
   if (!session_is_active($s, $now)) return ['ok' => true, 'reason' => 'none'];
   if ($device !== '' && ($s['device'] ?? '') === $device) return ['ok' => true, 'reason' => 'same-device'];
   $canForce = in_array($role, SESSION_TAKEOVER_ROLES, true);
@@ -154,18 +161,25 @@ function session_check(array $claims): bool {
   if ($uid === '') return true;
   if (!array_key_exists($uid, $cache)) {
     try {
-      $st = db()->prepare('SELECT data FROM users WHERE id = ? LIMIT 1');
+      $st = db()->prepare('SELECT role, data FROM users WHERE id = ? LIMIT 1');
       $st->execute([$uid]);
       $r = $st->fetch();
       $d = ($r && $r['data']) ? json_decode($r['data'], true) : [];
-      $cache[$uid] = is_array($d) ? $d : [];
+      if (!is_array($d)) $d = [];
+      $d['__role'] = $r ? (string)($r['role'] ?? '') : '';
+      $cache[$uid] = $d;
     } catch (Throwable $e) { return true; }   // the database, not the session, is the problem
   }
   $d = $cache[$uid];
+  $accountRole = (string)($d['__role'] ?? '');
+  unset($d['__role']);
   // An account on hold or deactivated is refused whatever the token says (Req 5).
   $status = (string)($d['status'] ?? 'active');
   if ($status === 'hold') { $PPS_AUTH_REFUSAL = 'hold'; return false; }
   if ($status === 'deactivated') { $PPS_AUTH_REFUSAL = 'deactivated'; return false; }
+  // Req 5 (17-Nov): several devices at once for the exempt roles - a token
+  // from any of their signed-in devices stays valid.
+  if (session_multi_device($accountRole)) return true;
   $s = $d['activeSession'] ?? null;
   $sid = (string)($claims['sid'] ?? '');
   if ($sid === '') {

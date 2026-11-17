@@ -2,8 +2,72 @@ import React, { useState, useMemo } from 'react';
 import { useData } from '../context/DataContext';
 import { useAuth } from '../context/AuthContext';
 import { formatCurrency, toNumber, todayStr, formatDate, formatDateTime, escapeHtml, openHtmlSafely } from '../services/helpers';
-import { StatCard, ProgressBar, DateInput, EmptyState } from '../components/SharedUI';
-import { submittedReports, reportRows, reportRoll, planningScope, sentPlans, planRoll, planExportRows } from '../services/planning';
+import { StatCard, ProgressBar, DateInput, EmptyState, Modal } from '../components/SharedUI';
+import { submittedReports, reportRows, reportRoll, planningScope, sentPlans, planRoll, planExportRows, allSlotRows, readSlot, STATUS_LABEL, WHOLE_DAY_SLOT } from '../services/planning';
+
+// ── View Planning / Subject (Req 4A, 4B — 17-Nov) ───────────────────────────
+// Both report cards keep their columns and gain two more: Subject, the text
+// the person entered in the whole-day slot (a short preview, ☰ opens it in
+// full), and View Planning, a ☰ that opens every time slot with what was
+// entered against it. The main tables stay simple; the detail lives in the
+// dialog.
+const SUBJECT_PREVIEW = 70;
+const wholeDayText = (doc) => readSlot(doc && doc.slots ? doc.slots[WHOLE_DAY_SLOT.key] : null).text;
+
+function PlanDetailModal({ doc, name, date, subjectOnly, onClose }) {
+  const rows = allSlotRows(doc && doc.slots).map(r => ({ ...r, text: r.text.trim() }));
+  const subject = wholeDayText(doc);
+  return (
+    <Modal title={subjectOnly ? `Subject — ${name}` : `Planning — ${name}`} onClose={onClose} wide={!subjectOnly}>
+      <div className="mb" data-plan="detail">
+        <p style={{ fontSize: '.82rem', color: 'var(--muted)', margin: '0 0 10px' }}>
+          {formatDate(date)}{doc && doc.planSentAt ? ' · plan sent ' + formatDateTime(doc.planSentAt) : ''}{doc && doc.submittedAt ? ' · report submitted ' + formatDateTime(doc.submittedAt) : ''}
+        </p>
+        {subjectOnly ? (
+          <div style={{ fontSize: '.9rem', whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{subject || <span style={{ color: 'var(--muted)' }}>Nothing entered in the {WHOLE_DAY_SLOT.label} slot.</span>}</div>
+        ) : (
+          <div className="tw"><table style={{ fontSize: '.84rem' }}>
+            <thead><tr><th style={{ width: 190 }}>Time slot</th><th>Employee's plan</th><th style={{ width: 120 }}>Status</th></tr></thead>
+            <tbody>
+              {rows.map(r => (
+                <tr key={r.key}>
+                  <td style={{ whiteSpace: 'nowrap', fontWeight: r.key === WHOLE_DAY_SLOT.key ? 700 : 500 }}>{r.label}</td>
+                  <td style={{ whiteSpace: 'pre-wrap' }}>{r.text || <span style={{ color: 'var(--light)' }}>—</span>}{r.reason ? <div style={{ fontSize: '.76rem', color: '#c0392b' }}>Reason: {r.reason}</div> : null}</td>
+                  <td style={{ fontSize: '.76rem', color: 'var(--muted)' }}>{r.text ? (STATUS_LABEL[r.status] || r.status) : ''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        )}
+      </div>
+      <div className="mf"><button type="button" className="btn bo" onClick={onClose}>Close</button></div>
+    </Modal>
+  );
+}
+
+// The Subject cell: a short preview of the whole-day text and a ☰ to open it.
+function SubjectCell({ doc, onOpen }) {
+  const text = wholeDayText(doc);
+  if (!text) return <td data-l="Subject" style={{ color: 'var(--muted)' }}>-</td>;
+  const short = text.length > SUBJECT_PREVIEW ? text.slice(0, SUBJECT_PREVIEW).trimEnd() + '…' : text;
+  return (
+    <td data-l="Subject" style={{ fontSize: '.8rem', maxWidth: 260 }}>
+      <span title={text}>{short}</span>
+      <button type="button" className="btn bsm bo" style={{ marginLeft: 6, padding: '1px 6px', verticalAlign: 'middle' }} onClick={onOpen} title="Open the whole-day planning in full" aria-label="View subject" data-plan="subject">
+        <span className="material-icons-round" style={{ fontSize: 16 }}>menu</span>
+      </button>
+    </td>
+  );
+}
+const ViewPlanningCell = ({ doc, onOpen }) => (
+  <td data-l="View Planning">
+    {doc ? (
+      <button type="button" className="btn bsm bo" style={{ padding: '2px 8px' }} onClick={onOpen} title="View the complete planning, slot by slot" aria-label="View planning" data-plan="view">
+        <span className="material-icons-round" style={{ fontSize: 18 }}>menu</span>
+      </button>
+    ) : <span style={{ color: 'var(--muted)' }}>-</span>}
+  </td>
+);
 
 function downloadCSV(filename, headers, rows) {
   const escape = (v) => {
@@ -32,6 +96,7 @@ function DailyReports() {
   const people = useMemo(() => (scope.all || scope.people.length > 1 ? scope.people : []), [scope]);
   const roll = useMemo(() => reportRoll(tracking, people, date), [tracking, people, date]);
   const submitted = roll.filter(r => r.submitted).length;
+  const [open, setOpen] = useState(null);           // { r, subjectOnly }
   if (!people.length) return null;
 
   const exportDay = () => {
@@ -58,7 +123,7 @@ function DailyReports() {
       </div>
       <div className="cb" style={{ padding: 0 }}>
         <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
-          <thead><tr><th>Employee</th><th>Work date</th><th>Status</th><th>Submitted at</th><th>Slots</th></tr></thead>
+          <thead><tr><th>Employee</th><th>Work date</th><th>Status</th><th>Submitted at</th><th>Slots</th><th>Subject</th><th>View Planning</th></tr></thead>
           <tbody>
             {roll.map(r => (
               <tr key={r.email}>
@@ -67,11 +132,14 @@ function DailyReports() {
                 <td data-l="Status"><span className={`st ${r.submitted ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.submitted ? 'Submitted' : r.label === 'Draft' ? 'Draft / incomplete' : 'Missing'}</span></td>
                 <td data-l="Submitted at" style={{ fontSize: '.8rem' }}>{r.submitted && r.at ? formatDateTime(r.at) : '-'}</td>
                 <td data-l="Slots">{r.slots || '-'}</td>
+                <SubjectCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: true })} />
+                <ViewPlanningCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: false })} />
               </tr>
             ))}
-            {!roll.length && <tr><td colSpan="5"><EmptyState icon="groups" title="Nobody to report" message="" /></td></tr>}
+            {!roll.length && <tr><td colSpan="7"><EmptyState icon="groups" title="Nobody to report" message="" /></td></tr>}
           </tbody>
         </table></div>
+        {open && <PlanDetailModal doc={open.r.doc} name={open.r.name} date={date} subjectOnly={open.subjectOnly} onClose={() => setOpen(null)} />}
         <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: 0, padding: '10px 16px' }}>
           {submitted} of {roll.length} submitted for {formatDate(date)}. The CSV carries submitted reports only, by the work date they belong to; drafts and plans for other days are left out.
         </p>
@@ -102,6 +170,7 @@ function DailyPlanning() {
   const mine = (d) => people.some(p => String(p.email || '').toLowerCase() === String(d.employeeEmail || '').toLowerCase());
   const monthDocs = useMemo(() => sentPlans(tracking, { month }).filter(mine), [tracking, month, people]); // eslint-disable-line react-hooks/exhaustive-deps
   const sent = roll.filter(r => r.sent).length;
+  const [open, setOpen] = useState(null);           // { r, subjectOnly }
   if (!people.length) return null;
 
   const docsFor = () => (view === 'day' ? sentPlans(tracking, { date }).filter(mine) : monthDocs);
@@ -147,7 +216,7 @@ function DailyPlanning() {
       <div className="cb" style={{ padding: 0 }}>
         {view === 'day' ? (
           <div className="tw tw-m"><table style={{ fontSize: '.84rem' }}>
-            <thead><tr><th>Employee</th><th>Plan for</th><th>Submitted on</th><th>Submission status</th><th>Slots</th><th>Report</th></tr></thead>
+            <thead><tr><th>Employee</th><th>Plan for</th><th>Submitted on</th><th>Submission status</th><th>Slots</th><th>Report</th><th>Subject</th><th>View Planning</th></tr></thead>
             <tbody>
               {roll.map(r => (
                 <tr key={r.email}>
@@ -157,9 +226,11 @@ function DailyPlanning() {
                   <td data-l="Submission status"><span className={`st ${r.sent ? 'st-g' : r.label === 'Draft' ? 'st-o' : 'st-r'}`} style={{ padding: '2px 8px', fontSize: '.72rem' }}>{r.sent ? 'Submitted' : r.label === 'Draft' ? 'Draft / not submitted' : 'Not submitted'}</span></td>
                   <td data-l="Slots">{r.slots || '-'}</td>
                   <td data-l="Report" style={{ fontSize: '.78rem' }}>{r.doc && r.doc.submitted ? <span className="st st-g" style={{ padding: '2px 8px', fontSize: '.7rem' }}>Reported</span> : <span style={{ color: 'var(--muted)' }}>-</span>}</td>
+                  <SubjectCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: true })} />
+                  <ViewPlanningCell doc={r.doc} onOpen={() => setOpen({ r, subjectOnly: false })} />
                 </tr>
               ))}
-              {!roll.length && <tr><td colSpan="6"><EmptyState icon="groups" title="Nobody to show" message="" /></td></tr>}
+              {!roll.length && <tr><td colSpan="8"><EmptyState icon="groups" title="Nobody to show" message="" /></td></tr>}
             </tbody>
           </table></div>
         ) : (
@@ -182,6 +253,7 @@ function DailyPlanning() {
             </tbody>
           </table></div>
         )}
+        {open && <PlanDetailModal doc={open.r.doc} name={open.r.name} date={date} subjectOnly={open.subjectOnly} onClose={() => setOpen(null)} />}
         <p style={{ fontSize: '.74rem', color: 'var(--muted)', margin: 0, padding: '10px 16px' }}>
           {view === 'day' ? `${sent} of ${roll.length} submitted their plan for ${formatDate(date)}. "Plan for" is the day the plan covers; "Submitted on" is when it was actually sent.` : `${monthDocs.length} plans sent in ${label}.`} The CSV and the printout carry sent plans only. The reminder goes out at 5:30 PM to anyone whose plan is still pending; plans are due by 6:30 PM.
         </p>

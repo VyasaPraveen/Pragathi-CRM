@@ -32,12 +32,13 @@ export const DONE_STATUSES = [SLOT_STATUS.COMPLETED, SLOT_STATUS.PRE_COMPLETED];
 const to12 = (h) => { const p = h >= 12 ? 'PM' : 'AM'; let hr = h % 12; if (hr === 0) hr = 12; return `${hr}:00 ${p}`; };
 
 // Hourly slots 6 AM → 8 PM, then one night block 8 PM → 6 AM — and, first
-// (Req 7.4, 30-Oct), one whole-day block 6 AM → 6 PM with room for a fuller
+// (Req 7.4, 30-Oct), one whole-day block 6 AM → 8 PM (its end moved from 6 PM
+// to 8 PM on 17-Nov, Req 4C; same key, same data) with room for a fuller
 // account of the day.
 export const DAY_SLOTS = [];
 for (let h = 6; h <= 19; h++) DAY_SLOTS.push({ key: 'h' + h, label: `${to12(h)} – ${to12(h + 1)}` });
 export const NIGHT_SLOT = { key: 'night', label: '8:00 PM – 6:00 AM (Night)' };
-export const WHOLE_DAY_SLOT = { key: 'day', label: '6:00 AM – 6:00 PM (Whole day)', whole: true };
+export const WHOLE_DAY_SLOT = { key: 'day', label: '6:00 AM – 8:00 PM (Whole day)', whole: true };
 export const ALL_SLOTS = [WHOLE_DAY_SLOT, ...DAY_SLOTS, NIGHT_SLOT];
 
 export const slotLabel = (key) => (ALL_SLOTS.find(s => s.key === key) || {}).label || key;

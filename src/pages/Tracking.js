@@ -68,7 +68,7 @@ export default function Tracking() {
 
       <div style={{ marginTop: 12, fontSize: '.76rem', color: 'var(--muted)', display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
         <span className="material-icons-round" style={{ fontSize: 15 }}>info</span>
-        Hourly slots run 6 AM–8 PM, plus a whole-day block (6 AM–6 PM) and a night block. Save keeps a draft; Send Plan submits the plan (reminder at 5:30 PM, due by 6:30 PM); Report submits the day's report and locks it (a manager can unlock it for a correction).
+        Hourly slots run 6 AM–8 PM, plus a whole-day block (6 AM–8 PM) and a night block. Save keeps a draft; Send Plan submits the plan (reminder at 5:30 PM, due by 6:30 PM); Report submits the day's report and locks it (a manager can unlock it for a correction).
         {scope.all ? ' You can view every employee’s planning.' : viewOthers ? ' You can view your own planning and your team members’.' : ' You can view your own planning.'}
       </div>
     </>

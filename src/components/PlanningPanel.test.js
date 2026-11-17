@@ -39,7 +39,7 @@ test('the whole-day slot is a textarea and comes first; Save and Report are two 
   const { host, unmount } = mount(<PlanEditor date="2026-10-30" employeeEmail="rev@x.com" employeeName="Revanth Reddy" />);
   const ta = host.querySelector('textarea.fi');
   expect(ta).not.toBeNull();
-  expect(host.textContent).toContain('6:00 AM – 6:00 PM (Whole day)');
+  expect(host.textContent).toContain('6:00 AM – 8:00 PM (Whole day)');   // 17-Nov: ends 8 PM
   expect(host.textContent.indexOf('Whole day')).toBeLessThan(host.textContent.indexOf('6:00 AM – 7:00 AM'));
   expect(byText(host, /^\s*save\s*Save/i) || byText(host, /Save/)).toBeTruthy();
   expect(byText(host, /Report/)).toBeTruthy();
